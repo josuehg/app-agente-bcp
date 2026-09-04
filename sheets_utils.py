@@ -421,6 +421,65 @@ def get_registros_df() -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------
+# Cuadre por turno (Apertura vs Cierre) -- usado tanto en Historial
+# (vista del cajero, un solo local) como en Dashboard (vista del dueno,
+# todos los locales), asi que vive una sola vez aca para que ambas
+# pantallas se comporten igual.
+#
+# UMBRALES DEL SEMAFORO: son un punto de partida razonable, no una regla
+# fija -- si en la practica resultan muy estrictos o muy sueltos, se
+# ajustan aca no mas (los dos numeros de abajo).
+# ---------------------------------------------------------------------
+UMBRAL_VERDE = 5.0  # diferencia hasta este monto: se considera cuadrado (redondeos normales)
+UMBRAL_AMARILLO = 50.0  # entre el umbral verde y este: revisar; mas que esto: diferencia grande
+
+
+def calcular_cuadre_turnos(df: pd.DataFrame, columnas_indice: list[str]) -> pd.DataFrame:
+    """
+    Empareja la Apertura y el Cierre de un mismo turno (agrupando por
+    `columnas_indice`, por ejemplo ["fecha","turno"] o
+    ["local","fecha","turno"]) y calcula:
+
+    - diferencia: Cierre - Apertura, CON signo. Positivo = sobro dinero
+      (el Cierre quedo por encima de la Apertura); negativo = falto
+      dinero (el Cierre quedo por debajo).
+    - diferencia_fmt: lo mismo pero como texto con signo explicito
+      ("+0.80" / "-0.80"), para que se lea de un vistazo sin tener que
+      fijarse si hay un "-" chiquito antes del numero.
+    - estado: semaforo de 3 colores segun que tan grande es la
+      diferencia (en valor absoluto), o un aviso si falta la Apertura o
+      el Cierre de ese turno.
+    """
+    pivot = df.pivot_table(
+        index=columnas_indice, columns="tipo", values="total", aggfunc="first"
+    ).reset_index()
+
+    for columna_tipo in ["Apertura", "Cierre"]:
+        if columna_tipo not in pivot.columns:
+            pivot[columna_tipo] = pd.NA
+
+    pivot["diferencia"] = pivot["Cierre"] - pivot["Apertura"]
+    pivot["diferencia_fmt"] = pivot["diferencia"].apply(
+        lambda x: f"{x:+,.2f}" if pd.notna(x) else ""
+    )
+
+    def _estado(fila):
+        if pd.isna(fila["Apertura"]):
+            return "⏳ Falta Apertura"
+        if pd.isna(fila["Cierre"]):
+            return "⏳ Falta Cierre"
+        dif_abs = abs(fila["diferencia"])
+        if dif_abs <= UMBRAL_VERDE:
+            return "✅ Cuadrado"
+        if dif_abs <= UMBRAL_AMARILLO:
+            return "🟡 Revisar"
+        return "🔴 Diferencia grande"
+
+    pivot["estado"] = pivot.apply(_estado, axis=1)
+    return pivot
+
+
+# ---------------------------------------------------------------------
 # Encuestas NPS (incentivo interno de S/10 por encuesta con nota 9 o 10)
 #
 # Reemplaza el Google Form independiente que se usaba para esto. Se
