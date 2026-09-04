@@ -1,0 +1,205 @@
+"""
+pages/1_Registro.py
+--------------------
+El formulario que usa el personal de tienda para registrar la APERTURA
+o el CIERRE de caja del Agente BCP. Reemplaza al Google Form.
+
+POR QUE NO USAMOS st.form AQUI: st.form agrupa varios campos y solo
+recarga la pagina cuando se aprieta "Guardar" -- eso significaba que ni
+el Total en vivo ni el cambio a "Cierre" se reflejaban mientras
+escribias, porque Streamlit no se enteraba hasta el final. Al sacar
+todo del form, CADA cambio recarga la pagina al instante y todo se ve
+actualizado en tiempo real (el precio es que perdemos el "todo o nada"
+de un formulario, pero para este caso no hace falta).
+
+CONCEPTO NUEVO: como ya no hay clear_on_submit para vaciar los campos
+solos, lo hacemos a mano con un truco comun en Streamlit -- un numero de
+"version" en session_state que se le pega al nombre (key) de cada campo.
+Cuando guardamos, subimos la version en 1: Streamlit ve que esos campos
+ahora tienen un key distinto y los dibuja de cero (vacios), como si
+fueran campos nuevos.
+
+EL LOCAL YA NO SE ELIGE DE UNA LISTA: se identifica con el PIN del local
+(ver sh.pedir_pin_de_local en sheets_utils.py). Asi un registro siempre
+queda ligado a un local verificado por PIN, y no a lo que alguien haya
+elegido (por error o a proposito) en un dropdown.
+"""
+
+from datetime import datetime, date
+
+import streamlit as st
+
+import sheets_utils as sh
+
+st.set_page_config(page_title="Registro - Agente BCP", page_icon="📝")
+sh.aplicar_estilo()
+st.title("📝 Registro de Apertura / Cierre")
+
+if "mensaje_guardado" in st.session_state:
+    st.toast(st.session_state.pop("mensaje_guardado"), icon="✅")
+
+if "form_version" not in st.session_state:
+    st.session_state["form_version"] = 0
+v = st.session_state["form_version"]  # sufijo de key para los campos que se limpian
+
+local = sh.pedir_pin_de_local(
+    "Ingresa el PIN de tu local para registrar la Apertura o el Cierre."
+)
+
+col_local, col_salir = st.columns([4, 1])
+col_local.success(f"Local: **{local}**")
+if col_salir.button("Cambiar de PIN"):
+    st.session_state["local_autenticado"] = None
+    st.rerun()
+
+col2, col3 = st.columns(2)
+with col2:
+    # Cada local trabaja 2 turnos al dia, y cada turno tiene su propia
+    # Apertura y Cierre (o sea, hasta 4 registros por local por dia).
+    turno = st.radio("Turno", ["Mañana", "Tarde"], horizontal=True)
+with col3:
+    tipo = st.radio("Tipo de registro", ["Apertura", "Cierre"], horizontal=True)
+
+nombre = st.text_input("Nombre de quien registra", key=f"nombre_{v}")
+
+tarjeta = st.number_input("Monto en Tarjeta (S/)", min_value=0.0, step=10.0, key=f"tarjeta_{v}")
+
+# Desglose de efectivo: en vez de subir una foto del "sello" con el
+# conteo de billetes y monedas, se cuenta aqui mismo. El monto en
+# efectivo se calcula solo, multiplicando cantidad x valor de cada
+# denominacion -- asi nunca queda descuadrado con lo que se conto.
+st.subheader("💵 Desglose de efectivo (billetes y monedas)")
+cantidades = {}
+columnas_denom = st.columns(3)
+for i, (etiqueta, columna, valor) in enumerate(sh.DENOMINACIONES):
+    with columnas_denom[i % 3]:
+        cantidades[columna] = st.number_input(
+            etiqueta, min_value=0, step=1, key=f"denom_{columna}_{v}"
+        )
+
+efectivo = sum(cantidades[columna] * valor for _, columna, valor in sh.DENOMINACIONES)
+total = efectivo + tarjeta
+
+# Ahora si se puede mostrar en vivo: como ya no estamos dentro de un
+# st.form, cada numero que escribes recarga la pagina y este metric se
+# recalcula al instante.
+st.metric("Total (efectivo + tarjeta)", f"S/ {total:,.2f}")
+
+num_operaciones = None
+foto_voucher_saldo_inicial_tarjeta = None
+foto_voucher_saldo_final_tarjeta = None
+foto_voucher_nro_movimientos = None
+
+if tipo == "Apertura":
+    st.subheader("Fotos de Apertura (obligatorio)")
+    foto_voucher_saldo_inicial_tarjeta = st.file_uploader(
+        "Voucher de saldo INICIAL en Tarjeta", type=["jpg", "jpeg", "png"], key=f"foto_vi_{v}"
+    )
+else:
+    num_operaciones = st.number_input(
+        "Numero de Operaciones", min_value=0, step=1, key=f"num_op_{v}"
+    )
+    st.subheader("Fotos de Cierre (obligatorio)")
+    foto_voucher_saldo_final_tarjeta = st.file_uploader(
+        "Voucher de saldo FINAL en Tarjeta", type=["jpg", "jpeg", "png"], key=f"foto_vf_{v}"
+    )
+    foto_voucher_nro_movimientos = st.file_uploader(
+        "Voucher donde se vea el N° de movimientos", type=["jpg", "jpeg", "png"], key=f"foto_vm_{v}"
+    )
+
+observaciones = st.text_area(
+    "Observaciones", placeholder="Obligatorio: escribe algo, aunque sea 'Sin novedad'", key=f"obs_{v}"
+)
+
+enviado = st.button("Guardar registro", use_container_width=True, type="primary")
+
+if enviado:
+    # AHORA TODOS LOS CAMPOS SON OBLIGATORIOS: juntamos todos los que
+    # falten en una sola lista de errores, para que la persona vea de
+    # una sola vez todo lo que le falta llenar (en vez de corregir uno,
+    # volver a apretar Guardar, y recien enterarse del siguiente).
+    errores = []
+    if not nombre.strip():
+        errores.append("Falta el nombre de quien registra.")
+    if not observaciones.strip():
+        errores.append("Las observaciones son obligatorias (escribe algo, aunque sea 'Sin novedad').")
+    if tipo == "Apertura":
+        if foto_voucher_saldo_inicial_tarjeta is None:
+            errores.append("Falta la foto del voucher de saldo INICIAL en Tarjeta.")
+    else:
+        if foto_voucher_saldo_final_tarjeta is None:
+            errores.append("Falta la foto del voucher de saldo FINAL en Tarjeta.")
+        if foto_voucher_nro_movimientos is None:
+            errores.append("Falta la foto del voucher con el N° de movimientos.")
+
+    if errores:
+        for error_texto in errores:
+            st.error(error_texto)
+        st.stop()
+
+    # Si el internet/wifi de la tienda se corta justo mientras se sube
+    # una foto, sheets_utils.py ya reintenta un par de veces solo. Pero
+    # si aun asi falla (por ejemplo, se cayo del todo la wifi), en vez
+    # de mostrar la pantalla roja de error de Streamlit (que asusta y
+    # hace pensar que se perdio todo lo escrito), atrapamos el error
+    # aqui: mostramos un aviso claro y NO tocamos los campos, para que
+    # la persona solo tenga que volver a apretar "Guardar registro"
+    # cuando la conexion vuelva -- sin volver a contar el efectivo.
+    try:
+        with st.spinner("Guardando registro y subiendo fotos..."):
+            ahora = datetime.now()
+            prefijo = f"{local}_{turno}_{tipo}_{ahora:%Y%m%d_%H%M%S}"
+
+            def _subir(archivo, sufijo):
+                if archivo is None:
+                    return ""
+                return sh.subir_foto(archivo, f"{prefijo}_{sufijo}{_extension(archivo)}")
+
+            def _extension(archivo):
+                nombre_original = archivo.name
+                return nombre_original[nombre_original.rfind(".") :] if "." in nombre_original else ""
+
+            datos = {
+                "id": sh.nuevo_id(),
+                "timestamp": ahora.isoformat(timespec="seconds"),
+                "fecha": date.today().isoformat(),
+                "local": local,
+                "turno": turno,
+                "tipo": tipo,
+                "nombre": nombre.strip(),
+                **cantidades,
+                "efectivo": efectivo,
+                "tarjeta": tarjeta,
+                "total": total,
+                "num_operaciones": num_operaciones if num_operaciones is not None else "",
+                "observaciones": observaciones.strip(),
+                "foto_voucher_saldo_inicial_tarjeta": _subir(
+                    foto_voucher_saldo_inicial_tarjeta, "voucher_inicial"
+                ),
+                "foto_voucher_saldo_final_tarjeta": _subir(
+                    foto_voucher_saldo_final_tarjeta, "voucher_final"
+                ),
+                "foto_voucher_nro_movimientos": _subir(
+                    foto_voucher_nro_movimientos, "voucher_movimientos"
+                ),
+            }
+            sh.guardar_registro(datos)
+    except Exception as error:
+        st.error(
+            "No se pudo guardar: parece que se corto la conexion a "
+            "internet mientras se subia una foto. Nada de lo que "
+            "escribiste se perdio -- revisa tu wifi/datos y vuelve a "
+            "apretar 'Guardar registro'."
+        )
+        st.caption(f"Detalle tecnico: {error}")
+        st.stop()
+
+    # Subimos la "version" para que nombre, tarjeta, denominaciones,
+    # num_operaciones, fotos y observaciones se dibujen de cero (vacios)
+    # en la proxima recarga. Local/Turno/Tipo NO se limpian a proposito:
+    # es comun registrar varios movimientos seguidos del mismo local.
+    st.session_state["form_version"] += 1
+    st.session_state["mensaje_guardado"] = (
+        f"{tipo} de turno {turno} de {local} guardada correctamente."
+    )
+    st.rerun()
