@@ -200,48 +200,29 @@ st.caption(
     "Cierre del MISMO turno (mismo local, misma fecha, mismo Mañana/Tarde)."
 )
 
-pivot_turnos = df_filtrado.pivot_table(
-    index=["local", "fecha", "turno"],
-    columns="tipo",
-    values="total",
-    aggfunc="first",
-).reset_index()
-
-# Si en el rango filtrado solo hay Aperturas (o solo Cierres), la columna
-# que falta ni siquiera existe todavia -- la creamos vacia para que el
-# resto del calculo no reviente.
-for columna_tipo in ["Apertura", "Cierre"]:
-    if columna_tipo not in pivot_turnos.columns:
-        pivot_turnos[columna_tipo] = pd.NA
-
-pivot_turnos["diferencia"] = pivot_turnos["Cierre"] - pivot_turnos["Apertura"]
-
-
-def _estado_turno(fila):
-    if pd.notna(fila["Apertura"]) and pd.notna(fila["Cierre"]):
-        return "✅ Completo"
-    if pd.isna(fila["Apertura"]):
-        return "⏳ Falta Apertura"
-    return "⏳ Falta Cierre"
-
-
-pivot_turnos["estado"] = pivot_turnos.apply(_estado_turno, axis=1)
+pivot_turnos = sh.calcular_cuadre_turnos(df_filtrado, ["local", "fecha", "turno"])
 pivot_turnos = pivot_turnos.sort_values(["fecha", "local", "turno"], ascending=[False, True, True])
 
 st.dataframe(
-    pivot_turnos.rename(
+    pivot_turnos.drop(columns=["diferencia"]).rename(
         columns={
             "local": "Local",
             "fecha": "Fecha",
             "turno": "Turno",
             "Apertura": "Apertura (S/)",
             "Cierre": "Cierre (S/)",
-            "diferencia": "Diferencia (S/)",
+            "diferencia_fmt": "Diferencia (S/)",
             "estado": "Estado",
         }
     ),
     use_container_width=True,
     hide_index=True,
+)
+st.caption(
+    "Diferencia con signo: **+** significa que sobró dinero (el Cierre quedó "
+    "por encima de la Apertura), **-** que faltó. 🟡 Revisar y 🔴 Diferencia "
+    "grande son solo una guía según el monto — no significa necesariamente "
+    "un error."
 )
 
 turnos_completos = pivot_turnos.dropna(subset=["Apertura", "Cierre"])
