@@ -430,8 +430,8 @@ def get_registros_df() -> pd.DataFrame:
 # fija -- si en la practica resultan muy estrictos o muy sueltos, se
 # ajustan aca no mas (los dos numeros de abajo).
 # ---------------------------------------------------------------------
-UMBRAL_VERDE = 5.0  # diferencia hasta este monto: se considera cuadrado (redondeos normales)
-UMBRAL_AMARILLO = 50.0  # entre el umbral verde y este: revisar; mas que esto: diferencia grande
+UMBRAL_VERDE = 1.0  # diferencia hasta este monto (0 a S/1): se considera cuadrado (redondeos normales)
+UMBRAL_AMARILLO = 50.0  # entre el umbral verde y este (S/1 a S/50): revisar; mas de S/50: diferencia grande
 
 
 def calcular_cuadre_turnos(df: pd.DataFrame, columnas_indice: list[str]) -> pd.DataFrame:
