@@ -60,7 +60,15 @@ captura_mensaje_exito = st.file_uploader(
     key=f"encuesta_exito_{v}",
 )
 
-enviado = st.button("Guardar encuesta", use_container_width=True, type="primary")
+if "confirmar_encuesta" not in st.session_state:
+    st.session_state["confirmar_encuesta"] = False
+
+enviado = st.button(
+    "Guardar encuesta",
+    use_container_width=True,
+    type="primary",
+    disabled=st.session_state["confirmar_encuesta"],
+)
 
 if enviado:
     errores = []
@@ -76,46 +84,81 @@ if enviado:
             st.error(error_texto)
         st.stop()
 
-    try:
-        with st.spinner("Guardando encuesta..."):
-            ahora = datetime.now()
-            prefijo = f"{local}_Encuesta_{nombre.strip()}_{ahora:%Y%m%d_%H%M%S}"
-
-            def _extension(archivo):
-                nombre_original = archivo.name
-                return nombre_original[nombre_original.rfind(".") :] if "." in nombre_original else ""
-
-            datos = {
-                "id": sh.nuevo_id(),
-                "timestamp": ahora.isoformat(timespec="seconds"),
-                "fecha": date.today().isoformat(),
-                "local": local,
-                "nombre": nombre.strip(),
-                "nota": nota,
-                "incentivo": 10,
-                "estado_pago": "Pendiente",
-                "captura_correo": sh.subir_foto(
-                    captura_correo, f"{prefijo}_correo{_extension(captura_correo)}"
-                ),
-                "captura_mensaje_exito": sh.subir_foto(
-                    captura_mensaje_exito, f"{prefijo}_exito{_extension(captura_mensaje_exito)}"
-                ),
-            }
-            sh.guardar_encuesta(datos)
-    except Exception as error:
-        st.error(
-            "No se pudo guardar: parece que se corto la conexion a "
-            "internet mientras se subian las capturas. Nada se perdio, "
-            "solo vuelve a apretar 'Guardar encuesta'."
-        )
-        st.caption(f"Detalle tecnico: {error}")
-        st.stop()
-
-    st.session_state["encuesta_version"] += 1
-    st.session_state["mensaje_guardado_encuesta"] = (
-        f"Encuesta de {nombre.strip()} (nota {nota}) guardada correctamente."
-    )
+    # Todo llenado correctamente: mostramos un resumen en una ventana de
+    # confirmacion antes de grabar de verdad en la hoja.
+    st.session_state["confirmar_encuesta"] = True
     st.rerun()
+
+
+@st.dialog("¿Confirmar encuesta?")
+def _dialogo_confirmar_encuesta():
+    st.write(f"Vas a registrar esta encuesta para **{local}**:")
+    st.markdown(
+        f"""
+- **Nombre:** {nombre.strip()}
+- **Nota:** {nota}
+- **Incentivo:** S/ 10
+"""
+    )
+    col1, col2 = st.columns(2)
+    col1.image(captura_correo, caption="Captura del correo", width=140)
+    col2.image(captura_mensaje_exito, caption="Captura del mensaje de éxito", width=140)
+
+    st.divider()
+    col_confirmar, col_cancelar = st.columns(2)
+    confirmar = col_confirmar.button("✅ Sí, guardar", type="primary", use_container_width=True)
+    cancelar = col_cancelar.button("✏️ Volver a editar", use_container_width=True)
+
+    if cancelar:
+        st.session_state["confirmar_encuesta"] = False
+        st.rerun()
+
+    if confirmar:
+        try:
+            with st.spinner("Guardando encuesta..."):
+                ahora = datetime.now()
+                prefijo = f"{local}_Encuesta_{nombre.strip()}_{ahora:%Y%m%d_%H%M%S}"
+
+                def _extension(archivo):
+                    nombre_original = archivo.name
+                    return nombre_original[nombre_original.rfind(".") :] if "." in nombre_original else ""
+
+                datos = {
+                    "id": sh.nuevo_id(),
+                    "timestamp": ahora.isoformat(timespec="seconds"),
+                    "fecha": date.today().isoformat(),
+                    "local": local,
+                    "nombre": nombre.strip(),
+                    "nota": nota,
+                    "incentivo": 10,
+                    "estado_pago": "Pendiente",
+                    "captura_correo": sh.subir_foto(
+                        captura_correo, f"{prefijo}_correo{_extension(captura_correo)}"
+                    ),
+                    "captura_mensaje_exito": sh.subir_foto(
+                        captura_mensaje_exito, f"{prefijo}_exito{_extension(captura_mensaje_exito)}"
+                    ),
+                }
+                sh.guardar_encuesta(datos)
+        except Exception as error:
+            st.error(
+                "No se pudo guardar: parece que se corto la conexion a "
+                "internet mientras se subian las capturas. Nada se perdio, "
+                "solo vuelve a apretar 'Sí, guardar'."
+            )
+            st.caption(f"Detalle tecnico: {error}")
+            st.stop()
+
+        st.session_state["confirmar_encuesta"] = False
+        st.session_state["encuesta_version"] += 1
+        st.session_state["mensaje_guardado_encuesta"] = (
+            f"Encuesta de {nombre.strip()} (nota {nota}) guardada correctamente."
+        )
+        st.rerun()
+
+
+if st.session_state["confirmar_encuesta"]:
+    _dialogo_confirmar_encuesta()
 
 # ---------------------------------------------------------------------
 # Resumen de este local: cuanto esta pendiente de pago, y el detalle.

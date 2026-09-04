@@ -111,7 +111,15 @@ observaciones = st.text_area(
     "Observaciones", placeholder="Obligatorio: escribe algo, aunque sea 'Sin novedad'", key=f"obs_{v}"
 )
 
-enviado = st.button("Guardar registro", use_container_width=True, type="primary")
+if "confirmar_registro" not in st.session_state:
+    st.session_state["confirmar_registro"] = False
+
+enviado = st.button(
+    "Guardar registro",
+    use_container_width=True,
+    type="primary",
+    disabled=st.session_state["confirmar_registro"],
+)
 
 if enviado:
     # AHORA TODOS LOS CAMPOS SON OBLIGATORIOS: juntamos todos los que
@@ -137,69 +145,118 @@ if enviado:
             st.error(error_texto)
         st.stop()
 
-    # Si el internet/wifi de la tienda se corta justo mientras se sube
-    # una foto, sheets_utils.py ya reintenta un par de veces solo. Pero
-    # si aun asi falla (por ejemplo, se cayo del todo la wifi), en vez
-    # de mostrar la pantalla roja de error de Streamlit (que asusta y
-    # hace pensar que se perdio todo lo escrito), atrapamos el error
-    # aqui: mostramos un aviso claro y NO tocamos los campos, para que
-    # la persona solo tenga que volver a apretar "Guardar registro"
-    # cuando la conexion vuelva -- sin volver a contar el efectivo.
-    try:
-        with st.spinner("Guardando registro y subiendo fotos..."):
-            ahora = datetime.now()
-            prefijo = f"{local}_{turno}_{tipo}_{ahora:%Y%m%d_%H%M%S}"
-
-            def _subir(archivo, sufijo):
-                if archivo is None:
-                    return ""
-                return sh.subir_foto(archivo, f"{prefijo}_{sufijo}{_extension(archivo)}")
-
-            def _extension(archivo):
-                nombre_original = archivo.name
-                return nombre_original[nombre_original.rfind(".") :] if "." in nombre_original else ""
-
-            datos = {
-                "id": sh.nuevo_id(),
-                "timestamp": ahora.isoformat(timespec="seconds"),
-                "fecha": date.today().isoformat(),
-                "local": local,
-                "turno": turno,
-                "tipo": tipo,
-                "nombre": nombre.strip(),
-                **cantidades,
-                "efectivo": efectivo,
-                "tarjeta": tarjeta,
-                "total": total,
-                "num_operaciones": num_operaciones if num_operaciones is not None else "",
-                "observaciones": observaciones.strip(),
-                "foto_voucher_saldo_inicial_tarjeta": _subir(
-                    foto_voucher_saldo_inicial_tarjeta, "voucher_inicial"
-                ),
-                "foto_voucher_saldo_final_tarjeta": _subir(
-                    foto_voucher_saldo_final_tarjeta, "voucher_final"
-                ),
-                "foto_voucher_nro_movimientos": _subir(
-                    foto_voucher_nro_movimientos, "voucher_movimientos"
-                ),
-            }
-            sh.guardar_registro(datos)
-    except Exception as error:
-        st.error(
-            "No se pudo guardar: parece que se corto la conexion a "
-            "internet mientras se subia una foto. Nada de lo que "
-            "escribiste se perdio -- revisa tu wifi/datos y vuelve a "
-            "apretar 'Guardar registro'."
-        )
-        st.caption(f"Detalle tecnico: {error}")
-        st.stop()
-
-    # Subimos la "version" para que nombre, tarjeta, denominaciones,
-    # num_operaciones, fotos y observaciones se dibujen de cero (vacios)
-    # en la proxima recarga. Local/Turno/Tipo NO se limpian a proposito:
-    # es comun registrar varios movimientos seguidos del mismo local.
-    st.session_state["form_version"] += 1
-    st.session_state["mensaje_guardado"] = (
-        f"{tipo} de turno {turno} de {local} guardada correctamente."
-    )
+    # Todo esta llenado correctamente: en vez de guardar de una, abrimos
+    # una ventana de confirmacion con un resumen -- asi la persona revisa
+    # que no se le paso ningun numero o foto antes de que quede grabado
+    # de verdad en la hoja.
+    st.session_state["confirmar_registro"] = True
     st.rerun()
+
+
+@st.dialog("¿Confirmar registro?")
+def _dialogo_confirmar_registro():
+    st.write(f"Vas a guardar un registro de **{tipo}** del turno **{turno}** en **{local}**:")
+    st.markdown(
+        f"""
+- **Nombre:** {nombre.strip()}
+- **Efectivo contado:** S/ {efectivo:,.2f}
+- **Tarjeta:** S/ {tarjeta:,.2f}
+- **Total:** S/ {total:,.2f}
+{f"- **N° de operaciones:** {num_operaciones}" if tipo == "Cierre" else ""}
+- **Observaciones:** {observaciones.strip()}
+"""
+    )
+
+    fotos = [
+        ("Voucher saldo inicial", foto_voucher_saldo_inicial_tarjeta),
+        ("Voucher saldo final", foto_voucher_saldo_final_tarjeta),
+        ("Voucher N° movimientos", foto_voucher_nro_movimientos),
+    ]
+    fotos_adjuntas = [(etiqueta, archivo) for etiqueta, archivo in fotos if archivo is not None]
+    if fotos_adjuntas:
+        st.write("**Fotos adjuntas:**")
+        columnas_fotos = st.columns(len(fotos_adjuntas))
+        for columna, (etiqueta, archivo) in zip(columnas_fotos, fotos_adjuntas):
+            columna.image(archivo, caption=etiqueta, width=120)
+
+    st.divider()
+    col_confirmar, col_cancelar = st.columns(2)
+    confirmar = col_confirmar.button("✅ Sí, guardar", type="primary", use_container_width=True)
+    cancelar = col_cancelar.button("✏️ Volver a editar", use_container_width=True)
+
+    if cancelar:
+        st.session_state["confirmar_registro"] = False
+        st.rerun()
+
+    if confirmar:
+        # Si el internet/wifi de la tienda se corta justo mientras se sube
+        # una foto, sheets_utils.py ya reintenta un par de veces solo. Pero
+        # si aun asi falla (por ejemplo, se cayo del todo la wifi), en vez
+        # de mostrar la pantalla roja de error de Streamlit (que asusta y
+        # hace pensar que se perdio todo lo escrito), atrapamos el error
+        # aqui: mostramos un aviso claro y NO tocamos los campos, para que
+        # la persona solo tenga que volver a apretar "Sí, guardar" cuando
+        # la conexion vuelva -- sin volver a contar el efectivo.
+        try:
+            with st.spinner("Guardando registro y subiendo fotos..."):
+                ahora = datetime.now()
+                prefijo = f"{local}_{turno}_{tipo}_{ahora:%Y%m%d_%H%M%S}"
+
+                def _extension(archivo):
+                    nombre_original = archivo.name
+                    return nombre_original[nombre_original.rfind(".") :] if "." in nombre_original else ""
+
+                def _subir(archivo, sufijo):
+                    if archivo is None:
+                        return ""
+                    return sh.subir_foto(archivo, f"{prefijo}_{sufijo}{_extension(archivo)}")
+
+                datos = {
+                    "id": sh.nuevo_id(),
+                    "timestamp": ahora.isoformat(timespec="seconds"),
+                    "fecha": date.today().isoformat(),
+                    "local": local,
+                    "turno": turno,
+                    "tipo": tipo,
+                    "nombre": nombre.strip(),
+                    **cantidades,
+                    "efectivo": efectivo,
+                    "tarjeta": tarjeta,
+                    "total": total,
+                    "num_operaciones": num_operaciones if num_operaciones is not None else "",
+                    "observaciones": observaciones.strip(),
+                    "foto_voucher_saldo_inicial_tarjeta": _subir(
+                        foto_voucher_saldo_inicial_tarjeta, "voucher_inicial"
+                    ),
+                    "foto_voucher_saldo_final_tarjeta": _subir(
+                        foto_voucher_saldo_final_tarjeta, "voucher_final"
+                    ),
+                    "foto_voucher_nro_movimientos": _subir(
+                        foto_voucher_nro_movimientos, "voucher_movimientos"
+                    ),
+                }
+                sh.guardar_registro(datos)
+        except Exception as error:
+            st.error(
+                "No se pudo guardar: parece que se corto la conexion a "
+                "internet mientras se subia una foto. Nada de lo que "
+                "escribiste se perdio -- revisa tu wifi/datos y vuelve a "
+                "apretar 'Sí, guardar'."
+            )
+            st.caption(f"Detalle tecnico: {error}")
+            st.stop()
+
+        # Subimos la "version" para que nombre, tarjeta, denominaciones,
+        # num_operaciones, fotos y observaciones se dibujen de cero (vacios)
+        # en la proxima recarga. Local/Turno/Tipo NO se limpian a proposito:
+        # es comun registrar varios movimientos seguidos del mismo local.
+        st.session_state["confirmar_registro"] = False
+        st.session_state["form_version"] += 1
+        st.session_state["mensaje_guardado"] = (
+            f"{tipo} de turno {turno} de {local} guardada correctamente."
+        )
+        st.rerun()
+
+
+if st.session_state["confirmar_registro"]:
+    _dialogo_confirmar_registro()
