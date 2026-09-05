@@ -77,8 +77,20 @@ st.caption(
 )
 cantidades = {}
 columnas_denom = st.columns(3)
-for i, (etiqueta, columna, valor) in enumerate(sh.DENOMINACIONES):
-    with columnas_denom[i % 3]:
+
+# sh.DENOMINACIONES viene ordenado de mayor a menor (200 -> 0.10). Para el
+# CELULAR, donde Streamlit apila cada columna completa una tras otra (no
+# fila por fila como en la web), hay que repartir los campos en 3 GRUPOS
+# de tamaño fijo (no alternados de 1 en 1) para que, de moneda mas chica a
+# billete mas grande, salgan en orden al leerlos de arriba a abajo en el
+# celular: 0.10, 0.20, 0.50, 1, 2, 5, 10, 20, 50, 100, 200.
+orden_ascendente = list(reversed(sh.DENOMINACIONES))
+cantidad_total = len(orden_ascendente)
+por_columna = -(-cantidad_total // 3)  # redondeo hacia arriba sin usar math.ceil
+
+for indice, (etiqueta, columna, valor) in enumerate(orden_ascendente):
+    columna_destino = columnas_denom[indice // por_columna]
+    with columna_destino:
         cantidades[columna] = st.number_input(
             f"{etiqueta} (S/)", min_value=0.0, step=float(valor), key=f"denom_{columna}_{v}"
         )
