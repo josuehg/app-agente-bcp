@@ -74,18 +74,26 @@ COLUMNAS_REGISTROS = [
 
 # (etiqueta a mostrar, nombre de columna, valor en soles de esa denominacion)
 DENOMINACIONES = [
-    ("Billetes de S/ 200", "billetes_200", 200),
-    ("Billetes de S/ 100", "billetes_100", 100),
-    ("Billetes de S/ 50", "billetes_50", 50),
-    ("Billetes de S/ 20", "billetes_20", 20),
-    ("Billetes de S/ 10", "billetes_10", 10),
-    ("Monedas de S/ 5", "monedas_5", 5),
-    ("Monedas de S/ 2", "monedas_2", 2),
-    ("Monedas de S/ 1", "monedas_1", 1),
-    ("Monedas de S/ 0.50", "monedas_050", 0.5),
-    ("Monedas de S/ 0.20", "monedas_020", 0.2),
-    ("Monedas de S/ 0.10", "monedas_010", 0.1),
+    ("Monto en billetes de S/ 200", "billetes_200", 200),
+    ("Monto en billetes de S/ 100", "billetes_100", 100),
+    ("Monto en billetes de S/ 50", "billetes_50", 50),
+    ("Monto en billetes de S/ 20", "billetes_20", 20),
+    ("Monto en billetes de S/ 10", "billetes_10", 10),
+    ("Monto en monedas de S/ 5", "monedas_5", 5),
+    ("Monto en monedas de S/ 2", "monedas_2", 2),
+    ("Monto en monedas de S/ 1", "monedas_1", 1),
+    ("Monto en monedas de S/ 0.50", "monedas_050", 0.5),
+    ("Monto en monedas de S/ 0.20", "monedas_020", 0.2),
+    ("Monto en monedas de S/ 0.10", "monedas_010", 0.1),
 ]
+# NOTA: cada casilla pide el MONTO (en soles) que hay de esa denominacion,
+# no la cantidad de billetes/monedas -- p.ej. si hay 10 billetes de S/100,
+# se escribe 1000. Antes se pedia la cantidad y la app multiplicaba por el
+# valor; se cambio porque en la practica el personal ya cuenta y suma el
+# monto por denominacion de cabeza, y les resultaba mas natural escribir
+# eso directo. El "valor" de cada tupla ahora se usa solo para validar que
+# el monto ingresado sea un multiplo exacto de esa denominacion (ver
+# pages/1_Registro.py).
 
 
 # ---------------------------------------------------------------------
