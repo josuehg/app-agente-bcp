@@ -65,19 +65,25 @@ nombre = st.text_input("Nombre de quien registra", key=f"nombre_{v}")
 tarjeta = st.number_input("Monto en Tarjeta (S/)", min_value=0.0, step=10.0, key=f"tarjeta_{v}")
 
 # Desglose de efectivo: en vez de subir una foto del "sello" con el
-# conteo de billetes y monedas, se cuenta aqui mismo. El monto en
-# efectivo se calcula solo, multiplicando cantidad x valor de cada
-# denominacion -- asi nunca queda descuadrado con lo que se conto.
+# conteo de billetes y monedas, se cuenta aqui mismo. En cada casilla se
+# escribe el MONTO en soles que hay de esa denominacion (no la cantidad
+# de billetes/monedas) -- por ejemplo, si hay 10 billetes de S/100, se
+# escribe 1000. El total en efectivo es solo la suma de las casillas.
 st.subheader("💵 Desglose de efectivo (billetes y monedas)")
+st.caption(
+    "Escribe el **monto en soles** que hay de cada denominacion (no la "
+    "cantidad de billetes/monedas). Ejemplo: si tienes 10 billetes de "
+    "S/ 100, escribe **1000** -- no 10."
+)
 cantidades = {}
 columnas_denom = st.columns(3)
 for i, (etiqueta, columna, valor) in enumerate(sh.DENOMINACIONES):
     with columnas_denom[i % 3]:
         cantidades[columna] = st.number_input(
-            etiqueta, min_value=0, step=1, key=f"denom_{columna}_{v}"
+            f"{etiqueta} (S/)", min_value=0.0, step=float(valor), key=f"denom_{columna}_{v}"
         )
 
-efectivo = sum(cantidades[columna] * valor for _, columna, valor in sh.DENOMINACIONES)
+efectivo = sum(cantidades.values())
 total = efectivo + tarjeta
 
 # Ahora si se puede mostrar en vivo: como ya no estamos dentro de un
@@ -131,6 +137,15 @@ if enviado:
         errores.append("Falta el nombre de quien registra.")
     if not observaciones.strip():
         errores.append("Las observaciones son obligatorias (escribe algo, aunque sea 'Sin novedad').")
+    for etiqueta, columna, valor in sh.DENOMINACIONES:
+        monto = cantidades[columna]
+        if monto > 0:
+            cociente = monto / valor
+            if abs(cociente - round(cociente)) > 1e-6:
+                errores.append(
+                    f"'{etiqueta}': S/ {monto:,.2f} no es un múltiplo exacto de "
+                    f"S/ {valor:g} -- revisa si escribiste bien el monto."
+                )
     if tipo == "Apertura":
         if foto_voucher_saldo_inicial_tarjeta is None:
             errores.append("Falta la foto del voucher de saldo INICIAL en Tarjeta.")
