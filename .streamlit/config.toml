@@ -1,6 +1,13 @@
-   [theme]
-   primaryColor = "#F5901E"
-   backgroundColor = "#FFFFFF"
-   secondaryBackgroundColor = "#EAF1FB"
-   textColor = "#16233D"
-   font = "sans serif"
+# Colores de la app, tomados de las marcas BCD Farma y Carpe Diem Botica
+# (ambas usan azul + naranja como colores principales). Esto cambia el
+# color de botones, checkboxes, radios, links, etc. en TODA la app, sin
+# tener que tocar cada pagina una por una.
+#
+# Este archivo SI se puede subir a GitHub (a diferencia de secrets.toml):
+# no tiene contraseñas ni datos sensibles, solo colores.
+[theme]
+primaryColor = "#F5901E"            # naranja de marca -- botones y acentos
+backgroundColor = "#EAF1FB"         # celeste suave -- fondo principal
+secondaryBackgroundColor = "#D3E5F8"  # azul un poco mas marcado -- barra lateral y widgets
+textColor = "#16233D"               # azul oscuro -- texto, en vez de negro puro
+font = "sans serif"
