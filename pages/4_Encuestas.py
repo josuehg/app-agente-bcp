@@ -16,8 +16,6 @@ trabajador puede registrar una encuesta nueva y ver el estado (Pendiente
 / Pagada) de las de su local, pero no puede cambiarlo.
 """
 
-from datetime import datetime, date
-
 import streamlit as st
 
 import sheets_utils as sh
@@ -116,7 +114,7 @@ def _dialogo_confirmar_encuesta():
     if confirmar:
         try:
             with st.spinner("Guardando encuesta..."):
-                ahora = datetime.now()
+                ahora = sh.ahora_local()
                 prefijo = f"{local}_Encuesta_{nombre.strip()}_{ahora:%Y%m%d_%H%M%S}"
 
                 def _extension(archivo):
@@ -125,8 +123,8 @@ def _dialogo_confirmar_encuesta():
 
                 datos = {
                     "id": sh.nuevo_id(),
-                    "timestamp": ahora.isoformat(timespec="seconds"),
-                    "fecha": date.today().isoformat(),
+                    "timestamp": ahora.replace(tzinfo=None).isoformat(timespec="seconds"),
+                    "fecha": ahora.date().isoformat(),
                     "local": local,
                     "nombre": nombre.strip(),
                     "nota": nota,

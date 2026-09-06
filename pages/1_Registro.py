@@ -25,8 +25,6 @@ queda ligado a un local verificado por PIN, y no a lo que alguien haya
 elegido (por error o a proposito) en un dropdown.
 """
 
-from datetime import datetime, date
-
 import streamlit as st
 
 import sheets_utils as sh
@@ -226,7 +224,7 @@ def _dialogo_confirmar_registro():
         # la conexion vuelva -- sin volver a contar el efectivo.
         try:
             with st.spinner("Guardando registro y subiendo fotos..."):
-                ahora = datetime.now()
+                ahora = sh.ahora_local()
                 prefijo = f"{local}_{turno}_{tipo}_{ahora:%Y%m%d_%H%M%S}"
 
                 def _extension(archivo):
@@ -240,8 +238,10 @@ def _dialogo_confirmar_registro():
 
                 datos = {
                     "id": sh.nuevo_id(),
-                    "timestamp": ahora.isoformat(timespec="seconds"),
-                    "fecha": date.today().isoformat(),
+                    # timestamp sin el sufijo de zona (-05:00), para que
+                    # tenga el mismo formato que las filas ya guardadas.
+                    "timestamp": ahora.replace(tzinfo=None).isoformat(timespec="seconds"),
+                    "fecha": ahora.date().isoformat(),
                     "local": local,
                     "turno": turno,
                     "tipo": tipo,

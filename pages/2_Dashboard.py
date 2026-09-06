@@ -12,7 +12,7 @@ nivel bancario, pero alcanza para "que no cualquiera con el link mire el
 consolidado".
 """
 
-from datetime import date, timedelta
+from datetime import timedelta
 
 import pandas as pd
 import plotly.express as px
@@ -65,7 +65,7 @@ with st.sidebar:
     fecha_min, fecha_max = df["fecha"].min(), df["fecha"].max()
     rango = st.date_input(
         "Rango de fechas",
-        value=(max(fecha_min, date.today() - timedelta(days=30)), fecha_max),
+        value=(max(fecha_min, sh.hoy_local() - timedelta(days=30)), fecha_max),
         min_value=fecha_min,
         max_value=fecha_max,
     )

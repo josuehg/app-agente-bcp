@@ -16,8 +16,6 @@ No pide PIN: es informacion general para todo el equipo, no datos
 sensibles del negocio.
 """
 
-from datetime import date
-
 import pandas as pd
 import streamlit as st
 
@@ -36,7 +34,7 @@ if df.empty:
     )
     st.stop()
 
-hoy = date.today()
+hoy = sh.hoy_local()
 
 vigente_mask = df.apply(
     lambda fila: (pd.isna(fila["fecha_inicio"]) or fila["fecha_inicio"] <= hoy)

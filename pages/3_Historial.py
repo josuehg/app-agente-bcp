@@ -19,7 +19,7 @@ aca no se lo vuelve a pedir (misma sesion de navegador, ver
 sh.pedir_pin_de_local en sheets_utils.py).
 """
 
-from datetime import date, timedelta
+from datetime import timedelta
 
 import pandas as pd
 import streamlit as st
@@ -67,7 +67,7 @@ with col2:
         "Ver desde", [7, 14, 30, 90], index=1, format_func=lambda d: f"Ultimos {d} dias"
     )
 
-desde = date.today() - timedelta(days=dias_atras)
+desde = sh.hoy_local() - timedelta(days=dias_atras)
 
 df_local = df[
     (df["local"] == local)
