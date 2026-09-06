@@ -31,6 +31,14 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
+# Logica pura del cuadre por turno (no depende de streamlit ni Google).
+# Se re-exporta para que el resto de la app la use como sh.calcular_cuadre_turnos.
+from cuadre import (  # noqa: F401  (re-export para el resto de la app)
+    UMBRAL_AMARILLO,
+    UMBRAL_VERDE,
+    calcular_cuadre_turnos,
+)
+
 # Los "scopes" son los permisos que le pedimos a Google. Sin el permiso
 # exacto, la llamada falla aunque las credenciales sean correctas.
 SCOPES = [
@@ -198,7 +206,13 @@ def _get_drive_service():
     return build("drive", "v3", credentials=_get_credentials())
 
 
+@st.cache_resource(show_spinner=False)
 def _get_spreadsheet():
+    # Cacheado como recurso: abrir el spreadsheet por su ID es una llamada
+    # a la API de Google. Sin cache, se repetia cada vez que se refrescaba
+    # un dato (cada cache-miss de las funciones de lectura de abajo), lo
+    # que acerca a la app al limite de 60 llamadas/minuto de Google cuando
+    # varias tiendas la usan a la vez.
     client = _get_gspread_client()
     return client.open_by_key(st.secrets["spreadsheet_id"])
 
@@ -456,62 +470,11 @@ def get_registros_df() -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------
-# Cuadre por turno (Apertura vs Cierre) -- usado tanto en Historial
-# (vista del cajero, un solo local) como en Dashboard (vista del dueno,
-# todos los locales), asi que vive una sola vez aca para que ambas
-# pantallas se comporten igual.
-#
-# UMBRALES DEL SEMAFORO: son un punto de partida razonable, no una regla
-# fija -- si en la practica resultan muy estrictos o muy sueltos, se
-# ajustan aca no mas (los dos numeros de abajo).
+# Cuadre por turno (Apertura vs Cierre): la logica vive en cuadre.py
+# (sin depender de streamlit ni de Google, para poder probarla con
+# pytest). Se importa arriba y el resto de la app la sigue llamando como
+# sh.calcular_cuadre_turnos(...) / sh.UMBRAL_VERDE.
 # ---------------------------------------------------------------------
-UMBRAL_VERDE = 1.0  # diferencia hasta este monto (0 a S/1): se considera cuadrado (redondeos normales)
-UMBRAL_AMARILLO = 50.0  # entre el umbral verde y este (S/1 a S/50): revisar; mas de S/50: diferencia grande
-
-
-def calcular_cuadre_turnos(df: pd.DataFrame, columnas_indice: list[str]) -> pd.DataFrame:
-    """
-    Empareja la Apertura y el Cierre de un mismo turno (agrupando por
-    `columnas_indice`, por ejemplo ["fecha","turno"] o
-    ["local","fecha","turno"]) y calcula:
-
-    - diferencia: Cierre - Apertura, CON signo. Positivo = sobro dinero
-      (el Cierre quedo por encima de la Apertura); negativo = falto
-      dinero (el Cierre quedo por debajo).
-    - diferencia_fmt: lo mismo pero como texto con signo explicito
-      ("+0.80" / "-0.80"), para que se lea de un vistazo sin tener que
-      fijarse si hay un "-" chiquito antes del numero.
-    - estado: semaforo de 3 colores segun que tan grande es la
-      diferencia (en valor absoluto), o un aviso si falta la Apertura o
-      el Cierre de ese turno.
-    """
-    pivot = df.pivot_table(
-        index=columnas_indice, columns="tipo", values="total", aggfunc="first"
-    ).reset_index()
-
-    for columna_tipo in ["Apertura", "Cierre"]:
-        if columna_tipo not in pivot.columns:
-            pivot[columna_tipo] = pd.NA
-
-    pivot["diferencia"] = pivot["Cierre"] - pivot["Apertura"]
-    pivot["diferencia_fmt"] = pivot["diferencia"].apply(
-        lambda x: f"{x:+,.2f}" if pd.notna(x) else ""
-    )
-
-    def _estado(fila):
-        if pd.isna(fila["Apertura"]):
-            return "⏳ Falta Apertura"
-        if pd.isna(fila["Cierre"]):
-            return "⏳ Falta Cierre"
-        dif_abs = abs(fila["diferencia"])
-        if dif_abs <= UMBRAL_VERDE:
-            return "✅ Cuadrado"
-        if dif_abs <= UMBRAL_AMARILLO:
-            return "🟡 Revisar"
-        return "🔴 Diferencia grande"
-
-    pivot["estado"] = pivot.apply(_estado, axis=1)
-    return pivot
 
 
 # ---------------------------------------------------------------------

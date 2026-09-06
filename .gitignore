@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+
+# El secrets.toml REAL nunca va a GitHub (solo se sube secrets.toml.example).
+.streamlit/secrets.toml
+*.json

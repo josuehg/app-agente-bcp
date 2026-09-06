@@ -1,0 +1,5 @@
+# Dependencias solo para desarrollo/pruebas (no se instalan en Streamlit Cloud).
+#   pip install -r requirements.txt -r requirements-dev.txt
+#   pytest
+-r requirements.txt
+pytest>=8,<9
