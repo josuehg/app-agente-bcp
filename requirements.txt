@@ -1,10 +1,16 @@
-streamlit>=1.37
-gspread>=6.1
-google-auth>=2.30
-google-api-python-client>=2.130
-pandas>=2.2
-plotly>=5.22
-python-dateutil>=2.9
+# Rango de versiones: dejamos un piso (la version minima probada) y un
+# techo en el siguiente cambio de version MAYOR. Asi 'pip install' trae
+# parches y mejoras, pero un release con cambios incompatibles (por
+# ejemplo Streamlit 2.x) NO entra solo y rompe la app en el proximo
+# deploy de Streamlit Cloud sin que hayamos tocado nada.
+streamlit>=1.37,<2
+gspread>=6.1,<7
+google-auth>=2.30,<3
+google-api-python-client>=2.130,<3
+pandas>=2.2,<3
+plotly>=5.22,<7
+python-dateutil>=2.9,<3
+
 # Base de datos de zonas horarias para zoneinfo (ZoneInfo("America/Lima")).
 # En Linux (Streamlit Cloud) suele venir con el sistema, pero en Windows
 # hace falta este paquete para correr la app en local.

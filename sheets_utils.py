@@ -610,10 +610,11 @@ def actualizar_estado_pago(id_encuesta: str, nuevo_estado: str) -> None:
     """
     ws = _get_or_create_worksheet(NOMBRE_HOJA_ENCUESTAS, COLUMNAS_ENCUESTAS)
     columna_id = COLUMNAS_ENCUESTAS.index("id") + 1
-    try:
-        celda = ws.find(id_encuesta, in_column=columna_id)
-    except gspread.exceptions.CellNotFound:
-        celda = None
+    # En gspread 6.x, ws.find() devuelve None si no encuentra la celda (ya
+    # no lanza la excepcion CellNotFound, que fue eliminada). Si el id no
+    # existe -- por ejemplo, la fila se borro a mano del Sheet -- no hay
+    # nada que actualizar y salimos sin error.
+    celda = ws.find(id_encuesta, in_column=columna_id)
     if celda is None:
         return
     columna_estado = COLUMNAS_ENCUESTAS.index("estado_pago") + 1
