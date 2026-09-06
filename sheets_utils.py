@@ -21,7 +21,8 @@ from __future__ import annotations
 
 import io
 import uuid
-from datetime import datetime, date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 import gspread
 import pandas as pd
@@ -39,6 +40,32 @@ SCOPES = [
 
 NOMBRE_HOJA_REGISTROS = "Registros"
 NOMBRE_HOJA_CONFIG = "Config"
+
+# ---------------------------------------------------------------------
+# Fecha y hora LOCAL (Peru)
+# ---------------------------------------------------------------------
+# El servidor de Streamlit Community Cloud corre en horario UTC, no en
+# hora de Peru. Si usamos datetime.now() / date.today() "pelados", un
+# Cierre del turno Tarde hecho a las 8 pm (hora Peru) se guardaria con
+# la fecha del dia SIGUIENTE (a esa hora en UTC ya son pasadas las
+# 00:00). Resultado: el cuadre Apertura vs Cierre del Dashboard no
+# emparejaria ese turno (veria "Falta Cierre" un dia y "Falta Apertura"
+# al siguiente).
+#
+# Por eso TODA la app pide la fecha/hora a estas dos funciones, nunca a
+# datetime.now() / date.today() directamente.
+ZONA_LOCAL = ZoneInfo("America/Lima")
+
+
+def ahora_local() -> datetime:
+    """Fecha y hora actual en Peru (con tzinfo)."""
+    return datetime.now(ZONA_LOCAL)
+
+
+def hoy_local() -> date:
+    """Fecha de hoy en Peru."""
+    return datetime.now(ZONA_LOCAL).date()
+
 
 COLUMNAS_REGISTROS = [
     "id",
