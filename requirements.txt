@@ -5,3 +5,7 @@ google-api-python-client>=2.130
 pandas>=2.2
 plotly>=5.22
 python-dateutil>=2.9
+# Base de datos de zonas horarias para zoneinfo (ZoneInfo("America/Lima")).
+# En Linux (Streamlit Cloud) suele venir con el sistema, pero en Windows
+# hace falta este paquete para correr la app en local.
+tzdata>=2024.1
