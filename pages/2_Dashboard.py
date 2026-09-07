@@ -186,46 +186,77 @@ if not cierres_filtrados.empty:
     st.plotly_chart(fig_evol, use_container_width=True)
 
 # ---------------------------------------------------------------------
-# Diferencia Apertura vs Cierre dentro del MISMO turno (cuadre)
+# Cuadre por turno (tramos Apertura -> Cierre)
 #
-# Cada turno (Mañana/Tarde de un local en una fecha) deberia tener una
-# Apertura y un Cierre. Aqui los emparejamos y calculamos cuanto vario
-# el fondo total durante ese turno: Cierre - Apertura. Sirve para ver
-# de un vistazo si el turno "cuadra" como se esperaba o si hay un salto
-# raro que valga la pena revisar.
+# Un turno puede tener VARIOS tramos (cierres parciales: se cierra, se
+# retira/ingresa efectivo a proposito, se vuelve a abrir). Cada tramo se
+# mide contra su propia Apertura, asi que lo que se mueve a proposito
+# entre tramos no ensucia el calculo. Ver cuadre.py.
 # ---------------------------------------------------------------------
-st.subheader("🔍 Diferencia Apertura vs Cierre por turno")
+st.subheader("🔍 Cuadre por turno")
 st.caption(
-    "Compara el fondo total (efectivo + tarjeta) de la Apertura contra el "
-    "Cierre del MISMO turno (mismo local, misma fecha, mismo Mañana/Tarde)."
+    "Diferencia = Cierre − Apertura de cada tramo (fondo total = efectivo + "
+    "tarjeta). Un turno con cierres parciales tiene varios tramos; acá se "
+    "muestra la **suma** de sus diferencias."
 )
 
-pivot_turnos = sh.calcular_cuadre_turnos(df_filtrado, ["local", "fecha", "turno"])
-pivot_turnos = pivot_turnos.sort_values(["fecha", "local", "turno"], ascending=[False, True, True])
+INDICE_TURNO = ["local", "fecha", "turno"]
+tramos = sh.calcular_tramos(df_filtrado, INDICE_TURNO)
+resumen = sh.resumen_turnos(tramos, INDICE_TURNO)
+resumen = resumen.sort_values(["fecha", "local", "turno"], ascending=[False, True, True])
 
 st.dataframe(
-    pivot_turnos.drop(columns=["diferencia"]).rename(
+    resumen.rename(
         columns={
             "local": "Local",
             "fecha": "Fecha",
             "turno": "Turno",
-            "Apertura": "Apertura (S/)",
-            "Cierre": "Cierre (S/)",
-            "diferencia_fmt": "Diferencia (S/)",
+            "n_tramos": "Tramos",
+            "diferencia_fmt": "Diferencia total (S/)",
             "estado": "Estado",
         }
-    ),
+    ).drop(columns=["diferencia"]),
     use_container_width=True,
     hide_index=True,
 )
 st.caption(
-    "Diferencia con signo: **+** significa que sobró dinero (el Cierre quedó "
-    "por encima de la Apertura), **-** que faltó. 🟡 Revisar y 🔴 Diferencia "
-    "grande son solo una guía según el monto — no significa necesariamente "
-    "un error."
+    "**+** = sobró (el Cierre quedó por encima de la Apertura), **−** = faltó. "
+    "🟡 Revisar / 🔴 Diferencia grande son una guía según el monto. "
+    "⚠️ Revisar secuencia = al turno le falta un Cierre o hay un Cierre sin Apertura."
 )
 
-turnos_completos = pivot_turnos.dropna(subset=["Apertura", "Cierre"])
+with st.expander("Ver tramo por tramo"):
+    if tramos.empty:
+        st.caption("No hay tramos en el rango seleccionado.")
+    else:
+        tramos_orden = tramos.sort_values(
+            ["fecha", "local", "turno", "tramo"], ascending=[False, True, True, True]
+        )
+        st.dataframe(
+            tramos_orden.rename(
+                columns={
+                    "local": "Local",
+                    "fecha": "Fecha",
+                    "turno": "Turno",
+                    "tramo": "Tramo",
+                    "nombre": "Abrió",
+                    "nombre_cierre": "Cerró",
+                    "hora_apertura": "Hora ap.",
+                    "hora_cierre": "Hora cie.",
+                    "apertura": "Apertura (S/)",
+                    "cierre": "Cierre (S/)",
+                    "diferencia_fmt": "Diferencia (S/)",
+                    "estado": "Estado",
+                    "motivo": "Motivo (otro nombre)",
+                }
+            ).drop(columns=["diferencia"]),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+# Para el grafico dejamos fuera los turnos con la secuencia rota (su suma
+# de diferencias es parcial y engaña); los de "Cerró otro nombre" sí van.
+turnos_completos = resumen[~resumen["estado"].astype(str).str.contains("secuencia")]
 if not turnos_completos.empty:
     fig_dif = px.bar(
         turnos_completos.sort_values("fecha"),
@@ -233,11 +264,47 @@ if not turnos_completos.empty:
         y="diferencia",
         color="local",
         barmode="group",
-        labels={"fecha": "Fecha", "diferencia": "Diferencia Cierre - Apertura (S/)"},
+        labels={"fecha": "Fecha", "diferencia": "Diferencia total del turno (S/)"},
     )
     st.plotly_chart(fig_dif, use_container_width=True)
+
+# ---------------------------------------------------------------------
+# Acumulado de diferencias por persona
+#
+# Cada tramo se le atribuye a quien lo ABRIO (si el Cierre quedo a otro
+# nombre, igual va a quien abrio). Aca se suma, en el rango de fechas
+# filtrado, cuanto descuadre acumula cada persona -- para ver de un
+# vistazo si alguien viene arrastrando diferencias.
+# ---------------------------------------------------------------------
+st.subheader("👤 Acumulado de diferencias por persona")
+st.caption(
+    "En el rango de fechas filtrado. La diferencia de cada tramo se le "
+    "atribuye a quien abrió. Ordenado por descuadre total (sin importar el signo)."
+)
+
+acumulado = sh.acumulado_por_persona(tramos)
+if acumulado.empty:
+    st.caption("Todavía no hay tramos completos en el rango seleccionado.")
 else:
-    st.caption("Todavia no hay turnos con Apertura Y Cierre en el rango seleccionado para comparar.")
+    st.dataframe(
+        acumulado.rename(
+            columns={
+                "nombre": "Persona",
+                "n_tramos": "Tramos",
+                "diferencia_fmt": "Diferencia neta (S/)",
+                "descuadre_abs": "Descuadre total (S/)",
+            }
+        ).drop(columns=["diferencia"]),
+        use_container_width=True,
+        hide_index=True,
+    )
+    fig_pers = px.bar(
+        acumulado.sort_values("diferencia"),
+        x="nombre",
+        y="diferencia",
+        labels={"nombre": "Persona", "diferencia": "Diferencia neta acumulada (S/)"},
+    )
+    st.plotly_chart(fig_pers, use_container_width=True)
 
 # ---------------------------------------------------------------------
 # Tabla consolidada

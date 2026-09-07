@@ -76,35 +76,61 @@ df_local = df[
 ].sort_values("timestamp", ascending=False)
 
 # ---------------------------------------------------------------------
-# Cuadre rapido: Apertura vs Cierre del mismo turno, solo de este local.
-# Le sirve al equipo para ver de un vistazo si algun turno quedo con un
-# solo registro (falta el otro) o si el fondo salto de forma rara.
+# Cuadre por turno: cada turno puede tener varios TRAMOS (cierres
+# parciales). Mostramos cada tramo con su diferencia y, arriba, el
+# subtotal del turno (la suma de sus tramos). Le sirve al equipo para
+# ver si un turno quedo sin cerrar o si algun tramo salto de forma rara.
 # ---------------------------------------------------------------------
 st.subheader(f"Cuadre por turno — {local}")
 
-pivot_turnos = sh.calcular_cuadre_turnos(df_local, ["fecha", "turno"])
-pivot_turnos = pivot_turnos.sort_values(["fecha", "turno"], ascending=[False, True])
+tramos = sh.calcular_tramos(df_local, ["fecha", "turno"])
+resumen = sh.resumen_turnos(tramos, ["fecha", "turno"]).sort_values(
+    ["fecha", "turno"], ascending=[False, True]
+)
 
 st.dataframe(
-    pivot_turnos.drop(columns=["diferencia"]).rename(
+    resumen.rename(
         columns={
             "fecha": "Fecha",
             "turno": "Turno",
-            "Apertura": "Apertura (S/)",
-            "Cierre": "Cierre (S/)",
-            "diferencia_fmt": "Diferencia (S/)",
+            "n_tramos": "Tramos",
+            "diferencia_fmt": "Diferencia total (S/)",
             "estado": "Estado",
         }
-    ),
+    ).drop(columns=["diferencia"]),
     use_container_width=True,
     hide_index=True,
 )
 st.caption(
-    "Diferencia con signo: **+** significa que sobró dinero (el Cierre quedó "
-    "por encima de la Apertura), **-** que faltó. 🟡 Revisar y 🔴 Diferencia "
-    "grande son solo una guía según el monto — no significa necesariamente "
-    "un error."
+    "**+** = sobró dinero (el Cierre quedó por encima de la Apertura), **−** = "
+    "faltó. 🟡 Revisar / 🔴 Diferencia grande son una guía según el monto. "
+    "⚠️ Revisar secuencia = falta un Cierre o hay un Cierre sin Apertura."
 )
+
+if not tramos.empty and (tramos["tramo"].max() > 1 or "⚠️" in " ".join(resumen["estado"])):
+    with st.expander("Ver tramo por tramo"):
+        st.dataframe(
+            tramos.sort_values(["fecha", "turno", "tramo"], ascending=[False, True, True])
+            .rename(
+                columns={
+                    "fecha": "Fecha",
+                    "turno": "Turno",
+                    "tramo": "Tramo",
+                    "nombre": "Abrió",
+                    "nombre_cierre": "Cerró",
+                    "hora_apertura": "Hora ap.",
+                    "hora_cierre": "Hora cie.",
+                    "apertura": "Apertura (S/)",
+                    "cierre": "Cierre (S/)",
+                    "diferencia_fmt": "Diferencia (S/)",
+                    "estado": "Estado",
+                    "motivo": "Motivo (otro nombre)",
+                }
+            )
+            .drop(columns=["diferencia"]),
+            use_container_width=True,
+            hide_index=True,
+        )
 
 # ---------------------------------------------------------------------
 # Detalle registro por registro, con fotos, mas facil de revisar en el

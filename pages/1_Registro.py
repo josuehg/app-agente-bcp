@@ -36,6 +36,13 @@ st.title("📝 Registro de Apertura / Cierre")
 if "mensaje_guardado" in st.session_state:
     st.toast(st.session_state.pop("mensaje_guardado"), icon="✅")
 
+# Si el ultimo intento de guardar rompio la secuencia del turno (doble
+# Apertura, o Cierre sin Apertura), sheets_utils.guardar_registro lanzo
+# SecuenciaInvalida; lo mostramos aca arriba y dejamos el formulario tal
+# cual para que la persona corrija el "Tipo".
+if "error_secuencia" in st.session_state:
+    st.error(st.session_state.pop("error_secuencia"))
+
 if "form_version" not in st.session_state:
     st.session_state["form_version"] = 0
 v = st.session_state["form_version"]  # sufijo de key para los campos que se limpian
@@ -59,6 +66,61 @@ with col3:
     tipo = st.radio("Tipo de registro", ["Apertura", "Cierre"], horizontal=True)
 
 nombre = st.text_input("Nombre de quien registra", key=f"nombre_{v}")
+
+# ---------------------------------------------------------------------
+# Pista del estado del turno + control de "cierra otra persona"
+#
+# Miramos como esta el turno elegido (Mañana/Tarde de hoy en este local):
+# si ya hay una Apertura sin cerrar, quien la hizo y a que hora. Con eso:
+#  - si eligio "Apertura" pero el turno ya esta abierto -> aviso (y al
+#    guardar se bloquea del todo en sheets_utils).
+#  - si eligio "Cierre" pero no hay nada abierto -> aviso.
+#  - si eligio "Cierre" y el nombre no coincide con quien abrio -> se
+#    ofrece corregir; si igual quiere cerrar con otro nombre, se le pide
+#    un MOTIVO obligatorio. La diferencia del tramo se le atribuye a
+#    quien abrio (eso lo maneja cuadre.py).
+# ---------------------------------------------------------------------
+fecha_hoy_iso = sh.hoy_local().isoformat()
+est_turno = sh.estado_turno_cache(local, fecha_hoy_iso, turno)
+motivo_cierre_otro_nombre = ""
+
+if tipo == "Apertura" and est_turno["abierto"]:
+    ab = est_turno["apertura_abierta"]
+    st.warning(
+        f"⚠️ Este turno **ya tiene una Apertura sin cerrar** "
+        f"({ab['nombre'] or 'alguien'}, {ab['hora'] or '--:--'}). No se puede "
+        f"abrir de nuevo: cambia arriba a **Cierre** para cerrar ese tramo."
+    )
+
+if tipo == "Cierre":
+    if not est_turno["abierto"]:
+        st.warning(
+            "⚠️ Este turno **no tiene una Apertura abierta** para cerrar. "
+            "Si te toca abrir, cambia arriba a **Apertura**."
+        )
+    else:
+        ab = est_turno["apertura_abierta"]
+        st.info(
+            f"Vas a cerrar el tramo que abrió **{ab['nombre'] or 'alguien'}** "
+            f"a las {ab['hora'] or '--:--'}."
+        )
+        nombre_apertura = ab["nombre"]
+        if nombre.strip() and nombre_apertura and nombre.strip().lower() != nombre_apertura.lower():
+            st.warning(
+                f"El tramo lo abrió **{nombre_apertura}**, pero pusiste "
+                f"**{nombre.strip()}**. Lo normal es que cierre la misma "
+                f"persona que abrió."
+            )
+
+            def _usar_nombre_apertura():
+                st.session_state[f"nombre_{v}"] = nombre_apertura
+
+            st.button(f"Usar «{nombre_apertura}»", on_click=_usar_nombre_apertura)
+            motivo_cierre_otro_nombre = st.text_area(
+                "Motivo por el que cierra otra persona (obligatorio)",
+                key=f"motivo_{v}",
+                placeholder="Ej: la persona que abrió se retiró por una emergencia",
+            )
 
 tarjeta = st.number_input("Monto en Tarjeta (S/)", min_value=0.0, step=10.0, key=f"tarjeta_{v}")
 
@@ -159,11 +221,34 @@ if enviado:
     if tipo == "Apertura":
         if foto_voucher_saldo_inicial_tarjeta is None:
             errores.append("Falta la foto del voucher de saldo INICIAL en Tarjeta.")
+        if est_turno["abierto"]:
+            ab = est_turno["apertura_abierta"]
+            errores.append(
+                f"Este turno ya tiene una Apertura sin cerrar ({ab['nombre'] or 'alguien'}, "
+                f"{ab['hora'] or '--:--'}). Cambia a «Cierre» para cerrar ese tramo."
+            )
     else:
         if foto_voucher_saldo_final_tarjeta is None:
             errores.append("Falta la foto del voucher de saldo FINAL en Tarjeta.")
         if foto_voucher_nro_movimientos is None:
             errores.append("Falta la foto del voucher con el N° de movimientos.")
+        if not est_turno["abierto"]:
+            errores.append(
+                "Este turno no tiene una Apertura abierta para cerrar. "
+                "Cambia a «Apertura» si te toca abrir."
+            )
+        else:
+            nombre_apertura = est_turno["apertura_abierta"]["nombre"]
+            if (
+                nombre.strip()
+                and nombre_apertura
+                and nombre.strip().lower() != nombre_apertura.lower()
+                and not motivo_cierre_otro_nombre.strip()
+            ):
+                errores.append(
+                    f"El tramo lo abrió {nombre_apertura}. Si va a cerrar otra "
+                    f"persona, escribe el motivo (o usa el botón «Usar «{nombre_apertura}»»)."
+                )
 
     if errores:
         for error_texto in errores:
@@ -261,8 +346,19 @@ def _dialogo_confirmar_registro():
                     "foto_voucher_nro_movimientos": _subir(
                         foto_voucher_nro_movimientos, "voucher_movimientos"
                     ),
+                    "motivo_cierre_otro_nombre": (
+                        motivo_cierre_otro_nombre.strip() if tipo == "Cierre" else ""
+                    ),
                 }
                 sh.guardar_registro(datos)
+        except sh.SecuenciaInvalida as error:
+            # Otra persona registro algo en este turno entre que abriste el
+            # formulario y le diste a guardar (o el "Tipo" quedo mal). No es
+            # un problema de conexion: cerramos el dialogo y mostramos el
+            # motivo arriba para que corrija el "Tipo".
+            st.session_state["confirmar_registro"] = False
+            st.session_state["error_secuencia"] = str(error)
+            st.rerun()
         except Exception as error:
             st.error(
                 "No se pudo guardar: parece que se corto la conexion a "
