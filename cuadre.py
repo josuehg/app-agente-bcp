@@ -60,7 +60,7 @@ COLUMNAS_TRAMO = [
     "motivo",  # motivo por el que cerro otra persona, si aplica
 ]
 
-COLUMNAS_RESUMEN = ["n_tramos", "diferencia", "diferencia_fmt", "estado"]
+COLUMNAS_RESUMEN = ["n_tramos", "nombres", "diferencia", "diferencia_fmt", "estado"]
 
 COLUMNAS_PERSONA = ["nombre", "n_tramos", "diferencia", "diferencia_fmt", "descuadre_abs"]
 
@@ -239,10 +239,14 @@ def resumen_turnos(tramos: pd.DataFrame, columnas_indice: list[str]) -> pd.DataF
             claves = (claves,)
         contexto = dict(zip(columnas_indice, claves))
         diferencia_total = grupo["diferencia"].dropna().sum()
+        # Personas que trabajaron el turno (quien abrio cada tramo), sin
+        # repetir y en el orden en que aparecieron.
+        nombres = ", ".join(dict.fromkeys(n for n in grupo["nombre"].astype(str) if n))
         filas.append(
             {
                 **contexto,
                 "n_tramos": len(grupo),
+                "nombres": nombres,
                 "diferencia": diferencia_total,
                 "diferencia_fmt": f"{diferencia_total:+,.2f}",
                 "estado": _estado_turno(set(grupo["estado"])),
