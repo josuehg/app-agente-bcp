@@ -75,6 +75,10 @@ df_local = df[
     & (df["fecha"] >= desde)
 ].sort_values("timestamp", ascending=False)
 
+if df_local.empty:
+    st.info("No hay registros de este local en el rango elegido (turno / días).")
+    st.stop()
+
 # ---------------------------------------------------------------------
 # Cuadre por turno: cada turno puede tener varios TRAMOS (cierres
 # parciales). Mostramos cada tramo con su diferencia y, arriba, el
@@ -88,23 +92,50 @@ resumen = sh.resumen_turnos(tramos, ["fecha", "turno"]).sort_values(
     ["fecha", "turno"], ascending=[False, True]
 )
 
+# df_local ya viene ordenado por timestamp descendente, asi que la
+# primera fila es el registro MAS RECIENTE. Lo usamos para (1) un aviso
+# claro arriba y (2) resaltar su turno en la tabla.
+fila_reciente = df_local.iloc[0]
+fecha_reciente = fila_reciente["fecha"]
+turno_reciente = fila_reciente["turno"]
+hora_reciente = ""
+if pd.notna(fila_reciente["timestamp"]):
+    hora_reciente = pd.to_datetime(fila_reciente["timestamp"]).strftime("%H:%M")
+
+st.info(
+    f"🆕 **Último registro:** {fila_reciente['tipo']} de {turno_reciente} "
+    f"por **{fila_reciente['nombre']}** — {fecha_reciente} {hora_reciente}"
+)
+
+tabla_resumen = resumen.rename(
+    columns={
+        "fecha": "Fecha",
+        "turno": "Turno",
+        "n_tramos": "Tramos",
+        "nombres": "Personas",
+        "diferencia_fmt": "Diferencia total (S/)",
+        "estado": "Estado",
+    }
+).drop(columns=["diferencia"])
+
+
+def _resaltar_turno_reciente(fila):
+    # Fila del turno del ultimo registro: fondo amarillo suave + negrita.
+    es_reciente = fila["Fecha"] == fecha_reciente and fila["Turno"] == turno_reciente
+    estilo = "background-color: #FFE9B0; font-weight: 700" if es_reciente else ""
+    return [estilo] * len(fila)
+
+
 st.dataframe(
-    resumen.rename(
-        columns={
-            "fecha": "Fecha",
-            "turno": "Turno",
-            "n_tramos": "Tramos",
-            "diferencia_fmt": "Diferencia total (S/)",
-            "estado": "Estado",
-        }
-    ).drop(columns=["diferencia"]),
+    tabla_resumen.style.apply(_resaltar_turno_reciente, axis=1),
     use_container_width=True,
     hide_index=True,
 )
 st.caption(
-    "**+** = sobró dinero (el Cierre quedó por encima de la Apertura), **−** = "
-    "faltó. 🟡 Revisar / 🔴 Diferencia grande son una guía según el monto. "
-    "⚠️ Revisar secuencia = falta un Cierre o hay un Cierre sin Apertura."
+    "La fila resaltada 🟡 es la del turno del último registro. "
+    "**+** = sobró, **−** = faltó. 🟡 Revisar / 🔴 Diferencia grande son una "
+    "guía según el monto. ⚠️ Revisar secuencia = falta un Cierre o hay un "
+    "Cierre sin Apertura."
 )
 
 if not tramos.empty and (tramos["tramo"].max() > 1 or "⚠️" in " ".join(resumen["estado"])):
@@ -140,12 +171,14 @@ st.subheader(f"Detalle de registros — {local}")
 
 columnas_fotos = [c for c in df_local.columns if c.startswith("foto_")]
 
-if df_local.empty:
-    st.info("No hay registros de este local en el rango elegido.")
-
-for _, fila in df_local.iterrows():
+for posicion, (_, fila) in enumerate(df_local.iterrows()):
     titulo = f"{fila['fecha']} · {fila['turno']} · {fila['tipo']} · {fila['nombre']}"
-    with st.expander(titulo):
+    # El primero de la lista es el mas reciente (df_local va ordenado por
+    # hora descendente): lo marcamos y lo dejamos abierto de una.
+    es_mas_reciente = posicion == 0
+    if es_mas_reciente:
+        titulo = f"🆕 {titulo}  ·  (más reciente)"
+    with st.expander(titulo, expanded=es_mas_reciente):
         colA, colB, colC = st.columns(3)
         colA.metric("Efectivo", f"S/ {fila['efectivo']:,.2f}")
         colB.metric("Tarjeta", f"S/ {fila['tarjeta']:,.2f}")

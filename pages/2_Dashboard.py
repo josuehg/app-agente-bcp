@@ -212,6 +212,7 @@ st.dataframe(
             "fecha": "Fecha",
             "turno": "Turno",
             "n_tramos": "Tramos",
+            "nombres": "Personas",
             "diferencia_fmt": "Diferencia total (S/)",
             "estado": "Estado",
         }
