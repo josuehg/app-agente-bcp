@@ -56,6 +56,17 @@ pip install -r requirements.txt -r requirements-dev.txt
 pytest
 ```
 
+## Cuadre por turno (tramos)
+
+Un turno puede tener **cierres parciales**: se cierra la caja, se retira o
+ingresa efectivo a propósito, y se vuelve a abrir. Cada par
+Apertura → Cierre es un **tramo** y se mide contra su propia Apertura, así
+que los movimientos hechos a propósito entre tramos no cuentan como
+descuadre. La misma persona abre y cierra su tramo; si el Cierre lo hace
+otra persona se registra con un motivo y la diferencia se le atribuye a
+quien abrió. No se permite guardar dos Aperturas seguidas ni un Cierre sin
+Apertura. Toda esa lógica está en `cuadre.py` (con pruebas en `tests/`).
+
 ## Notas
 
 - El servidor de Streamlit Cloud corre en UTC; la app guarda fecha y hora

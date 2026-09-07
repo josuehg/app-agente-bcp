@@ -32,11 +32,13 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
 # Logica pura del cuadre por turno (no depende de streamlit ni Google).
-# Se re-exporta para que el resto de la app la use como sh.calcular_cuadre_turnos.
+# Se re-exporta para que el resto de la app la use como sh.calcular_tramos, etc.
 from cuadre import (  # noqa: F401  (re-export para el resto de la app)
     UMBRAL_AMARILLO,
     UMBRAL_VERDE,
-    calcular_cuadre_turnos,
+    acumulado_por_persona,
+    calcular_tramos,
+    resumen_turnos,
 )
 
 # Los "scopes" son los permisos que le pedimos a Google. Sin el permiso
@@ -75,6 +77,30 @@ def hoy_local() -> date:
     return datetime.now(ZONA_LOCAL).date()
 
 
+def _texto_seguro(df: pd.DataFrame, columnas_no_texto: set[str]) -> pd.DataFrame:
+    """Deja TODAS las columnas que no sean numero/fecha como texto puro.
+
+    POR QUE: al leer la hoja, una columna como 'observaciones' puede
+    terminar con tipos mezclados -- texto en unas filas y NaN (float) o un
+    numero suelto en otras (p.ej. si alguien escribio solo "123", o si la
+    columna es nueva y esta vacia para las filas antiguas). Cuando
+    st.dataframe intenta convertir eso a una tabla Arrow revienta con
+    "Expected bytes, got a 'float' object"; y en algunas versiones de
+    pyarrow ese error llega a tumbar TODO el proceso ("malloc(): invalid
+    size"), que es lo que tiraba la app abajo. Forzando str + "" evitamos
+    por completo ese camino.
+    """
+    for col in df.columns:
+        if col not in columnas_no_texto:
+            df[col] = (
+                df[col]
+                .fillna("")
+                .astype(str)
+                .replace({"nan": "", "NaT": "", "None": ""})
+            )
+    return df
+
+
 COLUMNAS_REGISTROS = [
     "id",
     "timestamp",
@@ -105,6 +131,9 @@ COLUMNAS_REGISTROS = [
     "foto_voucher_saldo_inicial_tarjeta",
     "foto_voucher_saldo_final_tarjeta",
     "foto_voucher_nro_movimientos",
+    # Solo se llena en un Cierre cuando lo registra una persona distinta a
+    # la que abrio ese tramo: el motivo que escribio para justificarlo.
+    "motivo_cierre_otro_nombre",
 ]
 
 # (etiqueta a mostrar, nombre de columna, valor en soles de esa denominacion)
@@ -275,9 +304,11 @@ def get_config_df() -> pd.DataFrame:
     if "pin" not in df.columns:
         # Sheet de una version anterior a que existiera esta columna.
         df["pin"] = ""
+    df = _texto_seguro(df, {"fondo_minimo"})
     # Los PIN se guardan como texto (aunque parezcan numeros) para poder
     # comparar tal cual lo que el cajero escribe, sin lios de "0100" vs 100.
-    df["pin"] = df["pin"].astype(str).str.strip()
+    df["pin"] = df["pin"].str.strip()
+    df["local"] = df["local"].str.strip()
     return df
 
 
@@ -440,19 +471,106 @@ def nuevo_id() -> str:
     return uuid.uuid4().hex[:10]
 
 
+class SecuenciaInvalida(Exception):
+    """El registro rompe la secuencia Apertura -> Cierre del turno.
+
+    Se lanza al guardar cuando:
+    - se intenta una Apertura y el turno ya tiene una Apertura sin su
+      Cierre (habria dos Aperturas seguidas), o
+    - se intenta un Cierre y el turno no tiene ninguna Apertura abierta
+      (habria un Cierre sin Apertura o dos Cierres seguidos).
+
+    La pagina de Registro la atrapa y muestra el mensaje tal cual.
+    """
+
+
+def _registros_crudos_del_turno(local: str, fecha: str, turno: str) -> list[dict]:
+    """Lee la hoja 'Registros' SIN cache y devuelve las filas de ese turno
+    (mismo local + misma fecha + mismo Mañana/Tarde), ordenadas por hora."""
+    ws = _get_or_create_worksheet(NOMBRE_HOJA_REGISTROS, COLUMNAS_REGISTROS)
+    filas = ws.get_all_records()
+    del_turno = [
+        f
+        for f in filas
+        if str(f.get("local", "")) == str(local)
+        and str(f.get("fecha", "")) == str(fecha)
+        and str(f.get("turno", "")) == str(turno)
+    ]
+    del_turno.sort(key=lambda f: str(f.get("timestamp", "")))
+    return del_turno
+
+
+def estado_turno(local: str, fecha: str, turno: str) -> dict:
+    """Como esta el turno AHORA MISMO (lectura fresca, sin cache):
+
+    - abierto: True si el ultimo registro del turno es una Apertura que
+      todavia no tiene su Cierre.
+    - apertura_abierta: {"nombre", "hora"} de esa Apertura, o None.
+    - ultimo_tipo: "Apertura" | "Cierre" | None (si el turno no tiene nada).
+    """
+    filas = _registros_crudos_del_turno(local, fecha, turno)
+    if not filas:
+        return {"abierto": False, "apertura_abierta": None, "ultimo_tipo": None}
+    ultimo = filas[-1]
+    if str(ultimo.get("tipo", "")).strip() == "Apertura":
+        ts = str(ultimo.get("timestamp", ""))
+        hora = ts[11:16] if len(ts) >= 16 else ""
+        return {
+            "abierto": True,
+            "apertura_abierta": {
+                "nombre": str(ultimo.get("nombre", "")).strip(),
+                "hora": hora,
+            },
+            "ultimo_tipo": "Apertura",
+        }
+    return {"abierto": False, "apertura_abierta": None, "ultimo_tipo": "Cierre"}
+
+
+@st.cache_data(ttl=15, show_spinner=False)
+def estado_turno_cache(local: str, fecha: str, turno: str) -> dict:
+    """Igual que estado_turno pero cacheado 15 s. Se usa solo para las
+    PISTAS que ve la persona mientras llena el formulario (para no llamar
+    a la API en cada tecla). La validacion de verdad, al guardar, usa
+    estado_turno (fresco)."""
+    return estado_turno(local, fecha, turno)
+
+
 def guardar_registro(datos: dict) -> None:
     """Agrega una fila nueva a la hoja 'Registros'.
 
     `datos` debe traer las llaves de COLUMNAS_REGISTROS que apliquen;
     las que falten se guardan vacias, para no romper si un campo no
     aplica (ej: num_operaciones no existe en una Apertura).
+
+    Antes de escribir valida la secuencia del turno (ver SecuenciaInvalida):
+    no se permite una Apertura sobre un turno ya abierto, ni un Cierre sin
+    Apertura. Esta comprobacion se hace con lectura FRESCA para que dos
+    personas registrando casi a la vez no puedan crear un duplicado.
     """
+    tipo = str(datos.get("tipo", "")).strip()
+    estado = estado_turno(datos["local"], datos["fecha"], datos["turno"])
+
+    if tipo == "Apertura" and estado["abierto"]:
+        ab = estado["apertura_abierta"]
+        raise SecuenciaInvalida(
+            f"Este turno ya tiene una Apertura sin cerrar (la hizo "
+            f"{ab['nombre'] or 'alguien'} a las {ab['hora'] or '--:--'}). "
+            f"Primero hay que registrar el Cierre de ese tramo."
+        )
+    if tipo == "Cierre" and not estado["abierto"]:
+        raise SecuenciaInvalida(
+            "Este turno no tiene una Apertura abierta para cerrar. "
+            "Primero hay que registrar la Apertura."
+        )
+
     ws = _get_or_create_worksheet(NOMBRE_HOJA_REGISTROS, COLUMNAS_REGISTROS)
     fila = [datos.get(col, "") for col in COLUMNAS_REGISTROS]
     ws.append_row(fila)
-    # Como acabamos de escribir, invalidamos el cache de lectura para que
-    # el dashboard muestre este registro sin esperar el TTL completo.
+    # Como acabamos de escribir, invalidamos los caches de lectura para que
+    # el dashboard y las pistas del formulario reflejen esto sin esperar el
+    # TTL completo.
     get_registros_df.clear()
+    estado_turno_cache.clear()
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -462,18 +580,20 @@ def get_registros_df() -> pd.DataFrame:
     df = pd.DataFrame(registros, columns=COLUMNAS_REGISTROS)
     if df.empty:
         return df
+    numericas = {"efectivo", "tarjeta", "total", "num_operaciones"}
+    df = _texto_seguro(df, numericas | {"fecha", "timestamp"})
     df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce").dt.date
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-    for col in ["efectivo", "tarjeta", "total", "num_operaciones"]:
+    for col in numericas:
         df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
 
 
 # ---------------------------------------------------------------------
-# Cuadre por turno (Apertura vs Cierre): la logica vive en cuadre.py
-# (sin depender de streamlit ni de Google, para poder probarla con
-# pytest). Se importa arriba y el resto de la app la sigue llamando como
-# sh.calcular_cuadre_turnos(...) / sh.UMBRAL_VERDE.
+# Cuadre por turno (tramos Apertura -> Cierre): la logica vive en
+# cuadre.py (sin depender de streamlit ni de Google, para poder probarla
+# con pytest). Se importa arriba y el resto de la app la usa como
+# sh.calcular_tramos(...) / sh.resumen_turnos(...) / sh.acumulado_por_persona(...).
 # ---------------------------------------------------------------------
 
 
@@ -518,6 +638,7 @@ def get_encuestas_df() -> pd.DataFrame:
     df = pd.DataFrame(registros, columns=COLUMNAS_ENCUESTAS)
     if df.empty:
         return df
+    df = _texto_seguro(df, {"fecha", "timestamp", "nota", "incentivo"})
     df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce").dt.date
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df["nota"] = pd.to_numeric(df["nota"], errors="coerce")
@@ -544,6 +665,7 @@ def get_campanas_df() -> pd.DataFrame:
     df = pd.DataFrame(registros, columns=COLUMNAS_CAMPANAS)
     if df.empty:
         return df
+    df = _texto_seguro(df, {"fecha_inicio", "fecha_fin"})
     df["fecha_inicio"] = pd.to_datetime(df["fecha_inicio"], errors="coerce").dt.date
     df["fecha_fin"] = pd.to_datetime(df["fecha_fin"], errors="coerce").dt.date
     return df
@@ -563,7 +685,8 @@ COLUMNAS_AYUDA = ["titulo", "descripcion", "url_video", "url_documento"]
 def get_ayuda_df() -> pd.DataFrame:
     ws = _get_or_create_worksheet(NOMBRE_HOJA_AYUDA, COLUMNAS_AYUDA)
     registros = ws.get_all_records()
-    return pd.DataFrame(registros, columns=COLUMNAS_AYUDA)
+    df = pd.DataFrame(registros, columns=COLUMNAS_AYUDA)
+    return df if df.empty else _texto_seguro(df, set())
 
 
 def actualizar_estado_pago(id_encuesta: str, nuevo_estado: str) -> None:

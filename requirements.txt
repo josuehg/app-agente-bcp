@@ -10,6 +10,11 @@ google-api-python-client>=2.130,<3
 pandas>=2.2,<3
 plotly>=5.22,<7
 python-dateutil>=2.9,<3
+# pyarrow 25 tiene un segfault conocido (apache/arrow#50471) y ademas la
+# combinacion pyarrow + Python 3.14 tira el proceso abajo ("malloc():
+# invalid size") al convertir a Arrow una columna con tipos mezclados.
+# Nos quedamos en la serie 24, que es estable.
+pyarrow>=14,<25
 
 # Base de datos de zonas horarias para zoneinfo (ZoneInfo("America/Lima")).
 # En Linux (Streamlit Cloud) suele venir con el sistema, pero en Windows
