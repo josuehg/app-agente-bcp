@@ -80,15 +80,15 @@ if df_local.empty:
     st.stop()
 
 # ---------------------------------------------------------------------
-# Cuadre por turno: cada turno puede tener varios TRAMOS (cierres
-# parciales). Mostramos cada tramo con su diferencia y, arriba, el
-# subtotal del turno (la suma de sus tramos). Le sirve al equipo para
-# ver si un turno quedo sin cerrar o si algun tramo salto de forma rara.
+# Cuadre por turno: cada turno puede tener varios CORTES (cierres
+# parciales). Mostramos cada corte con su diferencia y, arriba, el
+# subtotal del turno (la suma de sus cortes). Le sirve al equipo para
+# ver si un turno quedo sin cerrar o si algun corte salto de forma rara.
 # ---------------------------------------------------------------------
 st.subheader(f"Cuadre por turno — {local}")
 
-tramos = sh.calcular_tramos(df_local, ["fecha", "turno"])
-resumen = sh.resumen_turnos(tramos, ["fecha", "turno"]).sort_values(
+cortes = sh.calcular_cortes(df_local, ["fecha", "turno"])
+resumen = sh.resumen_turnos(cortes, ["fecha", "turno"]).sort_values(
     ["fecha", "turno"], ascending=[False, True]
 )
 
@@ -111,7 +111,7 @@ tabla_resumen = resumen.rename(
     columns={
         "fecha": "Fecha",
         "turno": "Turno",
-        "n_tramos": "Tramos",
+        "n_cortes": "Cortes",
         "nombres": "Personas",
         "diferencia_fmt": "Diferencia total (S/)",
         "estado": "Estado",
@@ -138,15 +138,15 @@ st.caption(
     "Cierre sin Apertura."
 )
 
-if not tramos.empty and (tramos["tramo"].max() > 1 or "⚠️" in " ".join(resumen["estado"])):
-    with st.expander("Ver tramo por tramo"):
+if not cortes.empty and (cortes["corte"].max() > 1 or "⚠️" in " ".join(resumen["estado"])):
+    with st.expander("Ver corte por corte"):
         st.dataframe(
-            tramos.sort_values(["fecha", "turno", "tramo"], ascending=[False, True, True])
+            cortes.sort_values(["fecha", "turno", "corte"], ascending=[False, True, True])
             .rename(
                 columns={
                     "fecha": "Fecha",
                     "turno": "Turno",
-                    "tramo": "Tramo",
+                    "corte": "Corte",
                     "nombre": "Abrió",
                     "nombre_cierre": "Cerró",
                     "hora_apertura": "Hora ap.",
@@ -171,6 +171,13 @@ st.subheader(f"Detalle de registros — {local}")
 
 columnas_fotos = [c for c in df_local.columns if c.startswith("foto_")]
 
+# Ancho fijo (en pixeles) para las fotos de los vouchers. Antes iban a
+# ancho completo (use_container_width) y se veian enormes, sobre todo en
+# la Apertura que trae una sola. A este tamaño se lee el voucher y, si
+# hace falta ver un detalle, Streamlit deja abrir cada foto a pantalla
+# completa con el boton de expandir que aparece al pasar el mouse encima.
+ANCHO_FOTO = 260
+
 for posicion, (_, fila) in enumerate(df_local.iterrows()):
     titulo = f"{fila['fecha']} · {fila['turno']} · {fila['tipo']} · {fila['nombre']}"
     # El primero de la lista es el mas reciente (df_local va ordenado por
@@ -191,17 +198,14 @@ for posicion, (_, fila) in enumerate(df_local.iterrows()):
 
         fotos_presentes = [c for c in columnas_fotos if fila.get(c)]
         if fotos_presentes:
-            st.write("**Fotos:**")
-            cols_fotos = st.columns(len(fotos_presentes))
-            for i, col in enumerate(fotos_presentes):
-                with cols_fotos[i]:
-                    etiqueta = col.replace("foto_voucher_", "").replace("_", " ").capitalize()
-                    imagen_bytes = sh.descargar_imagen_drive(fila[col])
-                    if imagen_bytes:
-                        st.image(imagen_bytes, use_container_width=True)
-                        st.caption(etiqueta)
-                    else:
-                        st.caption(f"{etiqueta}: no se pudo cargar.")
-                        st.markdown(f"[Ver en Drive]({fila[col]})")
+            st.write("**Fotos:** (toca una para verla en grande)")
+            for col in fotos_presentes:
+                etiqueta = col.replace("foto_voucher_", "").replace("_", " ").capitalize()
+                imagen_bytes = sh.descargar_imagen_drive(fila[col])
+                if imagen_bytes:
+                    st.image(imagen_bytes, width=ANCHO_FOTO, caption=etiqueta)
+                else:
+                    st.caption(f"{etiqueta}: no se pudo cargar.")
+                    st.markdown(f"[Ver en Drive]({fila[col]})")
         else:
             st.caption("Este registro no tiene fotos.")

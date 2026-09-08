@@ -77,7 +77,7 @@ nombre = st.text_input("Nombre de quien registra", key=f"nombre_{v}")
 #  - si eligio "Cierre" pero no hay nada abierto -> aviso.
 #  - si eligio "Cierre" y el nombre no coincide con quien abrio -> se
 #    ofrece corregir; si igual quiere cerrar con otro nombre, se le pide
-#    un MOTIVO obligatorio. La diferencia del tramo se le atribuye a
+#    un MOTIVO obligatorio. La diferencia del corte se le atribuye a
 #    quien abrio (eso lo maneja cuadre.py).
 # ---------------------------------------------------------------------
 fecha_hoy_iso = sh.hoy_local().isoformat()
@@ -89,7 +89,7 @@ if tipo == "Apertura" and est_turno["abierto"]:
     st.warning(
         f"⚠️ Este turno **ya tiene una Apertura sin cerrar** "
         f"({ab['nombre'] or 'alguien'}, {ab['hora'] or '--:--'}). No se puede "
-        f"abrir de nuevo: cambia arriba a **Cierre** para cerrar ese tramo."
+        f"abrir de nuevo: cambia arriba a **Cierre** para cerrar ese corte."
     )
 
 if tipo == "Cierre":
@@ -101,13 +101,13 @@ if tipo == "Cierre":
     else:
         ab = est_turno["apertura_abierta"]
         st.info(
-            f"Vas a cerrar el tramo que abrió **{ab['nombre'] or 'alguien'}** "
+            f"Vas a cerrar el corte que abrió **{ab['nombre'] or 'alguien'}** "
             f"a las {ab['hora'] or '--:--'}."
         )
         nombre_apertura = ab["nombre"]
         if nombre.strip() and nombre_apertura and nombre.strip().lower() != nombre_apertura.lower():
             st.warning(
-                f"El tramo lo abrió **{nombre_apertura}**, pero pusiste "
+                f"El corte lo abrió **{nombre_apertura}**, pero pusiste "
                 f"**{nombre.strip()}**. Lo normal es que cierre la misma "
                 f"persona que abrió."
             )
@@ -225,7 +225,7 @@ if enviado:
             ab = est_turno["apertura_abierta"]
             errores.append(
                 f"Este turno ya tiene una Apertura sin cerrar ({ab['nombre'] or 'alguien'}, "
-                f"{ab['hora'] or '--:--'}). Cambia a «Cierre» para cerrar ese tramo."
+                f"{ab['hora'] or '--:--'}). Cambia a «Cierre» para cerrar ese corte."
             )
     else:
         if foto_voucher_saldo_final_tarjeta is None:
@@ -246,7 +246,7 @@ if enviado:
                 and not motivo_cierre_otro_nombre.strip()
             ):
                 errores.append(
-                    f"El tramo lo abrió {nombre_apertura}. Si va a cerrar otra "
+                    f"El corte lo abrió {nombre_apertura}. Si va a cerrar otra "
                     f"persona, escribe el motivo (o usa el botón «Usar «{nombre_apertura}»»)."
                 )
 

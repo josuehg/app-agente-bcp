@@ -186,23 +186,23 @@ if not cierres_filtrados.empty:
     st.plotly_chart(fig_evol, use_container_width=True)
 
 # ---------------------------------------------------------------------
-# Cuadre por turno (tramos Apertura -> Cierre)
+# Cuadre por turno (cortes Apertura -> Cierre)
 #
-# Un turno puede tener VARIOS tramos (cierres parciales: se cierra, se
-# retira/ingresa efectivo a proposito, se vuelve a abrir). Cada tramo se
+# Un turno puede tener VARIOS cortes (cierres parciales: se cierra, se
+# retira/ingresa efectivo a proposito, se vuelve a abrir). Cada corte se
 # mide contra su propia Apertura, asi que lo que se mueve a proposito
-# entre tramos no ensucia el calculo. Ver cuadre.py.
+# entre cortes no ensucia el calculo. Ver cuadre.py.
 # ---------------------------------------------------------------------
 st.subheader("🔍 Cuadre por turno")
 st.caption(
-    "Diferencia = Cierre − Apertura de cada tramo (fondo total = efectivo + "
-    "tarjeta). Un turno con cierres parciales tiene varios tramos; acá se "
+    "Diferencia = Cierre − Apertura de cada corte (fondo total = efectivo + "
+    "tarjeta). Un turno con cierres parciales tiene varios cortes; acá se "
     "muestra la **suma** de sus diferencias."
 )
 
 INDICE_TURNO = ["local", "fecha", "turno"]
-tramos = sh.calcular_tramos(df_filtrado, INDICE_TURNO)
-resumen = sh.resumen_turnos(tramos, INDICE_TURNO)
+cortes = sh.calcular_cortes(df_filtrado, INDICE_TURNO)
+resumen = sh.resumen_turnos(cortes, INDICE_TURNO)
 resumen = resumen.sort_values(["fecha", "local", "turno"], ascending=[False, True, True])
 
 st.dataframe(
@@ -211,7 +211,7 @@ st.dataframe(
             "local": "Local",
             "fecha": "Fecha",
             "turno": "Turno",
-            "n_tramos": "Tramos",
+            "n_cortes": "Cortes",
             "nombres": "Personas",
             "diferencia_fmt": "Diferencia total (S/)",
             "estado": "Estado",
@@ -226,20 +226,20 @@ st.caption(
     "⚠️ Revisar secuencia = al turno le falta un Cierre o hay un Cierre sin Apertura."
 )
 
-with st.expander("Ver tramo por tramo"):
-    if tramos.empty:
-        st.caption("No hay tramos en el rango seleccionado.")
+with st.expander("Ver corte por corte"):
+    if cortes.empty:
+        st.caption("No hay cortes en el rango seleccionado.")
     else:
-        tramos_orden = tramos.sort_values(
-            ["fecha", "local", "turno", "tramo"], ascending=[False, True, True, True]
+        cortes_orden = cortes.sort_values(
+            ["fecha", "local", "turno", "corte"], ascending=[False, True, True, True]
         )
         st.dataframe(
-            tramos_orden.rename(
+            cortes_orden.rename(
                 columns={
                     "local": "Local",
                     "fecha": "Fecha",
                     "turno": "Turno",
-                    "tramo": "Tramo",
+                    "corte": "Corte",
                     "nombre": "Abrió",
                     "nombre_cierre": "Cerró",
                     "hora_apertura": "Hora ap.",
@@ -272,26 +272,26 @@ if not turnos_completos.empty:
 # ---------------------------------------------------------------------
 # Acumulado de diferencias por persona
 #
-# Cada tramo se le atribuye a quien lo ABRIO (si el Cierre quedo a otro
+# Cada corte se le atribuye a quien lo ABRIO (si el Cierre quedo a otro
 # nombre, igual va a quien abrio). Aca se suma, en el rango de fechas
 # filtrado, cuanto descuadre acumula cada persona -- para ver de un
 # vistazo si alguien viene arrastrando diferencias.
 # ---------------------------------------------------------------------
 st.subheader("👤 Acumulado de diferencias por persona")
 st.caption(
-    "En el rango de fechas filtrado. La diferencia de cada tramo se le "
+    "En el rango de fechas filtrado. La diferencia de cada corte se le "
     "atribuye a quien abrió. Ordenado por descuadre total (sin importar el signo)."
 )
 
-acumulado = sh.acumulado_por_persona(tramos)
+acumulado = sh.acumulado_por_persona(cortes)
 if acumulado.empty:
-    st.caption("Todavía no hay tramos completos en el rango seleccionado.")
+    st.caption("Todavía no hay cortes completos en el rango seleccionado.")
 else:
     st.dataframe(
         acumulado.rename(
             columns={
                 "nombre": "Persona",
-                "n_tramos": "Tramos",
+                "n_cortes": "Cortes",
                 "diferencia_fmt": "Diferencia neta (S/)",
                 "descuadre_abs": "Descuadre total (S/)",
             }
@@ -389,15 +389,14 @@ else:
             f"· Nota {fila_encuesta['nota']} · {fila_encuesta['estado_pago']}"
         )
         with st.expander(titulo_encuesta):
-            col_foto1, col_foto2 = st.columns(2)
-            with col_foto1:
-                imagen_correo = sh.descargar_imagen_drive(fila_encuesta["captura_correo"])
-                if imagen_correo:
-                    st.image(imagen_correo, caption="Correo", use_container_width=True)
-            with col_foto2:
-                imagen_exito = sh.descargar_imagen_drive(fila_encuesta["captura_mensaje_exito"])
-                if imagen_exito:
-                    st.image(imagen_exito, caption="Mensaje de exito", use_container_width=True)
+            # Fotos a tamaño moderado (se pueden abrir a pantalla completa
+            # con el boton de expandir al pasar el mouse).
+            imagen_correo = sh.descargar_imagen_drive(fila_encuesta["captura_correo"])
+            if imagen_correo:
+                st.image(imagen_correo, caption="Correo", width=260)
+            imagen_exito = sh.descargar_imagen_drive(fila_encuesta["captura_mensaje_exito"])
+            if imagen_exito:
+                st.image(imagen_exito, caption="Mensaje de éxito", width=260)
 
             estado_actual = fila_encuesta["estado_pago"]
             if estado_actual not in ESTADOS_PAGO_ENCUESTA:
