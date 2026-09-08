@@ -6,7 +6,7 @@ que puedan revisar los registros -- y las fotos de los vouchers -- de SU
 propio local, para controlarse entre ellos (por ejemplo: el que entra en
 el turno Tarde revisa que el Cierre de la Mañana quedo bien registrado).
 
-DIFERENCIAS con el Dashboard (pages/2_Dashboard.py):
+DIFERENCIAS con el Dashboard (pages/7_Dashboard.py):
 - El acceso es con el PIN PROPIO de cada local (columna "pin" en la hoja
   Config), no con el PIN unico del dueno. Cada local tiene el suyo.
 - Ese PIN identifica automaticamente el local: el cajero NO elige de una
@@ -198,14 +198,24 @@ for posicion, (_, fila) in enumerate(df_local.iterrows()):
 
         fotos_presentes = [c for c in columnas_fotos if fila.get(c)]
         if fotos_presentes:
-            st.write("**Fotos:** (toca una para verla en grande)")
+            st.write("**Fotos:**")
             for col in fotos_presentes:
                 etiqueta = col.replace("foto_voucher_", "").replace("_", " ").capitalize()
                 imagen_bytes = sh.descargar_imagen_drive(fila[col])
                 if imagen_bytes:
-                    st.image(imagen_bytes, width=ANCHO_FOTO, caption=etiqueta)
+                    # Chica por defecto; con el check se ve a ancho completo.
+                    # La imagen la sirve la app (no un link de Drive), asi que
+                    # funciona aunque la carpeta de Drive no este compartida
+                    # con los correos de las sucursales.
+                    ver_grande = st.checkbox(
+                        f"🔍 Ver «{etiqueta}» más grande",
+                        key=f"zoom_{fila['id']}_{col}",
+                    )
+                    if ver_grande:
+                        st.image(imagen_bytes, width="stretch", caption=etiqueta)
+                    else:
+                        st.image(imagen_bytes, width=ANCHO_FOTO, caption=etiqueta)
                 else:
                     st.caption(f"{etiqueta}: no se pudo cargar.")
-                    st.markdown(f"[Ver en Drive]({fila[col]})")
         else:
             st.caption("Este registro no tiene fotos.")

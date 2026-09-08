@@ -11,7 +11,7 @@ se lo vuelve a pedir aca.
 
 IMPORTANTE: marcar una encuesta como "Pagada" es una decision del dueno,
 no de quien la registra -- por eso esa accion vive solo en el Dashboard
-(pages/2_Dashboard.py), protegido con el PIN del dueno. Aca cualquier
+(pages/7_Dashboard.py), protegido con el PIN del dueno. Aca cualquier
 trabajador puede registrar una encuesta nueva y ver el estado (Pendiente
 / Pagada) de las de su local, pero no puede cambiarlo.
 """
