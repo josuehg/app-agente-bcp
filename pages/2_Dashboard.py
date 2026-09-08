@@ -389,14 +389,24 @@ else:
             f"· Nota {fila_encuesta['nota']} · {fila_encuesta['estado_pago']}"
         )
         with st.expander(titulo_encuesta):
-            # Fotos a tamaño moderado (se pueden abrir a pantalla completa
-            # con el boton de expandir al pasar el mouse).
-            imagen_correo = sh.descargar_imagen_drive(fila_encuesta["captura_correo"])
-            if imagen_correo:
-                st.image(imagen_correo, caption="Correo", width=260)
-            imagen_exito = sh.descargar_imagen_drive(fila_encuesta["captura_mensaje_exito"])
-            if imagen_exito:
-                st.image(imagen_exito, caption="Mensaje de éxito", width=260)
+            # Chicas por defecto; con el check se ven a ancho completo. Las
+            # sirve la app (no un link de Drive), asi funciona aunque la
+            # carpeta de Drive no este compartida.
+            id_enc = fila_encuesta["id"]
+            for campo, etiqueta in [
+                ("captura_correo", "Correo"),
+                ("captura_mensaje_exito", "Mensaje de éxito"),
+            ]:
+                imagen = sh.descargar_imagen_drive(fila_encuesta[campo])
+                if imagen:
+                    grande = st.checkbox(
+                        f"🔍 Ver «{etiqueta}» más grande", key=f"zoom_{id_enc}_{campo}"
+                    )
+                    st.image(
+                        imagen,
+                        caption=etiqueta,
+                        width="stretch" if grande else 260,
+                    )
 
             estado_actual = fila_encuesta["estado_pago"]
             if estado_actual not in ESTADOS_PAGO_ENCUESTA:

@@ -6,7 +6,7 @@ que puedan revisar los registros -- y las fotos de los vouchers -- de SU
 propio local, para controlarse entre ellos (por ejemplo: el que entra en
 el turno Tarde revisa que el Cierre de la Mañana quedo bien registrado).
 
-DIFERENCIAS con el Dashboard (pages/7_Dashboard.py):
+DIFERENCIAS con el Dashboard (pages/2_Dashboard.py):
 - El acceso es con el PIN PROPIO de cada local (columna "pin" en la hoja
   Config), no con el PIN unico del dueno. Cada local tiene el suyo.
 - Ese PIN identifica automaticamente el local: el cajero NO elige de una
