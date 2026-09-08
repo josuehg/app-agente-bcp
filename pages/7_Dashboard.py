@@ -165,7 +165,7 @@ if not cierres_filtrados.empty:
         y="num_operaciones",
         labels={"dia_semana": "Dia", "num_operaciones": "N° de operaciones"},
     )
-    st.plotly_chart(fig_dias, use_container_width=True)
+    st.plotly_chart(fig_dias, width="stretch")
 else:
     st.caption("No hay cierres en el rango seleccionado para graficar.")
 
@@ -183,7 +183,7 @@ if not cierres_filtrados.empty:
         markers=True,
         labels={"fecha": "Fecha", "total": "Fondo total al cierre (S/)"},
     )
-    st.plotly_chart(fig_evol, use_container_width=True)
+    st.plotly_chart(fig_evol, width="stretch")
 
 # ---------------------------------------------------------------------
 # Cuadre por turno (cortes Apertura -> Cierre)
@@ -217,7 +217,7 @@ st.dataframe(
             "estado": "Estado",
         }
     ).drop(columns=["diferencia"]),
-    use_container_width=True,
+    width="stretch",
     hide_index=True,
 )
 st.caption(
@@ -251,7 +251,7 @@ with st.expander("Ver corte por corte"):
                     "motivo": "Motivo (otro nombre)",
                 }
             ).drop(columns=["diferencia"]),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -267,7 +267,7 @@ if not turnos_completos.empty:
         barmode="group",
         labels={"fecha": "Fecha", "diferencia": "Diferencia total del turno (S/)"},
     )
-    st.plotly_chart(fig_dif, use_container_width=True)
+    st.plotly_chart(fig_dif, width="stretch")
 
 # ---------------------------------------------------------------------
 # Acumulado de diferencias por persona
@@ -296,7 +296,7 @@ else:
                 "descuadre_abs": "Descuadre total (S/)",
             }
         ).drop(columns=["diferencia"]),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
     fig_pers = px.bar(
@@ -305,7 +305,7 @@ else:
         y="diferencia",
         labels={"nombre": "Persona", "diferencia": "Diferencia neta acumulada (S/)"},
     )
-    st.plotly_chart(fig_pers, use_container_width=True)
+    st.plotly_chart(fig_pers, width="stretch")
 
 # ---------------------------------------------------------------------
 # Tabla consolidada
@@ -314,7 +314,7 @@ st.subheader("🗂️ Registros")
 columnas_fotos = [c for c in df_filtrado.columns if c.startswith("foto_")]
 st.dataframe(
     df_filtrado.drop(columns=columnas_fotos),
-    use_container_width=True,
+    width="stretch",
     hide_index=True,
 )
 
@@ -380,7 +380,7 @@ else:
             )
             .sort_values("Monto pendiente (S/)", ascending=False)
         )
-        st.dataframe(resumen_por_nombre, use_container_width=True, hide_index=True)
+        st.dataframe(resumen_por_nombre, width="stretch", hide_index=True)
 
     st.markdown("**Detalle de encuestas (ver capturas y cambiar estado):**")
     for _, fila_encuesta in encuestas_df.sort_values("timestamp", ascending=False).iterrows():

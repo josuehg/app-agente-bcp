@@ -6,7 +6,7 @@ que puedan revisar los registros -- y las fotos de los vouchers -- de SU
 propio local, para controlarse entre ellos (por ejemplo: el que entra en
 el turno Tarde revisa que el Cierre de la Mañana quedo bien registrado).
 
-DIFERENCIAS con el Dashboard (pages/2_Dashboard.py):
+DIFERENCIAS con el Dashboard (pages/7_Dashboard.py):
 - El acceso es con el PIN PROPIO de cada local (columna "pin" en la hoja
   Config), no con el PIN unico del dueno. Cada local tiene el suyo.
 - Ese PIN identifica automaticamente el local: el cajero NO elige de una
@@ -128,7 +128,7 @@ def _resaltar_turno_reciente(fila):
 
 st.dataframe(
     tabla_resumen.style.apply(_resaltar_turno_reciente, axis=1),
-    use_container_width=True,
+    width="stretch",
     hide_index=True,
 )
 st.caption(
@@ -159,7 +159,7 @@ if not cortes.empty and (cortes["corte"].max() > 1 or "⚠️" in " ".join(resum
                 }
             )
             .drop(columns=["diferencia"]),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -172,10 +172,8 @@ st.subheader(f"Detalle de registros — {local}")
 columnas_fotos = [c for c in df_local.columns if c.startswith("foto_")]
 
 # Ancho fijo (en pixeles) para las fotos de los vouchers. Antes iban a
-# ancho completo (use_container_width) y se veian enormes, sobre todo en
-# la Apertura que trae una sola. A este tamaño se lee el voucher y, si
-# hace falta ver un detalle, Streamlit deja abrir cada foto a pantalla
-# completa con el boton de expandir que aparece al pasar el mouse encima.
+# ancho completo y se veian enormes, sobre todo la unica de la Apertura.
+# A este tamaño se lee el voucher; el check de mas abajo lo agranda.
 ANCHO_FOTO = 260
 
 for posicion, (_, fila) in enumerate(df_local.iterrows()):

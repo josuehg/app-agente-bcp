@@ -11,7 +11,7 @@ se lo vuelve a pedir aca.
 
 IMPORTANTE: marcar una encuesta como "Pagada" es una decision del dueno,
 no de quien la registra -- por eso esa accion vive solo en el Dashboard
-(pages/2_Dashboard.py), protegido con el PIN del dueno. Aca cualquier
+(pages/7_Dashboard.py), protegido con el PIN del dueno. Aca cualquier
 trabajador puede registrar una encuesta nueva y ver el estado (Pendiente
 / Pagada) de las de su local, pero no puede cambiarlo.
 """
@@ -63,7 +63,7 @@ if "confirmar_encuesta" not in st.session_state:
 
 enviado = st.button(
     "Guardar encuesta",
-    use_container_width=True,
+    width="stretch",
     type="primary",
     disabled=st.session_state["confirmar_encuesta"],
 )
@@ -104,8 +104,8 @@ def _dialogo_confirmar_encuesta():
 
     st.divider()
     col_confirmar, col_cancelar = st.columns(2)
-    confirmar = col_confirmar.button("✅ Sí, guardar", type="primary", use_container_width=True)
-    cancelar = col_cancelar.button("✏️ Volver a editar", use_container_width=True)
+    confirmar = col_confirmar.button("✅ Sí, guardar", type="primary", width="stretch")
+    cancelar = col_cancelar.button("✏️ Volver a editar", width="stretch")
 
     if cancelar:
         st.session_state["confirmar_encuesta"] = False
@@ -196,7 +196,7 @@ else:
                 "estado_pago": "Estado",
             }
         ),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
     st.caption("El pago se marca desde el Dashboard del dueño; aqui solo puedes ver el estado.")

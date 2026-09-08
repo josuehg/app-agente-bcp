@@ -194,7 +194,7 @@ if "confirmar_registro" not in st.session_state:
 
 enviado = st.button(
     "Guardar registro",
-    use_container_width=True,
+    width="stretch",
     type="primary",
     disabled=st.session_state["confirmar_registro"],
 )
@@ -291,8 +291,8 @@ def _dialogo_confirmar_registro():
 
     st.divider()
     col_confirmar, col_cancelar = st.columns(2)
-    confirmar = col_confirmar.button("✅ Sí, guardar", type="primary", use_container_width=True)
-    cancelar = col_cancelar.button("✏️ Volver a editar", use_container_width=True)
+    confirmar = col_confirmar.button("✅ Sí, guardar", type="primary", width="stretch")
+    cancelar = col_cancelar.button("✏️ Volver a editar", width="stretch")
 
     if cancelar:
         st.session_state["confirmar_registro"] = False
