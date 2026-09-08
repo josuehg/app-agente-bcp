@@ -209,7 +209,30 @@ def calcular_cortes(df: pd.DataFrame, columnas_indice: list[str]) -> pd.DataFram
         contexto = dict(zip(columnas_indice, claves))
         filas.extend(_cortes_de_un_turno(grupo, contexto))
 
-    return pd.DataFrame(filas, columns=columnas_salida)
+    salida = pd.DataFrame(filas, columns=columnas_salida)
+    return _tipos_seguros(salida, columnas_indice)
+
+
+def _tipos_seguros(df: pd.DataFrame, columnas_indice: list[str]) -> pd.DataFrame:
+    """Deja las columnas con tipos limpios: numeros como float/int (con
+    NaN, nunca pd.NA en columnas 'object'), y todo lo demas como texto.
+
+    POR QUE: si 'apertura'/'cierre'/'diferencia' quedan como columna
+    'object' con floats y pd.NA mezclados (pasa cuando a un corte le
+    falta la Apertura o el Cierre), st.dataframe al convertir a Arrow
+    puede tirar el proceso entero (Segmentation fault) en pyarrow. Con
+    dtypes limpios esa conversion es trivial y segura.
+    """
+    if df.empty:
+        return df
+    for col in ["apertura", "cierre", "diferencia"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df["corte"] = pd.to_numeric(df["corte"], errors="coerce").fillna(0).astype(int)
+    for col in df.columns:
+        if col in columnas_indice or col in {"apertura", "cierre", "diferencia", "corte"}:
+            continue
+        df[col] = df[col].fillna("").astype(str).replace({"nan": "", "None": ""})
+    return df
 
 
 def _estado_turno(estados: set[str]) -> str:
