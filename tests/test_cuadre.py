@@ -1,5 +1,5 @@
 """
-Pruebas de cuadre.py (modelo de tramos Apertura -> Cierre).
+Pruebas de cuadre.py (modelo de cortes Apertura -> Cierre).
 
 Como cuadre.py no importa streamlit ni gspread, esto corre sin
 credenciales ni conexion:
@@ -20,7 +20,7 @@ from cuadre import (
     ESTADO_REVISAR,
     ESTADO_SECUENCIA,
     acumulado_por_persona,
-    calcular_tramos,
+    calcular_cortes,
     resumen_turnos,
 )
 
@@ -53,14 +53,14 @@ def r():
     return _Reloj()
 
 
-def _tramos(registros):
-    return calcular_tramos(pd.DataFrame(registros), INDICE)
+def _cortes(registros):
+    return calcular_cortes(pd.DataFrame(registros), INDICE)
 
 
-# --- Un solo tramo -------------------------------------------------------
+# --- Un solo corte -------------------------------------------------------
 
-def test_tramo_cuadrado(r):
-    t = _tramos([r("Apertura", 5000.00, "Ana"), r("Cierre", 5000.50, "Ana")])
+def test_corte_cuadrado(r):
+    t = _cortes([r("Apertura", 5000.00, "Ana"), r("Cierre", 5000.50, "Ana")])
     assert len(t) == 1
     assert t.iloc[0]["estado"] == ESTADO_CUADRADO
     assert t.iloc[0]["diferencia"] == pytest.approx(0.50)
@@ -68,38 +68,39 @@ def test_tramo_cuadrado(r):
     assert t.iloc[0]["nombre"] == "Ana"
 
 
-def test_tramo_revisar(r):
-    t = _tramos([r("Apertura", 5000.00, "Ana"), r("Cierre", 4970.00, "Ana")])
+def test_corte_revisar(r):
+    t = _cortes([r("Apertura", 5000.00, "Ana"), r("Cierre", 4970.00, "Ana")])
     assert t.iloc[0]["estado"] == ESTADO_REVISAR
 
 
-def test_tramo_diferencia_grande(r):
-    t = _tramos([r("Apertura", 5000.00, "Ana"), r("Cierre", 4000.00, "Ana")])
+def test_corte_diferencia_grande(r):
+    t = _cortes([r("Apertura", 5000.00, "Ana"), r("Cierre", 4000.00, "Ana")])
     assert t.iloc[0]["estado"] == ESTADO_GRANDE
 
 
-# --- Cierres parciales (varios tramos) --------------------------------
+# --- Cierres parciales (varios cortes) --------------------------------
 
-def test_dos_tramos_retiro_entre_medio_no_es_descuadre(r):
-    # Tramo 1: 5000 -> 5000 (cuadra). Entre medio se retiran S/2000 a
-    # proposito (la 2da Apertura arranca en 3000). Tramo 2: 3000 -> 3000.
-    t = _tramos([
+def test_dos_cortes_retiro_entre_medio_no_es_descuadre(r):
+    # Corte 1: 5000 -> 5000 (cuadra). Entre medio se retiran S/2000 a
+    # proposito (la 2da Apertura arranca en 3000). Corte 2: 3000 -> 3000.
+    t = _cortes([
         r("Apertura", 5000.00, "Ana"),
         r("Cierre", 5000.00, "Ana"),
         r("Apertura", 3000.00, "Ana"),
         r("Cierre", 3000.00, "Ana"),
     ])
-    assert list(t["tramo"]) == [1, 2]
+    assert list(t["corte"]) == [1, 2]
     assert all(t["estado"] == ESTADO_CUADRADO)
     resumen = resumen_turnos(t, INDICE)
     assert len(resumen) == 1
-    assert resumen.iloc[0]["n_tramos"] == 2
+    assert resumen.iloc[0]["n_cortes"] == 2
+    assert resumen.iloc[0]["nombres"] == "Ana"  # misma persona los 2 cortes, sin repetir
     assert resumen.iloc[0]["diferencia"] == pytest.approx(0.0)  # el retiro no cuenta
     assert resumen.iloc[0]["estado"] == ESTADO_CUADRADO
 
 
-def test_suma_de_tramos_en_resumen(r):
-    t = _tramos([
+def test_suma_de_cortes_en_resumen(r):
+    t = _cortes([
         r("Apertura", 5000.00, "Ana"),
         r("Cierre", 4997.00, "Ana"),   # -3
         r("Apertura", 4997.00, "Ana"),
@@ -113,31 +114,31 @@ def test_suma_de_tramos_en_resumen(r):
 # --- Secuencia rota ---------------------------------------------------
 
 def test_dos_aperturas_seguidas(r):
-    t = _tramos([
+    t = _cortes([
         r("Apertura", 5000.00, "Ana"),
         r("Apertura", 5100.00, "Beto"),
         r("Cierre", 5100.00, "Beto"),
     ])
-    # La 1ra Apertura queda como tramo abierto; la 2da si cierra.
+    # La 1ra Apertura queda como corte abierto; la 2da si cierra.
     assert list(t["estado"]) == [ESTADO_ABIERTO, ESTADO_CUADRADO]
     assert resumen_turnos(t, INDICE).iloc[0]["estado"] == ESTADO_SECUENCIA
 
 
 def test_cierre_sin_apertura(r):
-    t = _tramos([r("Cierre", 4000.00, "Ana")])
+    t = _cortes([r("Cierre", 4000.00, "Ana")])
     assert t.iloc[0]["estado"] == ESTADO_CIERRE_SUELTO
     assert resumen_turnos(t, INDICE).iloc[0]["estado"] == ESTADO_SECUENCIA
 
 
 def test_turno_sin_cerrar(r):
-    t = _tramos([r("Apertura", 5000.00, "Ana")])
+    t = _cortes([r("Apertura", 5000.00, "Ana")])
     assert t.iloc[0]["estado"] == ESTADO_ABIERTO
 
 
 # --- Nombre distinto en el Cierre -----------------------------------
 
 def test_cierre_con_otro_nombre_se_marca_y_se_atribuye_a_apertura(r):
-    t = _tramos([
+    t = _cortes([
         r("Apertura", 5000.00, "Ana"),
         r("Cierre", 4995.00, "Beto", motivo="Ana se retiró"),
     ])
@@ -162,12 +163,12 @@ def test_acumulado_por_persona_suma_y_ordena(r):
         r("Apertura", 4996.00, "Ana"), r("Cierre", 4993.00, "Ana"),   # Ana -3
         r("Apertura", 4993.00, "Beto"), r("Cierre", 4994.00, "Beto"), # Beto +1
     ])
-    acum = acumulado_por_persona(calcular_tramos(df, INDICE)).set_index("nombre")
-    assert acum.loc["Ana", "n_tramos"] == 2
+    acum = acumulado_por_persona(calcular_cortes(df, INDICE)).set_index("nombre")
+    assert acum.loc["Ana", "n_cortes"] == 2
     assert acum.loc["Ana", "diferencia"] == pytest.approx(-7.0)
     assert acum.loc["Beto", "diferencia"] == pytest.approx(1.0)
     # Ana tiene mas descuadre absoluto -> va primero
-    assert list(acumulado_por_persona(calcular_tramos(df, INDICE))["nombre"]) == ["Ana", "Beto"]
+    assert list(acumulado_por_persona(calcular_cortes(df, INDICE))["nombre"]) == ["Ana", "Beto"]
 
 
 # --- Varios locales no se mezclan ---------------------------------
@@ -183,7 +184,7 @@ def test_locales_distintos_no_se_mezclan():
         {"local": "Zol", "fecha": "2026-09-06", "turno": "Mañana", "tipo": "Cierre",
          "total": 2000, "nombre": "Beto", "timestamp": "2026-09-06T13:00:00"},
     ])
-    resumen = resumen_turnos(calcular_tramos(df, INDICE), INDICE).set_index("local")
+    resumen = resumen_turnos(calcular_cortes(df, INDICE), INDICE).set_index("local")
     assert resumen.loc["Fau", "estado"] == ESTADO_CUADRADO
     assert resumen.loc["Zol", "estado"] == ESTADO_GRANDE
 
@@ -191,7 +192,7 @@ def test_locales_distintos_no_se_mezclan():
 # --- Vacio ---------------------------------------------------------
 
 def test_df_vacio():
-    t = calcular_tramos(pd.DataFrame(), INDICE)
+    t = calcular_cortes(pd.DataFrame(), INDICE)
     assert t.empty
     assert "estado" in t.columns
     assert resumen_turnos(t, INDICE).empty
