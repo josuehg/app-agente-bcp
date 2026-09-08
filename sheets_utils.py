@@ -32,12 +32,12 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
 # Logica pura del cuadre por turno (no depende de streamlit ni Google).
-# Se re-exporta para que el resto de la app la use como sh.calcular_tramos, etc.
+# Se re-exporta para que el resto de la app la use como sh.calcular_cortes, etc.
 from cuadre import (  # noqa: F401  (re-export para el resto de la app)
     UMBRAL_AMARILLO,
     UMBRAL_VERDE,
     acumulado_por_persona,
-    calcular_tramos,
+    calcular_cortes,
     resumen_turnos,
 )
 
@@ -132,7 +132,7 @@ COLUMNAS_REGISTROS = [
     "foto_voucher_saldo_final_tarjeta",
     "foto_voucher_nro_movimientos",
     # Solo se llena en un Cierre cuando lo registra una persona distinta a
-    # la que abrio ese tramo: el motivo que escribio para justificarlo.
+    # la que abrio ese corte: el motivo que escribio para justificarlo.
     "motivo_cierre_otro_nombre",
 ]
 
@@ -555,7 +555,7 @@ def guardar_registro(datos: dict) -> None:
         raise SecuenciaInvalida(
             f"Este turno ya tiene una Apertura sin cerrar (la hizo "
             f"{ab['nombre'] or 'alguien'} a las {ab['hora'] or '--:--'}). "
-            f"Primero hay que registrar el Cierre de ese tramo."
+            f"Primero hay que registrar el Cierre de ese corte."
         )
     if tipo == "Cierre" and not estado["abierto"]:
         raise SecuenciaInvalida(
@@ -590,10 +590,10 @@ def get_registros_df() -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------
-# Cuadre por turno (tramos Apertura -> Cierre): la logica vive en
+# Cuadre por turno (cortes Apertura -> Cierre): la logica vive en
 # cuadre.py (sin depender de streamlit ni de Google, para poder probarla
 # con pytest). Se importa arriba y el resto de la app la usa como
-# sh.calcular_tramos(...) / sh.resumen_turnos(...) / sh.acumulado_por_persona(...).
+# sh.calcular_cortes(...) / sh.resumen_turnos(...) / sh.acumulado_por_persona(...).
 # ---------------------------------------------------------------------
 
 

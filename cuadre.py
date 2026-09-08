@@ -8,22 +8,22 @@ MODELO DE TURNO (con cierres parciales)
 Un turno = local + fecha + Mañana/Tarde. Durante el turno puede haber
 VARIOS cortes: la persona cierra la caja (cuenta todo), a veces se retira
 o se ingresa efectivo a proposito, y se vuelve a abrir. Cada par
-Apertura -> Cierre es un TRAMO.
+Apertura -> Cierre es un CORTE.
 
 - La secuencia normal alterna Apertura, Cierre, Apertura, Cierre... y
   SIEMPRE termina en Cierre.
-- La MISMA persona abre y cierra su tramo. Si el Cierre quedo a nombre de
+- La MISMA persona abre y cierra su corte. Si el Cierre quedo a nombre de
   otra persona, se registra igual (con un motivo), pero la diferencia del
-  tramo se le atribuye SIEMPRE a quien ABRIO.
-- Diferencia de un tramo = total del Cierre - total de la Apertura.
-- Lo que cambie ENTRE el Cierre de un tramo y la Apertura del siguiente
-  (un retiro o un ingreso hechos a proposito) NO es descuadre: cada tramo
+  corte se le atribuye SIEMPRE a quien ABRIO.
+- Diferencia de un corte = total del Cierre - total de la Apertura.
+- Lo que cambie ENTRE el Cierre de un corte y la Apertura del siguiente
+  (un retiro o un ingreso hechos a proposito) NO es descuadre: cada corte
   se mide solo contra su propia Apertura, asi que ese movimiento no
   ensucia el calculo.
 
 Este archivo NO importa streamlit ni gspread (para poder probarlo con
 pytest sin credenciales). sheets_utils.py lo re-exporta, asi que el resto
-de la app lo usa como sh.calcular_tramos(...), sh.resumen_turnos(...), etc.
+de la app lo usa como sh.calcular_cortes(...), sh.resumen_turnos(...), etc.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ from __future__ import annotations
 import pandas as pd
 
 # ---------------------------------------------------------------------
-# UMBRALES DEL SEMAFORO (por tramo): punto de partida razonable, no una
+# UMBRALES DEL SEMAFORO (por corte): punto de partida razonable, no una
 # regla fija. Si en la practica quedan muy estrictos o muy sueltos, se
 # cambian estos dos numeros.
 # ---------------------------------------------------------------------
@@ -46,8 +46,8 @@ ESTADO_CIERRE_SUELTO = "⚠️ Cierre sin Apertura"
 ESTADO_NOMBRE_DISTINTO = "⚠️ Cerró otro nombre"
 ESTADO_SECUENCIA = "⚠️ Revisar secuencia"
 
-COLUMNAS_TRAMO = [
-    "tramo",
+COLUMNAS_CORTE = [
+    "corte",
     "nombre",  # a quien se le atribuye: SIEMPRE quien abrio
     "nombre_cierre",  # quien registro el Cierre (puede ser otro)
     "hora_apertura",
@@ -60,9 +60,9 @@ COLUMNAS_TRAMO = [
     "motivo",  # motivo por el que cerro otra persona, si aplica
 ]
 
-COLUMNAS_RESUMEN = ["n_tramos", "nombres", "diferencia", "diferencia_fmt", "estado"]
+COLUMNAS_RESUMEN = ["n_cortes", "nombres", "diferencia", "diferencia_fmt", "estado"]
 
-COLUMNAS_PERSONA = ["nombre", "n_tramos", "diferencia", "diferencia_fmt", "descuadre_abs"]
+COLUMNAS_PERSONA = ["nombre", "n_cortes", "diferencia", "diferencia_fmt", "descuadre_abs"]
 
 
 def _semaforo(diferencia: float) -> str:
@@ -96,7 +96,7 @@ def _nombre(reg) -> str:
     return "" if reg is None else str(reg.get("nombre", "")).strip()
 
 
-def _fila_tramo(contexto: dict, numero: int, apertura, cierre, estado_forzado) -> dict:
+def _fila_corte(contexto: dict, numero: int, apertura, cierre, estado_forzado) -> dict:
     ap_total = _total(apertura)
     ci_total = _total(cierre)
     nombre_ap = _nombre(apertura)
@@ -118,7 +118,7 @@ def _fila_tramo(contexto: dict, numero: int, apertura, cierre, estado_forzado) -
     fila = dict(contexto)
     fila.update(
         {
-            "tramo": numero,
+            "corte": numero,
             # Atribucion: SIEMPRE quien abrio. Si no hay Apertura (Cierre
             # suelto), cae al nombre del Cierre para no perderlo.
             "nombre": nombre_ap or nombre_ci,
@@ -136,10 +136,10 @@ def _fila_tramo(contexto: dict, numero: int, apertura, cierre, estado_forzado) -
     return fila
 
 
-def _tramos_de_un_turno(grupo: pd.DataFrame, contexto: dict) -> list[dict]:
+def _cortes_de_un_turno(grupo: pd.DataFrame, contexto: dict) -> list[dict]:
     """Recorre los registros de UN turno (ya ordenados por hora) y arma la
-    lista de tramos, emparejando cada Apertura con su Cierre."""
-    tramos: list[dict] = []
+    lista de cortes, emparejando cada Apertura con su Cierre."""
+    cortes: list[dict] = []
     numero = 0
     apertura_abierta = None
 
@@ -148,43 +148,43 @@ def _tramos_de_un_turno(grupo: pd.DataFrame, contexto: dict) -> list[dict]:
         if tipo == "Apertura":
             if apertura_abierta is not None:
                 # Dos Aperturas seguidas sin Cierre en medio: la anterior
-                # queda como tramo abierto (anomalia).
+                # queda como corte abierto (anomalia).
                 numero += 1
-                tramos.append(
-                    _fila_tramo(contexto, numero, apertura_abierta, None, ESTADO_ABIERTO)
+                cortes.append(
+                    _fila_corte(contexto, numero, apertura_abierta, None, ESTADO_ABIERTO)
                 )
             apertura_abierta = reg
         elif tipo == "Cierre":
             numero += 1
             if apertura_abierta is None:
-                tramos.append(
-                    _fila_tramo(contexto, numero, None, reg, ESTADO_CIERRE_SUELTO)
+                cortes.append(
+                    _fila_corte(contexto, numero, None, reg, ESTADO_CIERRE_SUELTO)
                 )
             else:
-                tramos.append(_fila_tramo(contexto, numero, apertura_abierta, reg, None))
+                cortes.append(_fila_corte(contexto, numero, apertura_abierta, reg, None))
                 apertura_abierta = None
 
     if apertura_abierta is not None:
         numero += 1
-        tramos.append(
-            _fila_tramo(contexto, numero, apertura_abierta, None, ESTADO_ABIERTO)
+        cortes.append(
+            _fila_corte(contexto, numero, apertura_abierta, None, ESTADO_ABIERTO)
         )
 
-    return tramos
+    return cortes
 
 
-def calcular_tramos(df: pd.DataFrame, columnas_indice: list[str]) -> pd.DataFrame:
+def calcular_cortes(df: pd.DataFrame, columnas_indice: list[str]) -> pd.DataFrame:
     """
     Recibe registros (una fila por Apertura o Cierre) y devuelve UNA FILA
-    POR TRAMO, con la diferencia y el semaforo de cada tramo.
+    POR CORTE, con la diferencia y el semaforo de cada corte.
 
     `columnas_indice` define como se agrupan los turnos:
     ["local","fecha","turno"] para el Dashboard (todos los locales) o
     ["fecha","turno"] para el Historial de un local.
 
-    Columnas del resultado: columnas_indice + COLUMNAS_TRAMO.
+    Columnas del resultado: columnas_indice + COLUMNAS_CORTE.
     """
-    columnas_salida = list(columnas_indice) + COLUMNAS_TRAMO
+    columnas_salida = list(columnas_indice) + COLUMNAS_CORTE
     if df is None or df.empty:
         return pd.DataFrame(columns=columnas_salida)
 
@@ -207,14 +207,14 @@ def calcular_tramos(df: pd.DataFrame, columnas_indice: list[str]) -> pd.DataFram
         if not isinstance(claves, tuple):
             claves = (claves,)
         contexto = dict(zip(columnas_indice, claves))
-        filas.extend(_tramos_de_un_turno(grupo, contexto))
+        filas.extend(_cortes_de_un_turno(grupo, contexto))
 
     return pd.DataFrame(filas, columns=columnas_salida)
 
 
 def _estado_turno(estados: set[str]) -> str:
     """El estado que se muestra para el turno completo, tomando lo mas
-    urgente de sus tramos."""
+    urgente de sus cortes."""
     if {ESTADO_ABIERTO, ESTADO_CIERRE_SUELTO} & estados:
         return ESTADO_SECUENCIA
     if ESTADO_NOMBRE_DISTINTO in estados:
@@ -226,26 +226,26 @@ def _estado_turno(estados: set[str]) -> str:
     return ESTADO_CUADRADO
 
 
-def resumen_turnos(tramos: pd.DataFrame, columnas_indice: list[str]) -> pd.DataFrame:
-    """Junta los tramos de cada turno en una sola fila: cuantos tramos
+def resumen_turnos(cortes: pd.DataFrame, columnas_indice: list[str]) -> pd.DataFrame:
+    """Junta los cortes de cada turno en una sola fila: cuantos cortes
     tuvo, la SUMA de sus diferencias y el estado del turno."""
     columnas_salida = list(columnas_indice) + COLUMNAS_RESUMEN
-    if tramos is None or tramos.empty:
+    if cortes is None or cortes.empty:
         return pd.DataFrame(columns=columnas_salida)
 
     filas: list[dict] = []
-    for claves, grupo in tramos.groupby(columnas_indice, dropna=False, sort=False):
+    for claves, grupo in cortes.groupby(columnas_indice, dropna=False, sort=False):
         if not isinstance(claves, tuple):
             claves = (claves,)
         contexto = dict(zip(columnas_indice, claves))
         diferencia_total = grupo["diferencia"].dropna().sum()
-        # Personas que trabajaron el turno (quien abrio cada tramo), sin
+        # Personas que trabajaron el turno (quien abrio cada corte), sin
         # repetir y en el orden en que aparecieron.
         nombres = ", ".join(dict.fromkeys(n for n in grupo["nombre"].astype(str) if n))
         filas.append(
             {
                 **contexto,
-                "n_tramos": len(grupo),
+                "n_cortes": len(grupo),
                 "nombres": nombres,
                 "diferencia": diferencia_total,
                 "diferencia_fmt": f"{diferencia_total:+,.2f}",
@@ -255,21 +255,21 @@ def resumen_turnos(tramos: pd.DataFrame, columnas_indice: list[str]) -> pd.DataF
     return pd.DataFrame(filas, columns=columnas_salida)
 
 
-def acumulado_por_persona(tramos: pd.DataFrame) -> pd.DataFrame:
-    """Por cada persona (la que ABRIO cada tramo): cuantos tramos hizo, la
+def acumulado_por_persona(cortes: pd.DataFrame) -> pd.DataFrame:
+    """Por cada persona (la que ABRIO cada corte): cuantos cortes hizo, la
     SUMA de sus diferencias con signo, y el descuadre en valor absoluto
     (para ordenar de mayor a menor 'ruido')."""
-    if tramos is None or tramos.empty:
+    if cortes is None or cortes.empty:
         return pd.DataFrame(columns=COLUMNAS_PERSONA)
 
-    completos = tramos[tramos["diferencia"].notna() & (tramos["nombre"].astype(str) != "")]
+    completos = cortes[cortes["diferencia"].notna() & (cortes["nombre"].astype(str) != "")]
     if completos.empty:
         return pd.DataFrame(columns=COLUMNAS_PERSONA)
 
     agrupado = (
         completos.groupby("nombre")
         .agg(
-            n_tramos=("diferencia", "count"),
+            n_cortes=("diferencia", "count"),
             diferencia=("diferencia", "sum"),
             descuadre_abs=("diferencia", lambda s: s.abs().sum()),
         )
