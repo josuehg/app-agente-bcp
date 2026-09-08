@@ -423,15 +423,20 @@ def subir_foto(archivo, nombre_archivo: str) -> str:
     )
     file_id = file["id"]
 
-    # Hacemos el archivo visible para "cualquiera que tenga el link".
-    # No queda publico en buscadores, pero cualquiera con la URL exacta
-    # puede verlo. Es el trade-off mas simple para que tu y el personal
-    # puedan abrir la foto sin tener que dar acceso persona por persona.
-    service.permissions().create(
-        fileId=file_id,
-        body={"role": "reader", "type": "anyone"},
-        supportsAllDrives=True,
-    ).execute(num_retries=3)
+    # Intentamos hacer el archivo visible para "cualquiera con el link".
+    # Si el Workspace de la organizacion tiene bloqueado ese tipo de
+    # compartido, esta llamada falla -- y NO pasa nada: la app igual
+    # muestra las fotos porque las descarga con la cuenta de servicio
+    # (ver descargar_imagen_drive). Por eso lo envolvemos en try/except:
+    # que no se caiga el guardado del registro solo por esto.
+    try:
+        service.permissions().create(
+            fileId=file_id,
+            body={"role": "reader", "type": "anyone"},
+            supportsAllDrives=True,
+        ).execute(num_retries=3)
+    except Exception:
+        pass
 
     return f"https://drive.google.com/file/d/{file_id}/view"
 

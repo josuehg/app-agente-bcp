@@ -110,7 +110,7 @@ pagina_historial = st.Page("pages/3_Historial.py", title="Historial", icon="🗂
 pagina_encuestas = st.Page("pages/4_Encuestas.py", title="Encuestas", icon="⭐")
 pagina_campanas = st.Page("pages/5_Campanas.py", title="Campañas", icon="📢")
 pagina_ayuda = st.Page("pages/6_Ayuda.py", title="Ayuda", icon="❓")
-pagina_dashboard = st.Page("pages/2_Dashboard.py", title="Dashboard", icon="📊")
+pagina_dashboard = st.Page("pages/7_Dashboard.py", title="Dashboard", icon="📊")
 
 navegacion = st.navigation(
     {
