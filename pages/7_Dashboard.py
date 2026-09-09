@@ -466,11 +466,18 @@ else:
         ["—"] + acumulado["nombre"].tolist(),
     )
     if persona_sel != "—":
-        cortes_persona = cortes[cortes["nombre"] == persona_sel].copy()
+
+        def _num(valor):
+            v = pd.to_numeric(valor, errors="coerce")
+            return 0.0 if pd.isna(v) else float(v)
+
+        cortes_persona = cortes[cortes["nombre"] == persona_sel].copy().sort_values(
+            ["fecha", "local", "turno", "corte"]
+        )
         st.markdown(f"**Cortes de {persona_sel} en el rango:**")
         st.dataframe(
             sh.arrow_safe(
-                cortes_persona.sort_values(["fecha", "local", "turno", "corte"])[
+                cortes_persona[
                     ["fecha", "local", "turno", "corte", "nombre_cierre",
                      "apertura", "cierre", "diferencia_fmt", "estado"]
                 ].rename(
@@ -486,30 +493,66 @@ else:
             hide_index=True,
         )
 
-        # Desglose billete por billete de las Aperturas y Cierres de esos turnos.
-        llaves_turno = cortes_persona[["local", "fecha", "turno"]].drop_duplicates()
-        registros_persona = df_filtrado.merge(
-            llaves_turno, on=["local", "fecha", "turno"]
-        ).sort_values("timestamp")
-        if not registros_persona.empty:
-            st.markdown(
-                "**Desglose de efectivo de esos turnos** — revisa si algún monto "
-                "se ve fuera de lugar (ej: 100 donde debía ir 1000):"
+        registros_por_id = df_filtrado.set_index("id")
+        st.markdown("**Revisión corte por corte** (Apertura vs Cierre, campo por campo):")
+        for _, c in cortes_persona.iterrows():
+            encabezado = (
+                f"{c['fecha']} · {c['local']} · {c['turno']} · corte {c['corte']} · "
+                f"{c['diferencia_fmt']} · {c['estado']}"
             )
-            cols_denom = [col for _, col, _ in sh.DENOMINACIONES]
-            detalle = registros_persona[
-                ["fecha", "local", "turno", "tipo", "nombre", *cols_denom,
-                 "efectivo", "tarjeta", "total"]
-            ].rename(
-                columns={
-                    "fecha": "Fecha", "local": "Local", "turno": "Turno",
-                    "tipo": "Tipo", "nombre": "Registró",
-                    **{col: etq.replace("Monto en ", "").replace("billetes de ", "")
-                       .replace("monedas de ", "") for etq, col, _ in sh.DENOMINACIONES},
-                    "efectivo": "Efectivo", "tarjeta": "Tarjeta", "total": "Total",
-                }
-            )
-            st.dataframe(sh.arrow_safe(detalle), width="stretch", hide_index=True)
+            with st.expander(encabezado):
+                id_ap, id_ci = c["id_apertura"], c["id_cierre"]
+                if id_ap not in registros_por_id.index or id_ci not in registros_por_id.index:
+                    st.caption("Este corte no tiene Apertura y Cierre completos para comparar.")
+                    continue
+                ap = registros_por_id.loc[id_ap]
+                ci = registros_por_id.loc[id_ci]
+
+                comparacion = []
+                for etq, col, val in sh.DENOMINACIONES:
+                    va, vc = _num(ap.get(col)), _num(ci.get(col))
+                    comparacion.append(
+                        {"Campo": f"S/ {val:g}", "Apertura": va, "Cierre": vc, "Diferencia": vc - va}
+                    )
+                for etq, col in [("Efectivo", "efectivo"), ("Tarjeta", "tarjeta"), ("Total", "total")]:
+                    va, vc = _num(ap.get(col)), _num(ci.get(col))
+                    comparacion.append(
+                        {"Campo": etq, "Apertura": va, "Cierre": vc, "Diferencia": vc - va}
+                    )
+                st.dataframe(
+                    sh.arrow_safe(pd.DataFrame(comparacion)),
+                    width="stretch",
+                    hide_index=True,
+                )
+
+                # --- pistas automáticas de "error al registrar" ---
+                pistas = []
+                ta, tc = _num(ap.get("tarjeta")), _num(ci.get("tarjeta"))
+                if ta == 0 and tc > 0:
+                    pistas.append("La **Apertura no tiene monto en Tarjeta** (quedó en 0).")
+                if tc == 0 and ta > 0:
+                    pistas.append("El **Cierre no tiene monto en Tarjeta** (quedó en 0).")
+                if _num(ap.get("total")) == 0:
+                    pistas.append("La **Apertura quedó en 0** — ¿no se registró el conteo?")
+                if _num(ci.get("total")) == 0:
+                    pistas.append("El **Cierre quedó en 0** — ¿no se registró el conteo?")
+                dif_corte = _num(c["diferencia"])
+                for etq, col, val in sh.DENOMINACIONES:
+                    salto = _num(ci.get(col)) - _num(ap.get(col))
+                    if abs(salto) >= 100 and abs(salto - dif_corte) < 1:
+                        pistas.append(
+                            f"La denominación **S/ {val:g}** pasó de {_num(ap.get(col)):,.0f} a "
+                            f"{_num(ci.get(col)):,.0f} y eso explica casi toda la diferencia del "
+                            f"corte → probable error al escribir el monto."
+                        )
+                if pistas:
+                    for p in pistas:
+                        st.warning(p)
+                else:
+                    st.caption(
+                        "Sin señales obvias de error al registrar. Si aun así no cuadra, "
+                        "revisar el conteo físico o un retiro no anotado."
+                    )
 
 # ---------------------------------------------------------------------
 # Tabla consolidada

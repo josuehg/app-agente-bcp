@@ -58,6 +58,8 @@ COLUMNAS_CORTE = [
     "diferencia_fmt",
     "estado",
     "motivo",  # motivo por el que cerro otra persona, si aplica
+    "id_apertura",  # id del registro de Apertura (para cruzar con la hoja)
+    "id_cierre",  # id del registro de Cierre
 ]
 
 COLUMNAS_RESUMEN = ["n_cortes", "nombres", "diferencia", "diferencia_fmt", "estado"]
@@ -131,6 +133,8 @@ def _fila_corte(contexto: dict, numero: int, apertura, cierre, estado_forzado) -
             "diferencia_fmt": _fmt(diferencia),
             "estado": estado,
             "motivo": motivo,
+            "id_apertura": "" if apertura is None else str(apertura.get("id", "")),
+            "id_cierre": "" if cierre is None else str(cierre.get("id", "")),
         }
     )
     return fila
