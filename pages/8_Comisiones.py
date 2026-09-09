@@ -87,8 +87,14 @@ ops_por_local = (
 )
 
 cfg = config_df.drop_duplicates("local").set_index("local")
-tipo_por_local = cfg["tipo_agente"].to_dict()
-tarifa_por_local = pd.to_numeric(cfg["soles_por_operacion"], errors="coerce").to_dict()
+# Tolerante a que Config todavia no tenga las columnas nuevas (caché vieja
+# tras un deploy): si faltan, se cae al tipo por nombre y la tarifa default.
+tipo_por_local = cfg["tipo_agente"].to_dict() if "tipo_agente" in cfg.columns else {}
+tarifa_por_local = (
+    pd.to_numeric(cfg["soles_por_operacion"], errors="coerce").to_dict()
+    if "soles_por_operacion" in cfg.columns
+    else {}
+)
 
 
 def _tipo(local):
