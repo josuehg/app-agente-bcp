@@ -305,43 +305,66 @@ def _get_or_create_worksheet(nombre: str, columnas: list[str]):
 
 
 # ---------------------------------------------------------------------
-# Config (locales + fondo minimo por local)
+# Config (por local: fondo minimo, PIN, tipo de agente y tarifa de comision)
 # ---------------------------------------------------------------------
+
+COLUMNAS_CONFIG = ["local", "fondo_minimo", "pin", "tipo_agente", "soles_por_operacion"]
+
+# Tarifa promedio de comision por operacion, por tipo de agente. Es solo
+# el valor por defecto: si en la hoja 'Config' se llena
+# 'soles_por_operacion' para un local, manda ese.
+TARIFA_DEFAULT = {"superagente": 0.30, "normal": 0.225}
+
+# Palabras en el nombre del local que indican "superagente" (para cuando
+# la columna 'tipo_agente' de la hoja esta vacia). El usuario puede
+# sobreescribir esto llenando la columna a mano.
+_PISTAS_SUPERAGENTE = ("zola", "zolb", "fau", "fer213")
+
+
+def _tipo_agente_por_nombre(nombre_local: str) -> str:
+    n = str(nombre_local).lower()
+    return "superagente" if any(p in n for p in _PISTAS_SUPERAGENTE) else "normal"
+
 
 @st.cache_data(ttl=60, show_spinner=False)
 def get_config_df() -> pd.DataFrame:
-    """Lee la hoja 'Config' (columnas: local, fondo_minimo, pin).
+    """Lee la hoja 'Config'. Columnas:
+    - local, fondo_minimo, pin (como siempre).
+    - tipo_agente: "superagente" o "normal". Si esta vacio, se adivina por
+      el nombre del local (ver _PISTAS_SUPERAGENTE).
+    - soles_por_operacion: tarifa promedio de comision por operacion de
+      ese local. Si esta vacio, se usa TARIFA_DEFAULT segun el tipo.
 
-    La columna "pin" es el PIN de acceso propio de cada local para la
-    pagina de Historial (pages/3_Historial.py): con ese PIN, un cajero
-    entra directo a ver SOLO los registros de su tienda, sin tener que
-    elegir el local de una lista (y sin poder ver los de las demas).
-
-    Se cachea 60 segundos: si cambias el fondo minimo o el PIN en la
-    hoja, tarda como maximo un minuto en reflejarse en la app (para no
-    golpear la API de Google en cada segundo).
+    Se cachea 60 s: los cambios en la hoja tardan como maximo un minuto.
     """
-    ws = _get_or_create_worksheet(NOMBRE_HOJA_CONFIG, ["local", "fondo_minimo", "pin"])
+    ws = _get_or_create_worksheet(NOMBRE_HOJA_CONFIG, COLUMNAS_CONFIG)
     registros = ws.get_all_records()
     if not registros:
-        # Primera vez que se usa la app: sembramos 6 locales de ejemplo
-        # con un fondo minimo de referencia de S/ 5000 y un PIN de
-        # prueba (1001, 1002, ...). El usuario los cambia directamente
-        # en la hoja de Google, sin tocar codigo.
         locales_default = [f"Local {i+1}" for i in range(6)]
         for i, local in enumerate(locales_default):
-            ws.append_row([local, 5000, f"{1001 + i}"])
+            ws.append_row([local, 5000, f"{1001 + i}", "normal", 0.225])
         registros = ws.get_all_records()
     df = pd.DataFrame(registros)
+    for col in COLUMNAS_CONFIG:
+        if col not in df.columns:
+            df[col] = ""
+
     df["fondo_minimo"] = pd.to_numeric(df["fondo_minimo"], errors="coerce").fillna(0)
-    if "pin" not in df.columns:
-        # Sheet de una version anterior a que existiera esta columna.
-        df["pin"] = ""
-    df = _texto_seguro(df, {"fondo_minimo"})
-    # Los PIN se guardan como texto (aunque parezcan numeros) para poder
-    # comparar tal cual lo que el cajero escribe, sin lios de "0100" vs 100.
+    df = _texto_seguro(df, {"fondo_minimo", "soles_por_operacion"})
     df["pin"] = df["pin"].str.strip()
     df["local"] = df["local"].str.strip()
+
+    # tipo_agente: usar lo de la hoja si es valido; si no, adivinar.
+    df["tipo_agente"] = df["tipo_agente"].str.strip().str.lower()
+    df["tipo_agente"] = df["tipo_agente"].where(
+        df["tipo_agente"].isin(["superagente", "normal"]),
+        df["local"].map(_tipo_agente_por_nombre),
+    )
+
+    # soles_por_operacion: usar lo de la hoja si es > 0; si no, el default.
+    tarifa_default = df["tipo_agente"].map(TARIFA_DEFAULT).fillna(TARIFA_DEFAULT["normal"])
+    tarifa_hoja = pd.to_numeric(df["soles_por_operacion"], errors="coerce")
+    df["soles_por_operacion"] = tarifa_hoja.where(tarifa_hoja > 0, tarifa_default)
     return df
 
 

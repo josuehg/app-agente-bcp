@@ -111,6 +111,7 @@ pagina_encuestas = st.Page("pages/4_Encuestas.py", title="Encuestas", icon="⭐"
 pagina_campanas = st.Page("pages/5_Campanas.py", title="Campañas", icon="📢")
 pagina_ayuda = st.Page("pages/6_Ayuda.py", title="Ayuda", icon="❓")
 pagina_dashboard = st.Page("pages/7_Dashboard.py", title="Dashboard", icon="📊")
+pagina_comisiones = st.Page("pages/8_Comisiones.py", title="Comisiones", icon="💰")
 
 navegacion = st.navigation(
     {
@@ -122,7 +123,7 @@ navegacion = st.navigation(
             pagina_campanas,
             pagina_ayuda,
         ],
-        "Administración": [pagina_dashboard],
+        "Administración": [pagina_dashboard, pagina_comisiones],
     }
 )
 navegacion.run()
