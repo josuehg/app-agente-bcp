@@ -187,14 +187,16 @@ else:
     )
 
     st.dataframe(
-        df_local[["fecha", "nombre", "nota", "incentivo", "estado_pago"]].rename(
-            columns={
-                "fecha": "Fecha",
-                "nombre": "Nombre",
-                "nota": "Nota",
-                "incentivo": "Incentivo (S/)",
-                "estado_pago": "Estado",
-            }
+        sh.arrow_safe(
+            df_local[["fecha", "nombre", "nota", "incentivo", "estado_pago"]].rename(
+                columns={
+                    "fecha": "Fecha",
+                    "nombre": "Nombre",
+                    "nota": "Nota",
+                    "incentivo": "Incentivo (S/)",
+                    "estado_pago": "Estado",
+                }
+            )
         ),
         width="stretch",
         hide_index=True,

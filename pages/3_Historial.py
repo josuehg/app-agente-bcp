@@ -107,21 +107,25 @@ st.info(
     f"por **{fila_reciente['nombre']}** — {fecha_reciente} {hora_reciente}"
 )
 
-tabla_resumen = resumen.rename(
-    columns={
-        "fecha": "Fecha",
-        "turno": "Turno",
-        "n_cortes": "Cortes",
-        "nombres": "Personas",
-        "diferencia_fmt": "Diferencia total (S/)",
-        "estado": "Estado",
-    }
-).drop(columns=["diferencia"])
+tabla_resumen = sh.arrow_safe(
+    resumen.rename(
+        columns={
+            "fecha": "Fecha",
+            "turno": "Turno",
+            "n_cortes": "Cortes",
+            "nombres": "Personas",
+            "diferencia_fmt": "Diferencia total (S/)",
+            "estado": "Estado",
+        }
+    ).drop(columns=["diferencia"])
+)
+# arrow_safe pasa la fecha a texto ("2026-09-08"), asi que comparamos como texto.
+_fecha_reciente_txt = str(fecha_reciente)
 
 
 def _resaltar_turno_reciente(fila):
     # Fila del turno del ultimo registro: fondo amarillo suave + negrita.
-    es_reciente = fila["Fecha"] == fecha_reciente and fila["Turno"] == turno_reciente
+    es_reciente = fila["Fecha"] == _fecha_reciente_txt and fila["Turno"] == turno_reciente
     estilo = "background-color: #FFE9B0; font-weight: 700" if es_reciente else ""
     return [estilo] * len(fila)
 
@@ -141,24 +145,26 @@ st.caption(
 if not cortes.empty and (cortes["corte"].max() > 1 or "⚠️" in " ".join(resumen["estado"])):
     with st.expander("Ver corte por corte"):
         st.dataframe(
-            cortes.sort_values(["fecha", "turno", "corte"], ascending=[False, True, True])
-            .rename(
-                columns={
-                    "fecha": "Fecha",
-                    "turno": "Turno",
-                    "corte": "Corte",
-                    "nombre": "Abrió",
-                    "nombre_cierre": "Cerró",
-                    "hora_apertura": "Hora ap.",
-                    "hora_cierre": "Hora cie.",
-                    "apertura": "Apertura (S/)",
-                    "cierre": "Cierre (S/)",
-                    "diferencia_fmt": "Diferencia (S/)",
-                    "estado": "Estado",
-                    "motivo": "Motivo (otro nombre)",
-                }
-            )
-            .drop(columns=["diferencia"]),
+            sh.arrow_safe(
+                cortes.sort_values(["fecha", "turno", "corte"], ascending=[False, True, True])
+                .rename(
+                    columns={
+                        "fecha": "Fecha",
+                        "turno": "Turno",
+                        "corte": "Corte",
+                        "nombre": "Abrió",
+                        "nombre_cierre": "Cerró",
+                        "hora_apertura": "Hora ap.",
+                        "hora_cierre": "Hora cie.",
+                        "apertura": "Apertura (S/)",
+                        "cierre": "Cierre (S/)",
+                        "diferencia_fmt": "Diferencia (S/)",
+                        "estado": "Estado",
+                        "motivo": "Motivo (otro nombre)",
+                    }
+                )
+                .drop(columns=["diferencia"])
+            ),
             width="stretch",
             hide_index=True,
         )

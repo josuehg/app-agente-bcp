@@ -206,17 +206,19 @@ resumen = sh.resumen_turnos(cortes, INDICE_TURNO)
 resumen = resumen.sort_values(["fecha", "local", "turno"], ascending=[False, True, True])
 
 st.dataframe(
-    resumen.rename(
-        columns={
-            "local": "Local",
-            "fecha": "Fecha",
-            "turno": "Turno",
-            "n_cortes": "Cortes",
-            "nombres": "Personas",
-            "diferencia_fmt": "Diferencia total (S/)",
-            "estado": "Estado",
-        }
-    ).drop(columns=["diferencia"]),
+    sh.arrow_safe(
+        resumen.rename(
+            columns={
+                "local": "Local",
+                "fecha": "Fecha",
+                "turno": "Turno",
+                "n_cortes": "Cortes",
+                "nombres": "Personas",
+                "diferencia_fmt": "Diferencia total (S/)",
+                "estado": "Estado",
+            }
+        ).drop(columns=["diferencia"])
+    ),
     width="stretch",
     hide_index=True,
 )
@@ -234,23 +236,25 @@ with st.expander("Ver corte por corte"):
             ["fecha", "local", "turno", "corte"], ascending=[False, True, True, True]
         )
         st.dataframe(
-            cortes_orden.rename(
-                columns={
-                    "local": "Local",
-                    "fecha": "Fecha",
-                    "turno": "Turno",
-                    "corte": "Corte",
-                    "nombre": "Abrió",
-                    "nombre_cierre": "Cerró",
-                    "hora_apertura": "Hora ap.",
-                    "hora_cierre": "Hora cie.",
-                    "apertura": "Apertura (S/)",
-                    "cierre": "Cierre (S/)",
-                    "diferencia_fmt": "Diferencia (S/)",
-                    "estado": "Estado",
-                    "motivo": "Motivo (otro nombre)",
-                }
-            ).drop(columns=["diferencia"]),
+            sh.arrow_safe(
+                cortes_orden.rename(
+                    columns={
+                        "local": "Local",
+                        "fecha": "Fecha",
+                        "turno": "Turno",
+                        "corte": "Corte",
+                        "nombre": "Abrió",
+                        "nombre_cierre": "Cerró",
+                        "hora_apertura": "Hora ap.",
+                        "hora_cierre": "Hora cie.",
+                        "apertura": "Apertura (S/)",
+                        "cierre": "Cierre (S/)",
+                        "diferencia_fmt": "Diferencia (S/)",
+                        "estado": "Estado",
+                        "motivo": "Motivo (otro nombre)",
+                    }
+                ).drop(columns=["diferencia"])
+            ),
             width="stretch",
             hide_index=True,
         )
@@ -288,14 +292,16 @@ if acumulado.empty:
     st.caption("Todavía no hay cortes completos en el rango seleccionado.")
 else:
     st.dataframe(
-        acumulado.rename(
-            columns={
-                "nombre": "Persona",
-                "n_cortes": "Cortes",
-                "diferencia_fmt": "Diferencia neta (S/)",
-                "descuadre_abs": "Descuadre total (S/)",
-            }
-        ).drop(columns=["diferencia"]),
+        sh.arrow_safe(
+            acumulado.rename(
+                columns={
+                    "nombre": "Persona",
+                    "n_cortes": "Cortes",
+                    "diferencia_fmt": "Diferencia neta (S/)",
+                    "descuadre_abs": "Descuadre total (S/)",
+                }
+            ).drop(columns=["diferencia"])
+        ),
         width="stretch",
         hide_index=True,
     )
@@ -313,7 +319,7 @@ else:
 st.subheader("🗂️ Registros")
 columnas_fotos = [c for c in df_filtrado.columns if c.startswith("foto_")]
 st.dataframe(
-    df_filtrado.drop(columns=columnas_fotos),
+    sh.arrow_safe(df_filtrado.drop(columns=columnas_fotos)),
     width="stretch",
     hide_index=True,
 )
@@ -380,7 +386,7 @@ else:
             )
             .sort_values("Monto pendiente (S/)", ascending=False)
         )
-        st.dataframe(resumen_por_nombre, width="stretch", hide_index=True)
+        st.dataframe(sh.arrow_safe(resumen_por_nombre), width="stretch", hide_index=True)
 
     st.markdown("**Detalle de encuestas (ver capturas y cambiar estado):**")
     for _, fila_encuesta in encuestas_df.sort_values("timestamp", ascending=False).iterrows():

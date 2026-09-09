@@ -101,6 +101,26 @@ def _texto_seguro(df: pd.DataFrame, columnas_no_texto: set[str]) -> pd.DataFrame
     return df
 
 
+def arrow_safe(df: pd.DataFrame) -> pd.DataFrame:
+    """Devuelve una copia del DataFrame lista para st.dataframe / st.table.
+
+    Toda columna que NO sea numero ni fecha/hora nativa se pasa a texto
+    puro (None/NaT/NaN -> ""). Es la red de seguridad definitiva contra el
+    "Segmentation fault" de pyarrow al convertir a Arrow una columna
+    'object' con tipos mezclados (texto + fecha + NaT, floats + pd.NA,
+    etc.). Llamar SIEMPRE justo antes de mostrar una tabla.
+    """
+    salida = df.copy()
+    for col in salida.columns:
+        serie = salida[col]
+        if pd.api.types.is_numeric_dtype(serie) or pd.api.types.is_datetime64_any_dtype(serie):
+            continue
+        salida[col] = serie.map(
+            lambda x: "" if x is None or (not isinstance(x, str) and pd.isna(x)) else str(x)
+        )
+    return salida
+
+
 COLUMNAS_REGISTROS = [
     "id",
     "timestamp",
@@ -441,7 +461,10 @@ def subir_foto(archivo, nombre_archivo: str) -> str:
     return f"https://drive.google.com/file/d/{file_id}/view"
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+# ttl + max_entries acotan cuanta RAM se acumula con las fotos (cada una
+# son varios MB). Streamlit Cloud tiene ~1 GB; sin tope, una sesion larga
+# revisando muchos vouchers podia acercarse al limite.
+@st.cache_data(ttl=600, max_entries=40, show_spinner=False)
 def descargar_imagen_drive(link_ver: str) -> bytes | None:
     """Descarga los BYTES de una foto guardada en Drive, usando la misma
     cuenta de servicio que la subio, para poder mostrarla con st.image().
