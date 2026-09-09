@@ -497,6 +497,41 @@ def subir_foto(archivo, nombre_archivo: str) -> str:
     return f"https://drive.google.com/file/d/{file_id}/view"
 
 
+def mostrar_imagen(data, **kwargs) -> bool:
+    """st.image() protegido. Si la imagen no se puede mostrar (archivo
+    dañado, formato raro), pone un aviso y devuelve False en vez de dejar
+    que el error tumbe la pagina. Un Segmentation fault de Pillow no se
+    puede atrapar desde Python -- para eso esta _imagen_completa(), que
+    filtra los archivos truncados antes de llegar aca."""
+    if not data:
+        return False
+    try:
+        st.image(data, **kwargs)
+        return True
+    except Exception:
+        st.caption("⚠️ La foto no se pudo mostrar (archivo dañado o incompleto).")
+        return False
+
+
+def _imagen_completa(data: bytes | None) -> bool:
+    """True solo si `data` es un JPEG o PNG **completo** (sin decodificar).
+
+    POR QUE: cuando a alguien se le corta la conexion subiendo un voucher,
+    queda un archivo truncado en Drive. Si ese archivo llega a st.image(),
+    Pillow a veces no lanza un error limpio sino que tumba el proceso
+    entero (Segmentation fault). Chequeando la firma del inicio Y el
+    marcador de fin (que un archivo cortado no tiene) evitamos darle
+    basura a Pillow.
+    """
+    if not data or len(data) < 100:
+        return False
+    if data[:3] == b"\xff\xd8\xff":  # JPEG: empieza en SOI
+        return b"\xff\xd9" in data[-16:]  # ...y termina en EOI
+    if data[:8] == b"\x89PNG\r\n\x1a\n":  # PNG: firma
+        return b"IEND" in data[-16:]  # ...y termina en el chunk IEND
+    return False
+
+
 # ttl + max_entries acotan cuanta RAM se acumula con las fotos (cada una
 # son varios MB). Streamlit Cloud tiene ~1 GB; sin tope, una sesion larga
 # revisando muchos vouchers podia acercarse al limite.
@@ -522,9 +557,17 @@ def descargar_imagen_drive(link_ver: str) -> bytes | None:
     file_id = link_ver.split("/d/", 1)[1].split("/", 1)[0]
     try:
         service = _get_drive_service()
-        return service.files().get_media(fileId=file_id, supportsAllDrives=True).execute(num_retries=2)
+        data = (
+            service.files()
+            .get_media(fileId=file_id, supportsAllDrives=True)
+            .execute(num_retries=2)
+        )
     except Exception:
         return None
+    # Si el archivo esta cortado/corrupto, devolvemos None -> la pagina
+    # muestra "no se pudo cargar" en vez de pasarselo a Pillow y arriesgar
+    # un crash.
+    return data if _imagen_completa(data) else None
 
 
 # ---------------------------------------------------------------------

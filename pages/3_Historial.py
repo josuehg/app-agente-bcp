@@ -215,11 +215,12 @@ for posicion, (_, fila) in enumerate(df_local.iterrows()):
                         f"🔍 Ver «{etiqueta}» más grande",
                         key=f"zoom_{fila['id']}_{col}",
                     )
-                    if ver_grande:
-                        st.image(imagen_bytes, width="stretch", caption=etiqueta)
-                    else:
-                        st.image(imagen_bytes, width=ANCHO_FOTO, caption=etiqueta)
+                    sh.mostrar_imagen(
+                        imagen_bytes,
+                        width="stretch" if ver_grande else ANCHO_FOTO,
+                        caption=etiqueta,
+                    )
                 else:
-                    st.caption(f"{etiqueta}: no se pudo cargar.")
+                    st.caption(f"{etiqueta}: no se pudo cargar (archivo incompleto o dañado).")
         else:
             st.caption("Este registro no tiene fotos.")

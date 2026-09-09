@@ -769,11 +769,11 @@ else:
                     grande = st.checkbox(
                         f"🔍 Ver «{etiqueta}» más grande", key=f"zoom_{id_enc}_{campo}"
                     )
-                    st.image(
-                        imagen,
-                        caption=etiqueta,
-                        width="stretch" if grande else 260,
+                    sh.mostrar_imagen(
+                        imagen, caption=etiqueta, width="stretch" if grande else 260
                     )
+                else:
+                    st.caption(f"{etiqueta}: no se pudo cargar.")
 
             estado_actual = fila_encuesta["estado_pago"]
             if estado_actual not in ESTADOS_PAGO_ENCUESTA:
