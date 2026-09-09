@@ -264,8 +264,11 @@ else:
         .sort_values("operaciones", ascending=False)
     )
     ops_persona["prom_por_cierre"] = (
-        ops_persona["operaciones"] / ops_persona["cierres"].replace(0, pd.NA)
-    ).fillna(0)
+        (ops_persona["operaciones"] / ops_persona["cierres"].replace(0, pd.NA))
+        .fillna(0)
+        .round()
+        .astype(int)
+    )
     st.dataframe(
         sh.arrow_safe(
             ops_persona.rename(
