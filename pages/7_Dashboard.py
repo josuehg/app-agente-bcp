@@ -195,6 +195,52 @@ if not cierres_filtrados.empty:
     st.plotly_chart(fig_evol, width="stretch")
 
 # ---------------------------------------------------------------------
+# Fondo CONSOLIDADO por dia: la sumatoria de todos los locales y como
+# va variando dia a dia. Para cada dia se toma el ULTIMO Cierre de cada
+# local ese dia; si un local no cerro ese dia, se arrastra su ultimo
+# cierre anterior (ffill). Asi la linea es el "cuanto dinero hay en
+# total" al cierre de cada dia, no un promedio ni una suma de flujos.
+# ---------------------------------------------------------------------
+st.subheader("📊 Fondo consolidado (todos los locales) por día")
+st.caption(
+    "Suma del fondo total (efectivo + tarjeta) del último Cierre de cada "
+    "local seleccionado, día a día. Si un local no cerró un día, se arrastra "
+    "su cierre anterior."
+)
+
+cierres_sel = df[
+    (df["tipo"] == "Cierre") & (df["local"].isin(locales_sel))
+].sort_values("timestamp")
+
+if cierres_sel.empty:
+    st.caption("Todavía no hay cierres para consolidar.")
+else:
+    ultimo_del_dia = cierres_sel.groupby(["local", "fecha"], sort=False).tail(1)
+    pivote = ultimo_del_dia.pivot(index="fecha", columns="local", values="total").sort_index()
+    # Rango de días: del primer cierre hasta el final del filtro de fechas.
+    dias = pd.date_range(pivote.index.min(), max(pivote.index.max(), hasta)).date
+    pivote = pivote.reindex(dias).ffill()
+    serie = pivote.sum(axis=1).rename_axis("fecha").reset_index(name="fondo_total")
+    serie = serie[(serie["fecha"] >= desde) & (serie["fecha"] <= hasta)]
+    if serie.empty:
+        st.caption("No hay días con datos en el rango seleccionado.")
+    else:
+        fig_consol = px.area(
+            serie,
+            x="fecha",
+            y="fondo_total",
+            labels={"fecha": "Fecha", "fondo_total": "Fondo consolidado (S/)"},
+        )
+        fig_consol.update_traces(hovertemplate="%{x}<br>S/ %{y:,.2f}<extra></extra>")
+        st.plotly_chart(fig_consol, width="stretch")
+        ultimo_valor = serie.iloc[-1]["fondo_total"]
+        primer_valor = serie.iloc[0]["fondo_total"]
+        st.caption(
+            f"En el rango: de S/ {primer_valor:,.2f} a S/ {ultimo_valor:,.2f} "
+            f"(variación S/ {ultimo_valor - primer_valor:+,.2f})."
+        )
+
+# ---------------------------------------------------------------------
 # Cuadre por turno (cortes Apertura -> Cierre)
 #
 # Un turno puede tener VARIOS cortes (cierres parciales: se cierra, se
