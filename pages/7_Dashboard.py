@@ -124,9 +124,18 @@ st.caption(
 # ---------------------------------------------------------------------
 col1, col2, col3 = st.columns(3)
 col1.metric("Registros en el rango", len(df_filtrado))
+
+# Fondo total AHORA = suma del ULTIMO cierre de cada local (no la suma de
+# todos los cierres del rango, que no significa nada). Usa el mismo
+# ultimo_cierre_por_local de las alertas, sin el filtro de fechas, pero
+# respetando el filtro de locales.
+fondo_actual_total = ultimo_cierre_por_local.loc[
+    ultimo_cierre_por_local.index.isin(locales_sel), "total"
+].sum()
 col2.metric(
-    "Fondo total en cierres (efectivo + tarjeta)",
-    f"S/ {df_filtrado.loc[df_filtrado['tipo'] == 'Cierre', 'total'].sum():,.2f}",
+    "Fondo total actual (último cierre de cada local)",
+    f"S/ {fondo_actual_total:,.2f}",
+    help="Suma del total (efectivo + tarjeta) del último Cierre registrado de cada local seleccionado.",
 )
 col3.metric(
     "Operaciones totales",
