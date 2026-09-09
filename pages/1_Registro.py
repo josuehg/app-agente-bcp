@@ -359,6 +359,12 @@ def _dialogo_confirmar_registro():
             st.session_state["confirmar_registro"] = False
             st.session_state["error_secuencia"] = str(error)
             st.rerun()
+        except ValueError as error:
+            # Foto subida incompleta (se corto la conexion). Hay que volver
+            # a adjuntarla, no solo reintentar.
+            st.session_state["confirmar_registro"] = False
+            st.error(str(error))
+            st.stop()
         except Exception as error:
             st.error(
                 "No se pudo guardar: parece que se corto la conexion a "

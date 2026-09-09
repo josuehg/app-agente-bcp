@@ -463,9 +463,18 @@ def subir_foto(archivo, nombre_archivo: str) -> str:
     solo antes de rendirte" -- resuelve solo, sin que el usuario tenga
     que hacer nada, la mayoria de esos cortes momentaneos.
     """
+    contenido = archivo.getvalue()
+    if not _imagen_completa(contenido):
+        # La foto llego cortada (se corto la conexion mientras se subia).
+        # No la mandamos a Drive: un archivo truncado despues rompe el
+        # Historial. Que la persona la vuelva a tomar/subir.
+        raise ValueError(
+            "La foto se subió incompleta (se cortó la conexión). Vuelve a "
+            "adjuntarla y guarda de nuevo."
+        )
     service = _get_drive_service()
     media = MediaIoBaseUpload(
-        io.BytesIO(archivo.getvalue()), mimetype=archivo.type, resumable=False
+        io.BytesIO(contenido), mimetype=archivo.type, resumable=False
     )
     carpeta = st.secrets.get("drive_folder_id")
     metadata = {"name": nombre_archivo}
