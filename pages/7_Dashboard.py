@@ -200,6 +200,53 @@ col3.metric(
 # ---------------------------------------------------------------------
 # Graficos
 # ---------------------------------------------------------------------
+st.subheader("📅 Operaciones por día")
+st.caption(
+    "Número de operaciones registradas en los Cierres, día a día (suma de "
+    "todos los locales seleccionados)."
+)
+
+_cierres_ops = df_filtrado[df_filtrado["tipo"] == "Cierre"].copy()
+_cierres_ops["num_operaciones"] = pd.to_numeric(
+    _cierres_ops["num_operaciones"], errors="coerce"
+).fillna(0)
+
+if _cierres_ops.empty or _cierres_ops["num_operaciones"].sum() == 0:
+    st.caption("No hay operaciones registradas en el rango seleccionado.")
+else:
+    ops_dia = (
+        _cierres_ops.groupby("fecha")["num_operaciones"].sum().rename_axis("fecha").reset_index()
+    ).sort_values("fecha")
+    fig_ops_dia = px.bar(
+        ops_dia,
+        x="fecha",
+        y="num_operaciones",
+        labels={"fecha": "Fecha", "num_operaciones": "N° de operaciones"},
+    )
+    fig_ops_dia.update_traces(hovertemplate="%{x}<br>%{y:,.0f} operaciones<extra></extra>")
+    st.plotly_chart(fig_ops_dia, width="stretch")
+
+    prom_dia = ops_dia["num_operaciones"].mean()
+    mejor = ops_dia.loc[ops_dia["num_operaciones"].idxmax()]
+    st.caption(
+        f"Promedio: **{prom_dia:,.0f}** operaciones/día. "
+        f"Día más alto: **{mejor['fecha']}** con **{int(mejor['num_operaciones']):,}**."
+    )
+
+    with st.expander("Ver por local"):
+        ops_dia_local = (
+            _cierres_ops.groupby(["fecha", "local"])["num_operaciones"].sum().reset_index()
+        ).sort_values("fecha")
+        fig_ops_local = px.bar(
+            ops_dia_local,
+            x="fecha",
+            y="num_operaciones",
+            color="local",
+            barmode="group",
+            labels={"fecha": "Fecha", "num_operaciones": "N° de operaciones", "local": "Local"},
+        )
+        st.plotly_chart(fig_ops_local, width="stretch")
+
 st.subheader("📈 Movimientos por dia de la semana")
 
 dias_es = {
