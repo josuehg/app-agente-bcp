@@ -101,6 +101,19 @@ def _texto_seguro(df: pd.DataFrame, columnas_no_texto: set[str]) -> pd.DataFrame
     return df
 
 
+def _normalizar_nombre(serie: pd.Series) -> pd.Series:
+    """Nombres consistentes: sin espacios de sobra y con la misma
+    capitalizacion, para que 'MAFER', 'Mafer' y ' mafer ' cuenten como
+    una sola persona en los rankings."""
+    return (
+        serie.fillna("")
+        .astype(str)
+        .str.replace(r"\s+", " ", regex=True)
+        .str.strip()
+        .str.title()
+    )
+
+
 def arrow_safe(df: pd.DataFrame) -> pd.DataFrame:
     """Devuelve una copia del DataFrame lista para st.dataframe / st.table.
 
@@ -626,6 +639,8 @@ def get_registros_df() -> pd.DataFrame:
         suma_denominaciones > 0, df["efectivo"]
     ).fillna(0)
     df["total"] = df["efectivo"] + df["tarjeta"].fillna(0)
+
+    df["nombre"] = _normalizar_nombre(df["nombre"])
     return df
 
 
@@ -683,6 +698,7 @@ def get_encuestas_df() -> pd.DataFrame:
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df["nota"] = pd.to_numeric(df["nota"], errors="coerce")
     df["incentivo"] = pd.to_numeric(df["incentivo"], errors="coerce").fillna(0)
+    df["nombre"] = _normalizar_nombre(df["nombre"])
     return df
 
 
