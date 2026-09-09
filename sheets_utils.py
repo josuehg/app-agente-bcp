@@ -615,6 +615,17 @@ def get_registros_df() -> pd.DataFrame:
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     for col in numericas:
         df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # RECALCULAR efectivo y total, no confiar en lo guardado. Asi, si en la
+    # hoja alguien corrige una denominacion o el monto de tarjeta (p. ej.
+    # una Apertura vieja donde no se puso la tarjeta), el cuadre se ajusta
+    # solo. `efectivo` = suma de las denominaciones; si un registro viejo
+    # no tiene desglose, se respeta el efectivo que ya tenia guardado.
+    suma_denominaciones = df[columnas_denom].sum(axis=1, numeric_only=True)
+    df["efectivo"] = suma_denominaciones.where(
+        suma_denominaciones > 0, df["efectivo"]
+    ).fillna(0)
+    df["total"] = df["efectivo"] + df["tarjeta"].fillna(0)
     return df
 
 
