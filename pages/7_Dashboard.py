@@ -458,6 +458,59 @@ else:
     )
     st.plotly_chart(fig_pers, width="stretch")
 
+    # --- Detalle por persona: ver de dónde salió el descuadre ---------
+    # Sirve para distinguir un descuadre real de un error al registrar
+    # (p. ej. escribir 100 donde iba 1000 en una denominación).
+    persona_sel = st.selectbox(
+        "Ver el detalle de una persona (para revisar si fue error al registrar)",
+        ["—"] + acumulado["nombre"].tolist(),
+    )
+    if persona_sel != "—":
+        cortes_persona = cortes[cortes["nombre"] == persona_sel].copy()
+        st.markdown(f"**Cortes de {persona_sel} en el rango:**")
+        st.dataframe(
+            sh.arrow_safe(
+                cortes_persona.sort_values(["fecha", "local", "turno", "corte"])[
+                    ["fecha", "local", "turno", "corte", "nombre_cierre",
+                     "apertura", "cierre", "diferencia_fmt", "estado"]
+                ].rename(
+                    columns={
+                        "fecha": "Fecha", "local": "Local", "turno": "Turno",
+                        "corte": "Corte", "nombre_cierre": "Cerró",
+                        "apertura": "Apertura (S/)", "cierre": "Cierre (S/)",
+                        "diferencia_fmt": "Diferencia (S/)", "estado": "Estado",
+                    }
+                )
+            ),
+            width="stretch",
+            hide_index=True,
+        )
+
+        # Desglose billete por billete de las Aperturas y Cierres de esos turnos.
+        llaves_turno = cortes_persona[["local", "fecha", "turno"]].drop_duplicates()
+        registros_persona = df_filtrado.merge(
+            llaves_turno, on=["local", "fecha", "turno"]
+        ).sort_values("timestamp")
+        if not registros_persona.empty:
+            st.markdown(
+                "**Desglose de efectivo de esos turnos** — revisa si algún monto "
+                "se ve fuera de lugar (ej: 100 donde debía ir 1000):"
+            )
+            cols_denom = [col for _, col, _ in sh.DENOMINACIONES]
+            detalle = registros_persona[
+                ["fecha", "local", "turno", "tipo", "nombre", *cols_denom,
+                 "efectivo", "tarjeta", "total"]
+            ].rename(
+                columns={
+                    "fecha": "Fecha", "local": "Local", "turno": "Turno",
+                    "tipo": "Tipo", "nombre": "Registró",
+                    **{col: etq.replace("Monto en ", "").replace("billetes de ", "")
+                       .replace("monedas de ", "") for etq, col, _ in sh.DENOMINACIONES},
+                    "efectivo": "Efectivo", "tarjeta": "Tarjeta", "total": "Total",
+                }
+            )
+            st.dataframe(sh.arrow_safe(detalle), width="stretch", hide_index=True)
+
 # ---------------------------------------------------------------------
 # Tabla consolidada
 # ---------------------------------------------------------------------

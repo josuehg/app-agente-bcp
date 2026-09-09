@@ -608,7 +608,8 @@ def get_registros_df() -> pd.DataFrame:
     df = pd.DataFrame(registros, columns=COLUMNAS_REGISTROS)
     if df.empty:
         return df
-    numericas = {"efectivo", "tarjeta", "total", "num_operaciones"}
+    columnas_denom = [col for _, col, _ in DENOMINACIONES]
+    numericas = {"efectivo", "tarjeta", "total", "num_operaciones", *columnas_denom}
     df = _texto_seguro(df, numericas | {"fecha", "timestamp"})
     df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce").dt.date
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
