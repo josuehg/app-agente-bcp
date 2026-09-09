@@ -464,12 +464,12 @@ def subir_foto(archivo, nombre_archivo: str) -> str:
     que hacer nada, la mayoria de esos cortes momentaneos.
     """
     contenido = archivo.getvalue()
-    if not _imagen_completa(contenido):
-        # La foto llego cortada (se corto la conexion mientras se subia).
-        # No la mandamos a Drive: un archivo truncado despues rompe el
-        # Historial. Que la persona la vuelva a tomar/subir.
+    if not _imagen_completa(contenido) or not _imagen_decodificable(contenido):
+        # La foto llego cortada o dañada (se corto la conexion, o el
+        # archivo no es una imagen valida). No la mandamos a Drive: un
+        # archivo asi despues rompe el Historial. Que la vuelvan a subir.
         raise ValueError(
-            "La foto se subió incompleta (se cortó la conexión). Vuelve a "
+            "La foto no se pudo leer (llegó incompleta o dañada). Vuelve a "
             "adjuntarla y guarda de nuevo."
         )
     service = _get_drive_service()
@@ -523,14 +523,14 @@ def mostrar_imagen(data, **kwargs) -> bool:
 
 
 def _imagen_completa(data: bytes | None) -> bool:
-    """True solo si `data` es un JPEG o PNG **completo** (sin decodificar).
+    """True solo si `data` parece un JPEG o PNG **completo** (sin decodificar).
 
     POR QUE: cuando a alguien se le corta la conexion subiendo un voucher,
     queda un archivo truncado en Drive. Si ese archivo llega a st.image(),
     Pillow a veces no lanza un error limpio sino que tumba el proceso
     entero (Segmentation fault). Chequeando la firma del inicio Y el
-    marcador de fin (que un archivo cortado no tiene) evitamos darle
-    basura a Pillow.
+    marcador de fin (que un archivo cortado no tiene) descartamos lo mas
+    obvio antes de que Pillow lo toque.
     """
     if not data or len(data) < 100:
         return False
@@ -539,6 +539,24 @@ def _imagen_completa(data: bytes | None) -> bool:
     if data[:8] == b"\x89PNG\r\n\x1a\n":  # PNG: firma
         return b"IEND" in data[-16:]  # ...y termina en el chunk IEND
     return False
+
+
+def _imagen_decodificable(data: bytes) -> bool:
+    """Segunda barrera: que Pillow pueda abrir y verificar la imagen.
+
+    verify() revisa la integridad SIN hacer el decode completo, asi que
+    atrapa muchos archivos corruptos (datos internos danados) con menos
+    riesgo que un st.image() directo. No es 100% a prueba de un segfault
+    de libjpeg, pero cierra bastante la ventana.
+    """
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as img:
+            img.verify()
+        return True
+    except Exception:
+        return False
 
 
 # ttl + max_entries acotan cuanta RAM se acumula con las fotos (cada una
@@ -573,10 +591,13 @@ def descargar_imagen_drive(link_ver: str) -> bytes | None:
         )
     except Exception:
         return None
-    # Si el archivo esta cortado/corrupto, devolvemos None -> la pagina
-    # muestra "no se pudo cargar" en vez de pasarselo a Pillow y arriesgar
-    # un crash.
-    return data if _imagen_completa(data) else None
+    # Doble barrera antes de que la foto llegue a st.image():
+    # 1) estructura completa (rechaza truncados sin tocar Pillow),
+    # 2) Pillow puede abrirla y verificarla.
+    # Si no pasa las dos, devolvemos None -> "no se pudo cargar".
+    if not _imagen_completa(data) or not _imagen_decodificable(data):
+        return None
+    return data
 
 
 # ---------------------------------------------------------------------
