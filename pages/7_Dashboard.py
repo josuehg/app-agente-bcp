@@ -241,6 +241,96 @@ else:
         )
 
 # ---------------------------------------------------------------------
+# Continuidad entre días: el ULTIMO Cierre de un día vs la PRIMERA
+# Apertura del siguiente día con actividad, por local. Deberían coincidir
+# (el fondo se queda guardado). Si no, alguien movió la caja cuando el
+# local estaba cerrado, o hubo un error al registrar -> posible faltante.
+# Lo de adentro del día (cortes parciales) se ve en "Cuadre por turno".
+# ---------------------------------------------------------------------
+st.subheader("🔗 Continuidad entre días (cierre vs apertura siguiente)")
+st.caption(
+    "El fondo se queda guardado de un día para otro. Si el último Cierre de "
+    "un día no coincide con la primera Apertura del día siguiente, alguien "
+    "movió la caja cerrado el local (o hubo un error al registrar)."
+)
+
+
+def _semaforo_continuidad(diferencia: float) -> str:
+    # Mas estricto que el cuadre por turno: de un dia al otro el local
+    # esta cerrado, no hay operaciones que muevan el fondo -- cualquier
+    # diferencia real es sospechosa.
+    dif_abs = abs(diferencia)
+    if dif_abs <= 1.0:
+        return "✅ Coincide"
+    if dif_abs <= 10.0:
+        return "🟡 Revisar"
+    return "🔴 Diferencia grande"
+
+
+registros_sel = df[df["local"].isin(locales_sel)].sort_values("timestamp")
+filas_continuidad = []
+for nombre_local, grupo_local in registros_sel.groupby("local", sort=True):
+    ult_cierre_dia = (
+        grupo_local[grupo_local["tipo"] == "Cierre"]
+        .groupby("fecha")
+        .tail(1)
+        .set_index("fecha")["total"]
+    )
+    prim_apertura_dia = (
+        grupo_local[grupo_local["tipo"] == "Apertura"]
+        .groupby("fecha")
+        .head(1)
+        .set_index("fecha")["total"]
+    )
+    dias_con_apertura = sorted(d for d in prim_apertura_dia.index if pd.notna(d))
+    for dia_cierre in sorted(d for d in ult_cierre_dia.index if pd.notna(d)):
+        posteriores = [d for d in dias_con_apertura if d > dia_cierre]
+        if not posteriores:
+            continue
+        dia_apertura = posteriores[0]
+        cierre = ult_cierre_dia[dia_cierre]
+        apertura = prim_apertura_dia[dia_apertura]
+        if pd.isna(cierre) or pd.isna(apertura):
+            continue
+        diferencia = float(apertura) - float(cierre)
+        filas_continuidad.append(
+            {
+                "_fecha": dia_cierre,
+                "Local": nombre_local,
+                "Cierre del día": dia_cierre,
+                "Cierre (S/)": round(float(cierre), 2),
+                "Abre el día": dia_apertura,
+                "Apertura (S/)": round(float(apertura), 2),
+                "Diferencia (S/)": f"{diferencia:+,.2f}",
+                "Estado": _semaforo_continuidad(diferencia),
+            }
+        )
+
+cont_df = pd.DataFrame(filas_continuidad)
+if cont_df.empty:
+    st.caption("Todavía no hay días consecutivos con Cierre y Apertura para comparar.")
+else:
+    cont_df = cont_df[
+        (cont_df["_fecha"] >= desde) & (cont_df["_fecha"] <= hasta)
+    ].sort_values("_fecha", ascending=False)
+    if cont_df.empty:
+        st.caption("No hay comparaciones en el rango de fechas seleccionado.")
+    else:
+        con_diferencia = int((cont_df["Estado"] == "🔴 Diferencia grande").sum())
+        if con_diferencia:
+            st.error(
+                f"⚠️ {con_diferencia} caso(s) donde el fondo cambió entre el "
+                f"cierre de un día y la apertura del siguiente."
+            )
+        else:
+            st.success("Todos los cierres coinciden con la apertura del día siguiente. 👍")
+        st.dataframe(
+            sh.arrow_safe(cont_df.drop(columns=["_fecha"])),
+            width="stretch",
+            hide_index=True,
+        )
+
+# ---------------------------------------------------------------------
 # Cuadre por turno (cortes Apertura -> Cierre)
 #
 # Un turno puede tener VARIOS cortes (cierres parciales: se cierra, se
