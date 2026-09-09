@@ -247,6 +247,47 @@ else:
         )
         st.plotly_chart(fig_ops_local, width="stretch")
 
+st.subheader("👥 Operaciones por persona")
+st.caption(
+    "Operaciones atribuidas a quien registró el Cierre. En el rango de fechas "
+    "filtrado."
+)
+
+if _cierres_ops.empty or _cierres_ops["num_operaciones"].sum() == 0:
+    st.caption("No hay operaciones registradas en el rango seleccionado.")
+else:
+    ops_persona = (
+        _cierres_ops[_cierres_ops["nombre"].astype(str).str.strip() != ""]
+        .groupby("nombre")["num_operaciones"]
+        .agg(operaciones="sum", cierres="count")
+        .reset_index()
+        .sort_values("operaciones", ascending=False)
+    )
+    ops_persona["prom_por_cierre"] = (
+        ops_persona["operaciones"] / ops_persona["cierres"].replace(0, pd.NA)
+    ).fillna(0)
+    st.dataframe(
+        sh.arrow_safe(
+            ops_persona.rename(
+                columns={
+                    "nombre": "Persona",
+                    "operaciones": "Operaciones",
+                    "cierres": "Cierres",
+                    "prom_por_cierre": "Prom. por cierre",
+                }
+            )
+        ),
+        width="stretch",
+        hide_index=True,
+    )
+    fig_ops_persona = px.bar(
+        ops_persona,
+        x="nombre",
+        y="operaciones",
+        labels={"nombre": "Persona", "operaciones": "N° de operaciones"},
+    )
+    st.plotly_chart(fig_ops_persona, width="stretch")
+
 st.subheader("📈 Movimientos por dia de la semana")
 
 dias_es = {
