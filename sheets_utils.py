@@ -464,12 +464,11 @@ def subir_foto(archivo, nombre_archivo: str) -> str:
     que hacer nada, la mayoria de esos cortes momentaneos.
     """
     contenido = archivo.getvalue()
-    if not _imagen_completa(contenido) or not _imagen_decodificable(contenido):
-        # La foto llego cortada o dañada (se corto la conexion, o el
-        # archivo no es una imagen valida). No la mandamos a Drive: un
-        # archivo asi despues rompe el Historial. Que la vuelvan a subir.
+    if not _imagen_completa(contenido):
+        # La foto llego cortada (se corto la conexion mientras se subia).
+        # No la mandamos a Drive: un archivo truncado despues no se ve.
         raise ValueError(
-            "La foto no se pudo leer (llegó incompleta o dañada). Vuelve a "
+            "La foto se subió incompleta (se cortó la conexión). Vuelve a "
             "adjuntarla y guarda de nuevo."
         )
     service = _get_drive_service()
@@ -506,57 +505,56 @@ def subir_foto(archivo, nombre_archivo: str) -> str:
     return f"https://drive.google.com/file/d/{file_id}/view"
 
 
-def mostrar_imagen(data, **kwargs) -> bool:
-    """st.image() protegido. Si la imagen no se puede mostrar (archivo
-    dañado, formato raro), pone un aviso y devuelve False en vez de dejar
-    que el error tumbe la pagina. Un Segmentation fault de Pillow no se
-    puede atrapar desde Python -- para eso esta _imagen_completa(), que
-    filtra los archivos truncados antes de llegar aca."""
-    if not data:
-        return False
-    try:
-        st.image(data, **kwargs)
-        return True
-    except Exception:
-        st.caption("⚠️ La foto no se pudo mostrar (archivo dañado o incompleto).")
-        return False
+def _tipo_imagen(data: bytes | None) -> str | None:
+    """Devuelve 'jpeg' / 'png' segun la firma del archivo, o None si no
+    parece una imagen completa. NO usa Pillow."""
+    if not data or len(data) < 100:
+        return None
+    if data[:3] == b"\xff\xd8\xff" and b"\xff\xd9" in data[-16:]:
+        return "jpeg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n" and b"IEND" in data[-16:]:
+        return "png"
+    return None
 
 
 def _imagen_completa(data: bytes | None) -> bool:
-    """True solo si `data` parece un JPEG o PNG **completo** (sin decodificar).
+    """True si `data` parece un JPEG o PNG completo (firma + marcador de
+    fin), sin decodificar. Rechaza archivos truncados (subida cortada)."""
+    return _tipo_imagen(data) is not None
 
-    POR QUE: cuando a alguien se le corta la conexion subiendo un voucher,
-    queda un archivo truncado en Drive. Si ese archivo llega a st.image(),
-    Pillow a veces no lanza un error limpio sino que tumba el proceso
-    entero (Segmentation fault). Chequeando la firma del inicio Y el
-    marcador de fin (que un archivo cortado no tiene) descartamos lo mas
-    obvio antes de que Pillow lo toque.
+
+def mostrar_imagen(data, ancho_px: int | None = None, caption: str | None = None) -> bool:
+    """Muestra una foto SIN pasar por Pillow.
+
+    POR QUE: `st.image()` siempre decodifica con Pillow, y en este stack
+    (Streamlit Cloud) una foto de voucher corrupta hace que Pillow tumbe
+    el proceso entero (Segmentation fault) -- ha pasado varias veces.
+    Aca mandamos la imagen como data-URI y la decodifica EL NAVEGADOR: si
+    esta dañada se ve rota en pantalla, pero el servidor ni se entera.
+
+    `data` puede ser bytes o un UploadedFile de st.file_uploader.
     """
-    if not data or len(data) < 100:
+    if data is None:
         return False
-    if data[:3] == b"\xff\xd8\xff":  # JPEG: empieza en SOI
-        return b"\xff\xd9" in data[-16:]  # ...y termina en EOI
-    if data[:8] == b"\x89PNG\r\n\x1a\n":  # PNG: firma
-        return b"IEND" in data[-16:]  # ...y termina en el chunk IEND
-    return False
+    if hasattr(data, "getvalue"):  # UploadedFile
+        data = data.getvalue()
 
-
-def _imagen_decodificable(data: bytes) -> bool:
-    """Segunda barrera: que Pillow pueda abrir y verificar la imagen.
-
-    verify() revisa la integridad SIN hacer el decode completo, asi que
-    atrapa muchos archivos corruptos (datos internos danados) con menos
-    riesgo que un st.image() directo. No es 100% a prueba de un segfault
-    de libjpeg, pero cierra bastante la ventana.
-    """
-    try:
-        from PIL import Image
-
-        with Image.open(io.BytesIO(data)) as img:
-            img.verify()
-        return True
-    except Exception:
+    tipo = _tipo_imagen(data)
+    if tipo is None:
+        st.caption("⚠️ La foto no se pudo cargar (archivo incompleto o dañado).")
         return False
+
+    import base64
+
+    b64 = base64.b64encode(data).decode("ascii")
+    estilo = "max-width:100%;height:auto;border-radius:6px"
+    if ancho_px:
+        estilo = f"width:{int(ancho_px)}px;max-width:100%;height:auto;border-radius:6px"
+    html = f'<img src="data:image/{tipo};base64,{b64}" style="{estilo}">'
+    if caption:
+        html += f'<div style="font-size:0.8em;color:#667;margin-top:2px">{caption}</div>'
+    st.markdown(html, unsafe_allow_html=True)
+    return True
 
 
 # ttl + max_entries acotan cuanta RAM se acumula con las fotos (cada una
@@ -591,13 +589,9 @@ def descargar_imagen_drive(link_ver: str) -> bytes | None:
         )
     except Exception:
         return None
-    # Doble barrera antes de que la foto llegue a st.image():
-    # 1) estructura completa (rechaza truncados sin tocar Pillow),
-    # 2) Pillow puede abrirla y verificarla.
-    # Si no pasa las dos, devolvemos None -> "no se pudo cargar".
-    if not _imagen_completa(data) or not _imagen_decodificable(data):
-        return None
-    return data
+    # Rechazamos archivos truncados/corruptos (firma o marcador de fin
+    # ausente). El decode real lo hace el navegador (ver mostrar_imagen).
+    return data if _imagen_completa(data) else None
 
 
 # ---------------------------------------------------------------------

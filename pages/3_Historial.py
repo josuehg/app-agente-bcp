@@ -217,7 +217,7 @@ for posicion, (_, fila) in enumerate(df_local.iterrows()):
                     )
                     sh.mostrar_imagen(
                         imagen_bytes,
-                        width="stretch" if ver_grande else ANCHO_FOTO,
+                        ancho_px=None if ver_grande else ANCHO_FOTO,
                         caption=etiqueta,
                     )
                 else:

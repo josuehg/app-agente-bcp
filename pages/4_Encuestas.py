@@ -99,8 +99,10 @@ def _dialogo_confirmar_encuesta():
 """
     )
     col1, col2 = st.columns(2)
-    col1.image(captura_correo, caption="Captura del correo", width=140)
-    col2.image(captura_mensaje_exito, caption="Captura del mensaje de éxito", width=140)
+    with col1:
+        sh.mostrar_imagen(captura_correo, ancho_px=140, caption="Captura del correo")
+    with col2:
+        sh.mostrar_imagen(captura_mensaje_exito, ancho_px=140, caption="Captura del mensaje de éxito")
 
     st.divider()
     col_confirmar, col_cancelar = st.columns(2)

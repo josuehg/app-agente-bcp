@@ -770,7 +770,7 @@ else:
                         f"🔍 Ver «{etiqueta}» más grande", key=f"zoom_{id_enc}_{campo}"
                     )
                     sh.mostrar_imagen(
-                        imagen, caption=etiqueta, width="stretch" if grande else 260
+                        imagen, ancho_px=None if grande else 260, caption=etiqueta
                     )
                 else:
                     st.caption(f"{etiqueta}: no se pudo cargar.")

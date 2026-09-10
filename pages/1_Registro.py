@@ -287,7 +287,8 @@ def _dialogo_confirmar_registro():
         st.write("**Fotos adjuntas:**")
         columnas_fotos = st.columns(len(fotos_adjuntas))
         for columna, (etiqueta, archivo) in zip(columnas_fotos, fotos_adjuntas):
-            columna.image(archivo, caption=etiqueta, width=120)
+            with columna:
+                sh.mostrar_imagen(archivo, ancho_px=120, caption=etiqueta)
 
     st.divider()
     col_confirmar, col_cancelar = st.columns(2)
