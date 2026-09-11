@@ -137,838 +137,855 @@ def _comparar_par(row_izq, row_der, label_izq="Apertura", label_der="Cierre"):
         )
 
 # ---------------------------------------------------------------------
-# Alertas de fondo bajo (usa el ULTIMO cierre de cada local, sin importar
-# el filtro de fecha, porque queremos saber la situacion HOY)
-#
-# IMPORTANTE: el "fondo" del agente rota entre efectivo y tarjeta segun
-# las operaciones del dia (si entra mucho efectivo, la tarjeta baja, y
-# viceversa). Por eso la alerta compara el TOTAL (efectivo + tarjeta),
-# no solo el efectivo -- comparar solo efectivo dispararia alertas
-# falsas cuando el fondo simplemente se movio hacia el lado tarjeta.
+# Pestañas: el dashboard tenia todo en una sola pagina larga (12
+# secciones seguidas) y se volvio dificil de navegar. Se agrupa en
+# pestañas por tipo de pregunta que responde, sin tocar la logica de
+# cada seccion -- el orden interno del codigo se mantiene igual (varias
+# secciones reusan variables calculadas por la de arriba, por ejemplo
+# "Cuadre por turno" calcula `cortes` y "Acumulado por persona" lo usa).
 # ---------------------------------------------------------------------
-st.subheader("🚨 Alertas de fondo")
-
-cierres = df[df["tipo"] == "Cierre"].sort_values("timestamp")
-ultimo_cierre_por_local = cierres.groupby("local").tail(1).set_index("local")
-
-alertas = []
-for _, fila in config_df.iterrows():
-    local = fila["local"]
-    fondo_minimo = fila["fondo_minimo"]
-    if local in ultimo_cierre_por_local.index:
-        fondo_actual = ultimo_cierre_por_local.loc[local, "total"]
-        if pd.notna(fondo_actual) and fondo_actual < fondo_minimo:
-            alertas.append((local, fondo_actual, fondo_minimo))
-
-if alertas:
-    for local, fondo_actual, fondo_minimo in alertas:
-        st.error(
-            f"**{local}**: fondo total en S/ {fondo_actual:,.2f} "
-            f"(minimo configurado: S/ {fondo_minimo:,.2f})"
-        )
-else:
-    st.success("Todos los locales estan por encima de su fondo minimo. 👍")
-
-st.caption(
-    "El fondo minimo de cada local se edita directamente en la hoja "
-    "'Config' del Google Sheet, sin tocar codigo."
+tab_resumen, tab_cuadre, tab_operaciones, tab_incentivos, tab_registros = st.tabs(
+    ["🏠 Resumen", "🔍 Cuadre", "📈 Operaciones", "⭐ Incentivos", "🗂️ Registros"]
 )
 
-# ---------------------------------------------------------------------
-# KPIs rapidos
-# ---------------------------------------------------------------------
-col1, col2, col3 = st.columns(3)
-col1.metric("Registros en el rango", len(df_filtrado))
+with tab_resumen:
+    # -------------------------------------------------------------
+    # Alertas de fondo bajo (usa el ULTIMO cierre de cada local, sin
+    # importar el filtro de fecha, porque queremos saber la situacion HOY)
+    #
+    # IMPORTANTE: el "fondo" del agente rota entre efectivo y tarjeta segun
+    # las operaciones del dia (si entra mucho efectivo, la tarjeta baja, y
+    # viceversa). Por eso la alerta compara el TOTAL (efectivo + tarjeta),
+    # no solo el efectivo -- comparar solo efectivo dispararia alertas
+    # falsas cuando el fondo simplemente se movio hacia el lado tarjeta.
+    # -------------------------------------------------------------
+    st.subheader("🚨 Alertas de fondo")
 
-# Fondo total AHORA = suma del ULTIMO cierre de cada local (no la suma de
-# todos los cierres del rango, que no significa nada). Usa el mismo
-# ultimo_cierre_por_local de las alertas, sin el filtro de fechas, pero
-# respetando el filtro de locales.
-fondo_actual_total = ultimo_cierre_por_local.loc[
-    ultimo_cierre_por_local.index.isin(locales_sel), "total"
-].sum()
-col2.metric(
-    "Fondo total actual (último cierre de cada local)",
-    f"S/ {fondo_actual_total:,.2f}",
-    help="Suma del total (efectivo + tarjeta) del último Cierre registrado de cada local seleccionado.",
-)
-col3.metric(
-    "Operaciones totales",
-    int(df_filtrado["num_operaciones"].fillna(0).sum()),
-)
+    cierres = df[df["tipo"] == "Cierre"].sort_values("timestamp")
+    ultimo_cierre_por_local = cierres.groupby("local").tail(1).set_index("local")
 
-# ---------------------------------------------------------------------
-# Graficos
-# ---------------------------------------------------------------------
-st.subheader("📅 Operaciones por día")
-st.caption(
-    "Número de operaciones registradas en los Cierres, día a día (suma de "
-    "todos los locales seleccionados)."
-)
+    alertas = []
+    for _, fila in config_df.iterrows():
+        local = fila["local"]
+        fondo_minimo = fila["fondo_minimo"]
+        if local in ultimo_cierre_por_local.index:
+            fondo_actual = ultimo_cierre_por_local.loc[local, "total"]
+            if pd.notna(fondo_actual) and fondo_actual < fondo_minimo:
+                alertas.append((local, fondo_actual, fondo_minimo))
 
-_cierres_ops = df_filtrado[df_filtrado["tipo"] == "Cierre"].copy()
-_cierres_ops["num_operaciones"] = pd.to_numeric(
-    _cierres_ops["num_operaciones"], errors="coerce"
-).fillna(0)
+    if alertas:
+        for local, fondo_actual, fondo_minimo in alertas:
+            st.error(
+                f"**{local}**: fondo total en S/ {fondo_actual:,.2f} "
+                f"(minimo configurado: S/ {fondo_minimo:,.2f})"
+            )
+    else:
+        st.success("Todos los locales estan por encima de su fondo minimo. 👍")
 
-if _cierres_ops.empty or _cierres_ops["num_operaciones"].sum() == 0:
-    st.caption("No hay operaciones registradas en el rango seleccionado.")
-else:
-    ops_dia = (
-        _cierres_ops.groupby("fecha")["num_operaciones"].sum().rename_axis("fecha").reset_index()
-    ).sort_values("fecha")
-    fig_ops_dia = px.bar(
-        ops_dia,
-        x="fecha",
-        y="num_operaciones",
-        labels={"fecha": "Fecha", "num_operaciones": "N° de operaciones"},
-    )
-    fig_ops_dia.update_traces(hovertemplate="%{x}<br>%{y:,.0f} operaciones<extra></extra>")
-    st.plotly_chart(fig_ops_dia, width="stretch")
-
-    prom_dia = ops_dia["num_operaciones"].mean()
-    mejor = ops_dia.loc[ops_dia["num_operaciones"].idxmax()]
     st.caption(
-        f"Promedio: **{prom_dia:,.0f}** operaciones/día. "
-        f"Día más alto: **{mejor['fecha']}** con **{int(mejor['num_operaciones']):,}**."
+        "El fondo minimo de cada local se edita directamente en la hoja "
+        "'Config' del Google Sheet, sin tocar codigo."
     )
 
-    with st.expander("Ver por local"):
-        ops_dia_local = (
-            _cierres_ops.groupby(["fecha", "local"])["num_operaciones"].sum().reset_index()
+    # -------------------------------------------------------------
+    # KPIs rapidos
+    # -------------------------------------------------------------
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Registros en el rango", len(df_filtrado))
+
+    # Fondo total AHORA = suma del ULTIMO cierre de cada local (no la suma de
+    # todos los cierres del rango, que no significa nada). Usa el mismo
+    # ultimo_cierre_por_local de las alertas, sin el filtro de fechas, pero
+    # respetando el filtro de locales.
+    fondo_actual_total = ultimo_cierre_por_local.loc[
+        ultimo_cierre_por_local.index.isin(locales_sel), "total"
+    ].sum()
+    col2.metric(
+        "Fondo total actual (último cierre de cada local)",
+        f"S/ {fondo_actual_total:,.2f}",
+        help="Suma del total (efectivo + tarjeta) del último Cierre registrado de cada local seleccionado.",
+    )
+    col3.metric(
+        "Operaciones totales",
+        int(df_filtrado["num_operaciones"].fillna(0).sum()),
+    )
+
+with tab_operaciones:
+    # -------------------------------------------------------------
+    # Graficos
+    # -------------------------------------------------------------
+    st.subheader("📅 Operaciones por día")
+    st.caption(
+        "Número de operaciones registradas en los Cierres, día a día (suma de "
+        "todos los locales seleccionados)."
+    )
+
+    _cierres_ops = df_filtrado[df_filtrado["tipo"] == "Cierre"].copy()
+    _cierres_ops["num_operaciones"] = pd.to_numeric(
+        _cierres_ops["num_operaciones"], errors="coerce"
+    ).fillna(0)
+
+    if _cierres_ops.empty or _cierres_ops["num_operaciones"].sum() == 0:
+        st.caption("No hay operaciones registradas en el rango seleccionado.")
+    else:
+        ops_dia = (
+            _cierres_ops.groupby("fecha")["num_operaciones"].sum().rename_axis("fecha").reset_index()
         ).sort_values("fecha")
-        fig_ops_local = px.bar(
-            ops_dia_local,
+        fig_ops_dia = px.bar(
+            ops_dia,
             x="fecha",
             y="num_operaciones",
-            color="local",
-            barmode="group",
-            labels={"fecha": "Fecha", "num_operaciones": "N° de operaciones", "local": "Local"},
+            labels={"fecha": "Fecha", "num_operaciones": "N° de operaciones"},
         )
-        st.plotly_chart(fig_ops_local, width="stretch")
+        fig_ops_dia.update_traces(hovertemplate="%{x}<br>%{y:,.0f} operaciones<extra></extra>")
+        st.plotly_chart(fig_ops_dia, width="stretch")
 
-st.subheader("👥 Operaciones por persona")
-st.caption(
-    "Operaciones atribuidas a quien registró el Cierre. En el rango de fechas "
-    "filtrado."
-)
-
-if _cierres_ops.empty or _cierres_ops["num_operaciones"].sum() == 0:
-    st.caption("No hay operaciones registradas en el rango seleccionado.")
-else:
-    ops_persona = (
-        _cierres_ops[_cierres_ops["nombre"].astype(str).str.strip() != ""]
-        .groupby("nombre")["num_operaciones"]
-        .agg(operaciones="sum", cierres="count")
-        .reset_index()
-        .sort_values("operaciones", ascending=False)
-    )
-    ops_persona["prom_por_cierre"] = (
-        (ops_persona["operaciones"] / ops_persona["cierres"].replace(0, pd.NA))
-        .fillna(0)
-        .round()
-        .astype(int)
-    )
-    st.dataframe(
-        sh.arrow_safe(
-            ops_persona.rename(
-                columns={
-                    "nombre": "Persona",
-                    "operaciones": "Operaciones",
-                    "cierres": "Cierres",
-                    "prom_por_cierre": "Prom. por cierre",
-                }
-            )
-        ),
-        width="stretch",
-        hide_index=True,
-    )
-    fig_ops_persona = px.bar(
-        ops_persona,
-        x="nombre",
-        y="operaciones",
-        labels={"nombre": "Persona", "operaciones": "N° de operaciones"},
-    )
-    st.plotly_chart(fig_ops_persona, width="stretch")
-
-st.subheader("📈 Movimientos por dia de la semana")
-
-dias_es = {
-    "Monday": "Lunes",
-    "Tuesday": "Martes",
-    "Wednesday": "Miercoles",
-    "Thursday": "Jueves",
-    "Friday": "Viernes",
-    "Saturday": "Sabado",
-    "Sunday": "Domingo",
-}
-orden_dias = ["Lunes", "Martes", "Miercoles", "Jueves", "Viernes", "Sabado", "Domingo"]
-
-cierres_filtrados = df_filtrado[df_filtrado["tipo"] == "Cierre"].copy()
-if not cierres_filtrados.empty:
-    cierres_filtrados["dia_semana"] = pd.to_datetime(cierres_filtrados["fecha"]).dt.day_name().map(dias_es)
-    resumen_dias = (
-        cierres_filtrados.groupby("dia_semana")["num_operaciones"]
-        .sum()
-        .reindex(orden_dias)
-        .fillna(0)
-        .reset_index()
-    )
-    fig_dias = px.bar(
-        resumen_dias,
-        x="dia_semana",
-        y="num_operaciones",
-        labels={"dia_semana": "Dia", "num_operaciones": "N° de operaciones"},
-    )
-    st.plotly_chart(fig_dias, width="stretch")
-else:
-    st.caption("No hay cierres en el rango seleccionado para graficar.")
-
-st.subheader("📉 Evolucion del fondo total (efectivo + tarjeta) por local")
-st.caption(
-    "Se grafica el TOTAL, no solo el efectivo, porque el fondo rota entre "
-    "efectivo y tarjeta segun las operaciones del dia."
-)
-if not cierres_filtrados.empty:
-    fig_evol = px.line(
-        cierres_filtrados.sort_values("fecha"),
-        x="fecha",
-        y="total",
-        color="local",
-        markers=True,
-        labels={"fecha": "Fecha", "total": "Fondo total al cierre (S/)"},
-    )
-    st.plotly_chart(fig_evol, width="stretch")
-
-# ---------------------------------------------------------------------
-# Fondo CONSOLIDADO por dia: la sumatoria de todos los locales y como
-# va variando dia a dia. Para cada dia se toma el ULTIMO Cierre de cada
-# local ese dia; si un local no cerro ese dia, se arrastra su ultimo
-# cierre anterior (ffill). Asi la linea es el "cuanto dinero hay en
-# total" al cierre de cada dia, no un promedio ni una suma de flujos.
-# ---------------------------------------------------------------------
-st.subheader("📊 Fondo consolidado (todos los locales) por día")
-st.caption(
-    "Suma del fondo total (efectivo + tarjeta) del último Cierre de cada "
-    "local seleccionado, día a día. Si un local no cerró un día, se arrastra "
-    "su cierre anterior."
-)
-
-cierres_sel = df[
-    (df["tipo"] == "Cierre") & (df["local"].isin(locales_sel))
-].sort_values("timestamp")
-
-if cierres_sel.empty:
-    st.caption("Todavía no hay cierres para consolidar.")
-else:
-    ultimo_del_dia = cierres_sel.groupby(["local", "fecha"], sort=False).tail(1)
-    pivote = ultimo_del_dia.pivot(index="fecha", columns="local", values="total").sort_index()
-    # Rango de días: del primer cierre hasta el final del filtro de fechas.
-    dias = pd.date_range(pivote.index.min(), max(pivote.index.max(), hasta)).date
-    pivote = pivote.reindex(dias).ffill()
-    serie = pivote.sum(axis=1).rename_axis("fecha").reset_index(name="fondo_total")
-    serie = serie[(serie["fecha"] >= desde) & (serie["fecha"] <= hasta)]
-    if serie.empty:
-        st.caption("No hay días con datos en el rango seleccionado.")
-    else:
-        fig_consol = px.area(
-            serie,
-            x="fecha",
-            y="fondo_total",
-            labels={"fecha": "Fecha", "fondo_total": "Fondo consolidado (S/)"},
-        )
-        fig_consol.update_traces(hovertemplate="%{x}<br>S/ %{y:,.2f}<extra></extra>")
-        st.plotly_chart(fig_consol, width="stretch")
-        ultimo_valor = serie.iloc[-1]["fondo_total"]
-        primer_valor = serie.iloc[0]["fondo_total"]
+        prom_dia = ops_dia["num_operaciones"].mean()
+        mejor = ops_dia.loc[ops_dia["num_operaciones"].idxmax()]
         st.caption(
-            f"En el rango: de S/ {primer_valor:,.2f} a S/ {ultimo_valor:,.2f} "
-            f"(variación S/ {ultimo_valor - primer_valor:+,.2f})."
+            f"Promedio: **{prom_dia:,.0f}** operaciones/día. "
+            f"Día más alto: **{mejor['fecha']}** con **{int(mejor['num_operaciones']):,}**."
         )
 
-# ---------------------------------------------------------------------
-# Continuidad entre días: el ULTIMO Cierre de un día vs la PRIMERA
-# Apertura del siguiente día con actividad, por local. Deberían coincidir
-# (el fondo se queda guardado). Si no, alguien movió la caja cuando el
-# local estaba cerrado, o hubo un error al registrar -> posible faltante.
-# Lo de adentro del día (cortes parciales) se ve en "Cuadre por turno".
-# ---------------------------------------------------------------------
-st.subheader("🔗 Continuidad entre días (cierre vs apertura siguiente)")
-st.caption(
-    "El fondo se queda guardado de un día para otro. Si el último Cierre de "
-    "un día no coincide con la primera Apertura del día siguiente, alguien "
-    "movió la caja cerrado el local (o hubo un error al registrar)."
-)
-
-
-def _semaforo_continuidad(diferencia: float) -> str:
-    # Mas estricto que el cuadre por turno: de un dia al otro el local
-    # esta cerrado, no hay operaciones que muevan el fondo -- cualquier
-    # diferencia real es sospechosa.
-    dif_abs = abs(diferencia)
-    if dif_abs <= 1.0:
-        return "✅ Coincide"
-    if dif_abs <= 10.0:
-        return "🟡 Revisar"
-    return "🔴 Diferencia grande"
-
-
-# Retiros/ingresos que la administración ya autorizó (ver más abajo, se
-# registran desde esta misma sección). Se restan de la diferencia antes
-# de poner el semáforo -- así un retiro tuyo no sale como faltante.
-# Solo los ajustes "de la noche" (turno vacío) aplican aquí; los de un
-# turno especifico son para "Cuadre por turno", más abajo.
-ajustes_df = sh.get_ajustes_df()
-if ajustes_df.empty:
-    ajustes_continuidad = ajustes_df
-    ajuste_por_local_fecha = {}
-else:
-    ajustes_continuidad = ajustes_df[ajustes_df["turno"] == ""]
-    ajuste_por_local_fecha = (
-        ajustes_continuidad.groupby(["local", "fecha"])["monto"].sum().to_dict()
-    )
-
-registros_sel = df[df["local"].isin(locales_sel)].sort_values("timestamp")
-filas_continuidad = []
-for nombre_local, grupo_local in registros_sel.groupby("local", sort=True):
-    ult_cierre_dia = (
-        grupo_local[grupo_local["tipo"] == "Cierre"].groupby("fecha").tail(1).set_index("fecha")
-    )
-    prim_apertura_dia = (
-        grupo_local[grupo_local["tipo"] == "Apertura"].groupby("fecha").head(1).set_index("fecha")
-    )
-    dias_con_apertura = sorted(d for d in prim_apertura_dia.index if pd.notna(d))
-    for dia_cierre in sorted(d for d in ult_cierre_dia.index if pd.notna(d)):
-        posteriores = [d for d in dias_con_apertura if d > dia_cierre]
-        if not posteriores:
-            continue
-        dia_apertura = posteriores[0]
-        fila_cierre = ult_cierre_dia.loc[dia_cierre]
-        fila_apertura = prim_apertura_dia.loc[dia_apertura]
-        cierre = _num(fila_cierre.get("total"))
-        apertura = _num(fila_apertura.get("total"))
-        diferencia = apertura - cierre
-        ajuste_total = float(ajuste_por_local_fecha.get((nombre_local, dia_cierre), 0.0))
-        restante = diferencia - ajuste_total
-        if ajuste_total != 0 and abs(restante) <= 1.0:
-            estado = "🔷 Autorizado"
-        else:
-            estado = _semaforo_continuidad(restante)
-        filas_continuidad.append(
-            {
-                "_fecha": dia_cierre,
-                "_id_cierre": str(fila_cierre.get("id", "")),
-                "_id_apertura": str(fila_apertura.get("id", "")),
-                "_local": nombre_local,
-                "_ajuste_total": ajuste_total,
-                "_restante": restante,
-                "Local": nombre_local,
-                "Cierre del día": dia_cierre,
-                "Cierre (S/)": round(cierre, 2),
-                "Abre el día": dia_apertura,
-                "Apertura (S/)": round(apertura, 2),
-                "Diferencia (S/)": f"{diferencia:+,.2f}",
-                "Ajuste autorizado (S/)": f"{ajuste_total:+,.2f}" if ajuste_total else "",
-                "Restante (S/)": f"{restante:+,.2f}",
-                "Estado": estado,
-            }
-        )
-
-cont_df = pd.DataFrame(filas_continuidad)
-if cont_df.empty:
-    st.caption("Todavía no hay días consecutivos con Cierre y Apertura para comparar.")
-else:
-    cont_df = cont_df[
-        (cont_df["_fecha"] >= desde) & (cont_df["_fecha"] <= hasta)
-    ].sort_values("_fecha", ascending=False)
-    if cont_df.empty:
-        st.caption("No hay comparaciones en el rango de fechas seleccionado.")
-    else:
-        con_diferencia = int((cont_df["Estado"] == "🔴 Diferencia grande").sum())
-        if con_diferencia:
-            st.error(
-                f"⚠️ {con_diferencia} caso(s) donde el fondo cambió entre el "
-                f"cierre de un día y la apertura del siguiente, sin autorización registrada."
+        with st.expander("Ver por local"):
+            ops_dia_local = (
+                _cierres_ops.groupby(["fecha", "local"])["num_operaciones"].sum().reset_index()
+            ).sort_values("fecha")
+            fig_ops_local = px.bar(
+                ops_dia_local,
+                x="fecha",
+                y="num_operaciones",
+                color="local",
+                barmode="group",
+                labels={"fecha": "Fecha", "num_operaciones": "N° de operaciones", "local": "Local"},
             )
-        else:
-            st.success("Todos los cierres coinciden (o están autorizados) con la apertura del día siguiente. 👍")
+            st.plotly_chart(fig_ops_local, width="stretch")
+
+    st.subheader("👥 Operaciones por persona")
+    st.caption(
+        "Operaciones atribuidas a quien registró el Cierre. En el rango de fechas "
+        "filtrado."
+    )
+
+    if _cierres_ops.empty or _cierres_ops["num_operaciones"].sum() == 0:
+        st.caption("No hay operaciones registradas en el rango seleccionado.")
+    else:
+        ops_persona = (
+            _cierres_ops[_cierres_ops["nombre"].astype(str).str.strip() != ""]
+            .groupby("nombre")["num_operaciones"]
+            .agg(operaciones="sum", cierres="count")
+            .reset_index()
+            .sort_values("operaciones", ascending=False)
+        )
+        ops_persona["prom_por_cierre"] = (
+            (ops_persona["operaciones"] / ops_persona["cierres"].replace(0, pd.NA))
+            .fillna(0)
+            .round()
+            .astype(int)
+        )
         st.dataframe(
             sh.arrow_safe(
-                cont_df.drop(
-                    columns=["_fecha", "_id_cierre", "_id_apertura", "_local", "_ajuste_total", "_restante"]
+                ops_persona.rename(
+                    columns={
+                        "nombre": "Persona",
+                        "operaciones": "Operaciones",
+                        "cierres": "Cierres",
+                        "prom_por_cierre": "Prom. por cierre",
+                    }
                 )
             ),
             width="stretch",
             hide_index=True,
         )
-        st.caption(
-            "🔷 Autorizado = tiene un retiro/ingreso registrado por administración que explica "
-            "la diferencia. Ábrelo para ver el motivo o registrar uno nuevo."
+        fig_ops_persona = px.bar(
+            ops_persona,
+            x="nombre",
+            y="operaciones",
+            labels={"nombre": "Persona", "operaciones": "N° de operaciones"},
+        )
+        st.plotly_chart(fig_ops_persona, width="stretch")
+
+    st.subheader("📈 Movimientos por dia de la semana")
+
+    dias_es = {
+        "Monday": "Lunes",
+        "Tuesday": "Martes",
+        "Wednesday": "Miercoles",
+        "Thursday": "Jueves",
+        "Friday": "Viernes",
+        "Saturday": "Sabado",
+        "Sunday": "Domingo",
+    }
+    orden_dias = ["Lunes", "Martes", "Miercoles", "Jueves", "Viernes", "Sabado", "Domingo"]
+
+    cierres_filtrados = df_filtrado[df_filtrado["tipo"] == "Cierre"].copy()
+    if not cierres_filtrados.empty:
+        cierres_filtrados["dia_semana"] = pd.to_datetime(cierres_filtrados["fecha"]).dt.day_name().map(dias_es)
+        resumen_dias = (
+            cierres_filtrados.groupby("dia_semana")["num_operaciones"]
+            .sum()
+            .reindex(orden_dias)
+            .fillna(0)
+            .reset_index()
+        )
+        fig_dias = px.bar(
+            resumen_dias,
+            x="dia_semana",
+            y="num_operaciones",
+            labels={"dia_semana": "Dia", "num_operaciones": "N° de operaciones"},
+        )
+        st.plotly_chart(fig_dias, width="stretch")
+    else:
+        st.caption("No hay cierres en el rango seleccionado para graficar.")
+
+    st.subheader("📉 Evolucion del fondo total (efectivo + tarjeta) por local")
+    st.caption(
+        "Se grafica el TOTAL, no solo el efectivo, porque el fondo rota entre "
+        "efectivo y tarjeta segun las operaciones del dia."
+    )
+    if not cierres_filtrados.empty:
+        fig_evol = px.line(
+            cierres_filtrados.sort_values("fecha"),
+            x="fecha",
+            y="total",
+            color="local",
+            markers=True,
+            labels={"fecha": "Fecha", "total": "Fondo total al cierre (S/)"},
+        )
+        st.plotly_chart(fig_evol, width="stretch")
+
+with tab_resumen:
+    # -------------------------------------------------------------
+    # Fondo CONSOLIDADO por dia: la sumatoria de todos los locales y como
+    # va variando dia a dia. Para cada dia se toma el ULTIMO Cierre de cada
+    # local ese dia; si un local no cerro ese dia, se arrastra su ultimo
+    # cierre anterior (ffill). Asi la linea es el "cuanto dinero hay en
+    # total" al cierre de cada dia, no un promedio ni una suma de flujos.
+    # -------------------------------------------------------------
+    st.subheader("📊 Fondo consolidado (todos los locales) por día")
+    st.caption(
+        "Suma del fondo total (efectivo + tarjeta) del último Cierre de cada "
+        "local seleccionado, día a día. Si un local no cerró un día, se arrastra "
+        "su cierre anterior."
+    )
+
+    cierres_sel = df[
+        (df["tipo"] == "Cierre") & (df["local"].isin(locales_sel))
+    ].sort_values("timestamp")
+
+    if cierres_sel.empty:
+        st.caption("Todavía no hay cierres para consolidar.")
+    else:
+        ultimo_del_dia = cierres_sel.groupby(["local", "fecha"], sort=False).tail(1)
+        pivote = ultimo_del_dia.pivot(index="fecha", columns="local", values="total").sort_index()
+        # Rango de días: del primer cierre hasta el final del filtro de fechas.
+        dias = pd.date_range(pivote.index.min(), max(pivote.index.max(), hasta)).date
+        pivote = pivote.reindex(dias).ffill()
+        serie = pivote.sum(axis=1).rename_axis("fecha").reset_index(name="fondo_total")
+        serie = serie[(serie["fecha"] >= desde) & (serie["fecha"] <= hasta)]
+        if serie.empty:
+            st.caption("No hay días con datos en el rango seleccionado.")
+        else:
+            fig_consol = px.area(
+                serie,
+                x="fecha",
+                y="fondo_total",
+                labels={"fecha": "Fecha", "fondo_total": "Fondo consolidado (S/)"},
+            )
+            fig_consol.update_traces(hovertemplate="%{x}<br>S/ %{y:,.2f}<extra></extra>")
+            st.plotly_chart(fig_consol, width="stretch")
+            ultimo_valor = serie.iloc[-1]["fondo_total"]
+            primer_valor = serie.iloc[0]["fondo_total"]
+            st.caption(
+                f"En el rango: de S/ {primer_valor:,.2f} a S/ {ultimo_valor:,.2f} "
+                f"(variación S/ {ultimo_valor - primer_valor:+,.2f})."
+            )
+
+with tab_cuadre:
+    # -------------------------------------------------------------
+    # Continuidad entre días: el ULTIMO Cierre de un día vs la PRIMERA
+    # Apertura del siguiente día con actividad, por local. Deberían coincidir
+    # (el fondo se queda guardado). Si no, alguien movió la caja cuando el
+    # local estaba cerrado, o hubo un error al registrar -> posible faltante.
+    # Lo de adentro del día (cortes parciales) se ve en "Cuadre por turno".
+    # -------------------------------------------------------------
+    st.subheader("🔗 Continuidad entre días (cierre vs apertura siguiente)")
+    st.caption(
+        "El fondo se queda guardado de un día para otro. Si el último Cierre de "
+        "un día no coincide con la primera Apertura del día siguiente, alguien "
+        "movió la caja cerrado el local (o hubo un error al registrar)."
+    )
+
+
+    def _semaforo_continuidad(diferencia: float) -> str:
+        # Mas estricto que el cuadre por turno: de un dia al otro el local
+        # esta cerrado, no hay operaciones que muevan el fondo -- cualquier
+        # diferencia real es sospechosa.
+        dif_abs = abs(diferencia)
+        if dif_abs <= 1.0:
+            return "✅ Coincide"
+        if dif_abs <= 10.0:
+            return "🟡 Revisar"
+        return "🔴 Diferencia grande"
+
+
+    # Retiros/ingresos que la administración ya autorizó (ver más abajo, se
+    # registran desde esta misma sección). Se restan de la diferencia antes
+    # de poner el semáforo -- así un retiro tuyo no sale como faltante.
+    # Solo los ajustes "de la noche" (turno vacío) aplican aquí; los de un
+    # turno especifico son para "Cuadre por turno", más abajo.
+    ajustes_df = sh.get_ajustes_df()
+    if ajustes_df.empty:
+        ajustes_continuidad = ajustes_df
+        ajuste_por_local_fecha = {}
+    else:
+        ajustes_continuidad = ajustes_df[ajustes_df["turno"] == ""]
+        ajuste_por_local_fecha = (
+            ajustes_continuidad.groupby(["local", "fecha"])["monto"].sum().to_dict()
         )
 
-        # Detalle campo por campo + registrar retiro/ingreso autorizado.
-        sospechosos = cont_df[cont_df["Estado"] != "✅ Coincide"]
-        for _, fila in sospechosos.iterrows():
-            titulo = (
-                f"{fila['Local']} · cierre {fila['Cierre del día']} → apertura "
-                f"{fila['Abre el día']} · {fila['Diferencia (S/)']} · {fila['Estado']}"
+    registros_sel = df[df["local"].isin(locales_sel)].sort_values("timestamp")
+    filas_continuidad = []
+    for nombre_local, grupo_local in registros_sel.groupby("local", sort=True):
+        ult_cierre_dia = (
+            grupo_local[grupo_local["tipo"] == "Cierre"].groupby("fecha").tail(1).set_index("fecha")
+        )
+        prim_apertura_dia = (
+            grupo_local[grupo_local["tipo"] == "Apertura"].groupby("fecha").head(1).set_index("fecha")
+        )
+        dias_con_apertura = sorted(d for d in prim_apertura_dia.index if pd.notna(d))
+        for dia_cierre in sorted(d for d in ult_cierre_dia.index if pd.notna(d)):
+            posteriores = [d for d in dias_con_apertura if d > dia_cierre]
+            if not posteriores:
+                continue
+            dia_apertura = posteriores[0]
+            fila_cierre = ult_cierre_dia.loc[dia_cierre]
+            fila_apertura = prim_apertura_dia.loc[dia_apertura]
+            cierre = _num(fila_cierre.get("total"))
+            apertura = _num(fila_apertura.get("total"))
+            diferencia = apertura - cierre
+            ajuste_total = float(ajuste_por_local_fecha.get((nombre_local, dia_cierre), 0.0))
+            restante = diferencia - ajuste_total
+            if ajuste_total != 0 and abs(restante) <= 1.0:
+                estado = "🔷 Autorizado"
+            else:
+                estado = _semaforo_continuidad(restante)
+            filas_continuidad.append(
+                {
+                    "_fecha": dia_cierre,
+                    "_id_cierre": str(fila_cierre.get("id", "")),
+                    "_id_apertura": str(fila_apertura.get("id", "")),
+                    "_local": nombre_local,
+                    "_ajuste_total": ajuste_total,
+                    "_restante": restante,
+                    "Local": nombre_local,
+                    "Cierre del día": dia_cierre,
+                    "Cierre (S/)": round(cierre, 2),
+                    "Abre el día": dia_apertura,
+                    "Apertura (S/)": round(apertura, 2),
+                    "Diferencia (S/)": f"{diferencia:+,.2f}",
+                    "Ajuste autorizado (S/)": f"{ajuste_total:+,.2f}" if ajuste_total else "",
+                    "Restante (S/)": f"{restante:+,.2f}",
+                    "Estado": estado,
+                }
             )
-            with st.expander(titulo):
-                if (
-                    fila["_id_cierre"] in _registros_por_id.index
-                    and fila["_id_apertura"] in _registros_por_id.index
-                ):
-                    st.caption(
-                        "Compara el Cierre de un día con la Apertura del siguiente. "
-                        "Deberían ser idénticos; si un campo cambió, ahí está el problema "
-                        "(o fue un retiro de efectivo hecho a propósito esa noche)."
-                    )
-                    _comparar_par(
-                        _registros_por_id.loc[fila["_id_cierre"]],
-                        _registros_por_id.loc[fila["_id_apertura"]],
-                        "Cierre día anterior",
-                        "Apertura día siguiente",
-                    )
-                else:
-                    st.caption("No se encontraron los dos registros para comparar.")
 
-                # Ajustes ya registrados para este local+día, si hay.
-                clave_ajuste = f"cont|{fila['_local']}|{fila['_fecha']}"
-                if not ajustes_continuidad.empty:
-                    previos = ajustes_continuidad[
-                        (ajustes_continuidad["local"] == fila["_local"])
-                        & (ajustes_continuidad["fecha"] == fila["_fecha"])
+    cont_df = pd.DataFrame(filas_continuidad)
+    if cont_df.empty:
+        st.caption("Todavía no hay días consecutivos con Cierre y Apertura para comparar.")
+    else:
+        cont_df = cont_df[
+            (cont_df["_fecha"] >= desde) & (cont_df["_fecha"] <= hasta)
+        ].sort_values("_fecha", ascending=False)
+        if cont_df.empty:
+            st.caption("No hay comparaciones en el rango de fechas seleccionado.")
+        else:
+            con_diferencia = int((cont_df["Estado"] == "🔴 Diferencia grande").sum())
+            if con_diferencia:
+                st.error(
+                    f"⚠️ {con_diferencia} caso(s) donde el fondo cambió entre el "
+                    f"cierre de un día y la apertura del siguiente, sin autorización registrada."
+                )
+            else:
+                st.success("Todos los cierres coinciden (o están autorizados) con la apertura del día siguiente. 👍")
+            st.dataframe(
+                sh.arrow_safe(
+                    cont_df.drop(
+                        columns=["_fecha", "_id_cierre", "_id_apertura", "_local", "_ajuste_total", "_restante"]
+                    )
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+            st.caption(
+                "🔷 Autorizado = tiene un retiro/ingreso registrado por administración que explica "
+                "la diferencia. Ábrelo para ver el motivo o registrar uno nuevo."
+            )
+
+            # Detalle campo por campo + registrar retiro/ingreso autorizado.
+            sospechosos = cont_df[cont_df["Estado"] != "✅ Coincide"]
+            for _, fila in sospechosos.iterrows():
+                titulo = (
+                    f"{fila['Local']} · cierre {fila['Cierre del día']} → apertura "
+                    f"{fila['Abre el día']} · {fila['Diferencia (S/)']} · {fila['Estado']}"
+                )
+                with st.expander(titulo):
+                    if (
+                        fila["_id_cierre"] in _registros_por_id.index
+                        and fila["_id_apertura"] in _registros_por_id.index
+                    ):
+                        st.caption(
+                            "Compara el Cierre de un día con la Apertura del siguiente. "
+                            "Deberían ser idénticos; si un campo cambió, ahí está el problema "
+                            "(o fue un retiro de efectivo hecho a propósito esa noche)."
+                        )
+                        _comparar_par(
+                            _registros_por_id.loc[fila["_id_cierre"]],
+                            _registros_por_id.loc[fila["_id_apertura"]],
+                            "Cierre día anterior",
+                            "Apertura día siguiente",
+                        )
+                    else:
+                        st.caption("No se encontraron los dos registros para comparar.")
+
+                    # Ajustes ya registrados para este local+día, si hay.
+                    clave_ajuste = f"cont|{fila['_local']}|{fila['_fecha']}"
+                    if not ajustes_continuidad.empty:
+                        previos = ajustes_continuidad[
+                            (ajustes_continuidad["local"] == fila["_local"])
+                            & (ajustes_continuidad["fecha"] == fila["_fecha"])
+                        ]
+                        if not previos.empty:
+                            st.markdown("**Ajustes ya registrados para este día:**")
+                            for _, aj in previos.iterrows():
+                                st.caption(
+                                    f"S/ {aj['monto']:+,.2f} — {aj['motivo']} "
+                                    f"(autorizó: {aj['autorizado_por'] or '—'})"
+                                )
+
+                    st.markdown("**Registrar retiro/ingreso autorizado por administración**")
+                    st.caption(
+                        "Esto queda guardado con fecha, motivo y quién lo autorizó, y se resta "
+                        "de la diferencia de este local/día en adelante."
+                    )
+                    col_monto, col_quien = st.columns(2)
+                    monto_ajuste = col_monto.number_input(
+                        "Monto (negativo = retiro, positivo = ingreso)",
+                        value=round(fila["_restante"], 2),
+                        step=10.0,
+                        key=f"ajuste_monto_{clave_ajuste}",
+                    )
+                    autorizo = col_quien.text_input(
+                        "Quién autoriza", key=f"ajuste_quien_{clave_ajuste}"
+                    )
+                    motivo_ajuste = st.text_area(
+                        "Motivo", key=f"ajuste_motivo_{clave_ajuste}",
+                        placeholder="Ej: retiro de efectivo para depósito en banco",
+                    )
+                    if st.button("✅ Registrar ajuste", key=f"ajuste_btn_{clave_ajuste}"):
+                        if not motivo_ajuste.strip() or not autorizo.strip():
+                            st.error("Completa quién autoriza y el motivo antes de guardar.")
+                        else:
+                            ahora_aj = sh.ahora_local()
+                            sh.guardar_ajuste(
+                                {
+                                    "id": sh.nuevo_id(),
+                                    "timestamp": ahora_aj.replace(tzinfo=None).isoformat(timespec="seconds"),
+                                    "local": fila["_local"],
+                                    "fecha": fila["_fecha"].isoformat(),
+                                    "monto": monto_ajuste,
+                                    "motivo": motivo_ajuste.strip(),
+                                    "autorizado_por": autorizo.strip(),
+                                    "turno": "",  # ajuste "de la noche" (Continuidad entre días)
+                                }
+                            )
+                            st.success("Ajuste guardado.")
+                            st.rerun()
+
+    # -------------------------------------------------------------
+    # Cuadre por turno (cortes Apertura -> Cierre)
+    #
+    # Un turno puede tener VARIOS cortes (cierres parciales: se cierra, se
+    # retira/ingresa efectivo a proposito, se vuelve a abrir). Cada corte se
+    # mide contra su propia Apertura, asi que lo que se mueve a proposito
+    # entre cortes no ensucia el calculo. Ver cuadre.py.
+    # -------------------------------------------------------------
+    st.subheader("🔍 Cuadre por turno")
+    st.caption(
+        "Diferencia = Cierre − Apertura de cada corte (fondo total = efectivo + "
+        "tarjeta). Un turno con cierres parciales tiene varios cortes; acá se "
+        "muestra la **suma** de sus diferencias."
+    )
+
+    INDICE_TURNO = ["local", "fecha", "turno"]
+    cortes = sh.calcular_cortes(df_filtrado, INDICE_TURNO)
+    resumen = sh.resumen_turnos(cortes, INDICE_TURNO)
+    resumen = resumen.sort_values(["fecha", "local", "turno"], ascending=[False, True, True])
+
+    # Ajustes de UN turno especifico (turno != "", a diferencia de los "de la
+    # noche" que usa Continuidad entre días) ya autorizados por
+    # administración: se restan de la diferencia de ESE turno antes del
+    # semáforo. Si explican todo -> "🔷 Autorizado"; los estados de secuencia
+    # (⚠️) no se tocan, esos son problemas estructurales, no de monto.
+    if ajustes_df.empty:
+        ajustes_turno = ajustes_df
+        ajuste_turno_por_clave = {}
+    else:
+        ajustes_turno = ajustes_df[ajustes_df["turno"] != ""]
+        ajuste_turno_por_clave = (
+            ajustes_turno.groupby(["local", "fecha", "turno"])["monto"].sum().to_dict()
+        )
+
+
+    def _con_ajuste_turno(fila):
+        ajuste_total = float(
+            ajuste_turno_por_clave.get((fila["local"], fila["fecha"], fila["turno"]), 0.0)
+        )
+        diferencia = fila["diferencia"]
+        if ajuste_total == 0 or pd.isna(diferencia) or str(fila["estado"]).startswith("⚠️"):
+            return pd.Series({"estado": fila["estado"], "_ajuste_total": ajuste_total, "_restante": diferencia})
+        restante = diferencia - ajuste_total
+        if abs(restante) <= sh.UMBRAL_VERDE:
+            nuevo_estado = "🔷 Autorizado"
+        elif abs(restante) <= sh.UMBRAL_AMARILLO:
+            nuevo_estado = "🟡 Revisar"
+        else:
+            nuevo_estado = "🔴 Diferencia grande"
+        return pd.Series({"estado": nuevo_estado, "_ajuste_total": ajuste_total, "_restante": restante})
+
+
+    _ajustado_turno = resumen.apply(_con_ajuste_turno, axis=1)
+    resumen["estado"] = _ajustado_turno["estado"]
+    resumen["_ajuste_total"] = _ajustado_turno["_ajuste_total"]
+    resumen["_restante"] = _ajustado_turno["_restante"]
+
+    st.dataframe(
+        sh.arrow_safe(
+            resumen.rename(
+                columns={
+                    "local": "Local",
+                    "fecha": "Fecha",
+                    "turno": "Turno",
+                    "n_cortes": "Cortes",
+                    "nombres": "Personas",
+                    "diferencia_fmt": "Diferencia total (S/)",
+                    "estado": "Estado",
+                }
+            ).drop(columns=["diferencia", "_ajuste_total", "_restante"])
+        ),
+        width="stretch",
+        hide_index=True,
+    )
+    st.caption(
+        "**+** = sobró (el Cierre quedó por encima de la Apertura), **−** = faltó. "
+        "🟡 Revisar / 🔴 Diferencia grande son una guía según el monto. "
+        "⚠️ Revisar secuencia = al turno le falta un Cierre o hay un Cierre sin Apertura."
+    )
+
+    with st.expander("Ver corte por corte"):
+        if cortes.empty:
+            st.caption("No hay cortes en el rango seleccionado.")
+        else:
+            cortes_orden = cortes.sort_values(
+                ["fecha", "local", "turno", "corte"], ascending=[False, True, True, True]
+            )
+            st.dataframe(
+                sh.arrow_safe(
+                    cortes_orden.rename(
+                        columns={
+                            "local": "Local",
+                            "fecha": "Fecha",
+                            "turno": "Turno",
+                            "corte": "Corte",
+                            "nombre": "Abrió",
+                            "nombre_cierre": "Cerró",
+                            "hora_apertura": "Hora ap.",
+                            "hora_cierre": "Hora cie.",
+                            "apertura": "Apertura (S/)",
+                            "cierre": "Cierre (S/)",
+                            "diferencia_fmt": "Diferencia (S/)",
+                            "estado": "Estado",
+                            "motivo": "Motivo (otro nombre)",
+                        }
+                    ).drop(columns=["diferencia"])
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+
+    # Registrar/ver ajustes de un turno especifico (distinto de los "de la
+    # noche" de Continuidad entre días). Solo para los que aun no cuadran ni
+    # estan ya autorizados, y que no son un problema de secuencia (esos se
+    # arreglan registrando bien, no con un ajuste de monto).
+    _sospechosos_turno = resumen[
+        ~resumen["estado"].isin(["✅ Cuadrado", "🔷 Autorizado"])
+        & ~resumen["estado"].astype(str).str.startswith("⚠️")
+    ]
+    if not _sospechosos_turno.empty:
+        st.markdown("**Registrar retiro/ingreso autorizado de un turno**")
+        for _, fila in _sospechosos_turno.iterrows():
+            titulo = f"{fila['local']} · {fila['fecha']} · {fila['turno']} · {fila['diferencia_fmt']} · {fila['estado']}"
+            with st.expander(titulo):
+                clave_t = f"turno|{fila['local']}|{fila['fecha']}|{fila['turno']}"
+                if not ajustes_turno.empty:
+                    previos_t = ajustes_turno[
+                        (ajustes_turno["local"] == fila["local"])
+                        & (ajustes_turno["fecha"] == fila["fecha"])
+                        & (ajustes_turno["turno"] == fila["turno"])
                     ]
-                    if not previos.empty:
-                        st.markdown("**Ajustes ya registrados para este día:**")
-                        for _, aj in previos.iterrows():
+                    if not previos_t.empty:
+                        st.markdown("**Ajustes ya registrados para este turno:**")
+                        for _, aj in previos_t.iterrows():
                             st.caption(
                                 f"S/ {aj['monto']:+,.2f} — {aj['motivo']} "
                                 f"(autorizó: {aj['autorizado_por'] or '—'})"
                             )
-
-                st.markdown("**Registrar retiro/ingreso autorizado por administración**")
-                st.caption(
-                    "Esto queda guardado con fecha, motivo y quién lo autorizó, y se resta "
-                    "de la diferencia de este local/día en adelante."
-                )
-                col_monto, col_quien = st.columns(2)
-                monto_ajuste = col_monto.number_input(
+                col_m, col_q = st.columns(2)
+                monto_t = col_m.number_input(
                     "Monto (negativo = retiro, positivo = ingreso)",
-                    value=round(fila["_restante"], 2),
+                    value=round(float(fila["_restante"]), 2),
                     step=10.0,
-                    key=f"ajuste_monto_{clave_ajuste}",
+                    key=f"aj_t_monto_{clave_t}",
                 )
-                autorizo = col_quien.text_input(
-                    "Quién autoriza", key=f"ajuste_quien_{clave_ajuste}"
+                quien_t = col_q.text_input("Quién autoriza", key=f"aj_t_quien_{clave_t}")
+                motivo_t = st.text_area(
+                    "Motivo",
+                    key=f"aj_t_motivo_{clave_t}",
+                    placeholder="Ej: retiro de efectivo a media tarde",
                 )
-                motivo_ajuste = st.text_area(
-                    "Motivo", key=f"ajuste_motivo_{clave_ajuste}",
-                    placeholder="Ej: retiro de efectivo para depósito en banco",
-                )
-                if st.button("✅ Registrar ajuste", key=f"ajuste_btn_{clave_ajuste}"):
-                    if not motivo_ajuste.strip() or not autorizo.strip():
+                if st.button("✅ Registrar ajuste", key=f"aj_t_btn_{clave_t}"):
+                    if not motivo_t.strip() or not quien_t.strip():
                         st.error("Completa quién autoriza y el motivo antes de guardar.")
                     else:
-                        ahora_aj = sh.ahora_local()
+                        ahora_t = sh.ahora_local()
                         sh.guardar_ajuste(
                             {
                                 "id": sh.nuevo_id(),
-                                "timestamp": ahora_aj.replace(tzinfo=None).isoformat(timespec="seconds"),
-                                "local": fila["_local"],
-                                "fecha": fila["_fecha"].isoformat(),
-                                "monto": monto_ajuste,
-                                "motivo": motivo_ajuste.strip(),
-                                "autorizado_por": autorizo.strip(),
-                                "turno": "",  # ajuste "de la noche" (Continuidad entre días)
+                                "timestamp": ahora_t.replace(tzinfo=None).isoformat(timespec="seconds"),
+                                "local": fila["local"],
+                                "fecha": fila["fecha"].isoformat(),
+                                "monto": monto_t,
+                                "motivo": motivo_t.strip(),
+                                "autorizado_por": quien_t.strip(),
+                                "turno": fila["turno"],
                             }
                         )
                         st.success("Ajuste guardado.")
                         st.rerun()
 
-# ---------------------------------------------------------------------
-# Cuadre por turno (cortes Apertura -> Cierre)
-#
-# Un turno puede tener VARIOS cortes (cierres parciales: se cierra, se
-# retira/ingresa efectivo a proposito, se vuelve a abrir). Cada corte se
-# mide contra su propia Apertura, asi que lo que se mueve a proposito
-# entre cortes no ensucia el calculo. Ver cuadre.py.
-# ---------------------------------------------------------------------
-st.subheader("🔍 Cuadre por turno")
-st.caption(
-    "Diferencia = Cierre − Apertura de cada corte (fondo total = efectivo + "
-    "tarjeta). Un turno con cierres parciales tiene varios cortes; acá se "
-    "muestra la **suma** de sus diferencias."
-)
-
-INDICE_TURNO = ["local", "fecha", "turno"]
-cortes = sh.calcular_cortes(df_filtrado, INDICE_TURNO)
-resumen = sh.resumen_turnos(cortes, INDICE_TURNO)
-resumen = resumen.sort_values(["fecha", "local", "turno"], ascending=[False, True, True])
-
-# Ajustes de UN turno especifico (turno != "", a diferencia de los "de la
-# noche" que usa Continuidad entre días) ya autorizados por
-# administración: se restan de la diferencia de ESE turno antes del
-# semáforo. Si explican todo -> "🔷 Autorizado"; los estados de secuencia
-# (⚠️) no se tocan, esos son problemas estructurales, no de monto.
-if ajustes_df.empty:
-    ajustes_turno = ajustes_df
-    ajuste_turno_por_clave = {}
-else:
-    ajustes_turno = ajustes_df[ajustes_df["turno"] != ""]
-    ajuste_turno_por_clave = (
-        ajustes_turno.groupby(["local", "fecha", "turno"])["monto"].sum().to_dict()
-    )
-
-
-def _con_ajuste_turno(fila):
-    ajuste_total = float(
-        ajuste_turno_por_clave.get((fila["local"], fila["fecha"], fila["turno"]), 0.0)
-    )
-    diferencia = fila["diferencia"]
-    if ajuste_total == 0 or pd.isna(diferencia) or str(fila["estado"]).startswith("⚠️"):
-        return pd.Series({"estado": fila["estado"], "_ajuste_total": ajuste_total, "_restante": diferencia})
-    restante = diferencia - ajuste_total
-    if abs(restante) <= sh.UMBRAL_VERDE:
-        nuevo_estado = "🔷 Autorizado"
-    elif abs(restante) <= sh.UMBRAL_AMARILLO:
-        nuevo_estado = "🟡 Revisar"
-    else:
-        nuevo_estado = "🔴 Diferencia grande"
-    return pd.Series({"estado": nuevo_estado, "_ajuste_total": ajuste_total, "_restante": restante})
-
-
-_ajustado_turno = resumen.apply(_con_ajuste_turno, axis=1)
-resumen["estado"] = _ajustado_turno["estado"]
-resumen["_ajuste_total"] = _ajustado_turno["_ajuste_total"]
-resumen["_restante"] = _ajustado_turno["_restante"]
-
-st.dataframe(
-    sh.arrow_safe(
-        resumen.rename(
-            columns={
-                "local": "Local",
-                "fecha": "Fecha",
-                "turno": "Turno",
-                "n_cortes": "Cortes",
-                "nombres": "Personas",
-                "diferencia_fmt": "Diferencia total (S/)",
-                "estado": "Estado",
-            }
-        ).drop(columns=["diferencia", "_ajuste_total", "_restante"])
-    ),
-    width="stretch",
-    hide_index=True,
-)
-st.caption(
-    "**+** = sobró (el Cierre quedó por encima de la Apertura), **−** = faltó. "
-    "🟡 Revisar / 🔴 Diferencia grande son una guía según el monto. "
-    "⚠️ Revisar secuencia = al turno le falta un Cierre o hay un Cierre sin Apertura."
-)
-
-with st.expander("Ver corte por corte"):
-    if cortes.empty:
-        st.caption("No hay cortes en el rango seleccionado.")
-    else:
-        cortes_orden = cortes.sort_values(
-            ["fecha", "local", "turno", "corte"], ascending=[False, True, True, True]
+    # Para el grafico dejamos fuera los turnos con la secuencia rota (su suma
+    # de diferencias es parcial y engaña); los de "Cerró otro nombre" sí van.
+    turnos_completos = resumen[~resumen["estado"].astype(str).str.contains("secuencia")]
+    if not turnos_completos.empty:
+        fig_dif = px.bar(
+            turnos_completos.sort_values("fecha"),
+            x="fecha",
+            y="diferencia",
+            color="local",
+            barmode="group",
+            labels={"fecha": "Fecha", "diferencia": "Diferencia total del turno (S/)"},
         )
+        st.plotly_chart(fig_dif, width="stretch")
+
+    # -------------------------------------------------------------
+    # Acumulado de diferencias por persona
+    #
+    # Cada corte se le atribuye a quien lo ABRIO (si el Cierre quedo a otro
+    # nombre, igual va a quien abrio). Aca se suma, en el rango de fechas
+    # filtrado, cuanto descuadre acumula cada persona -- para ver de un
+    # vistazo si alguien viene arrastrando diferencias.
+    # -------------------------------------------------------------
+    st.subheader("👤 Acumulado de diferencias por persona")
+    st.caption(
+        "En el rango de fechas filtrado. La diferencia de cada corte se le "
+        "atribuye a quien abrió. Ordenado por descuadre total (sin importar el signo)."
+    )
+
+    acumulado = sh.acumulado_por_persona(cortes)
+    if acumulado.empty:
+        st.caption("Todavía no hay cortes completos en el rango seleccionado.")
+    else:
         st.dataframe(
             sh.arrow_safe(
-                cortes_orden.rename(
+                acumulado.rename(
                     columns={
-                        "local": "Local",
-                        "fecha": "Fecha",
-                        "turno": "Turno",
-                        "corte": "Corte",
-                        "nombre": "Abrió",
-                        "nombre_cierre": "Cerró",
-                        "hora_apertura": "Hora ap.",
-                        "hora_cierre": "Hora cie.",
-                        "apertura": "Apertura (S/)",
-                        "cierre": "Cierre (S/)",
-                        "diferencia_fmt": "Diferencia (S/)",
-                        "estado": "Estado",
-                        "motivo": "Motivo (otro nombre)",
+                        "nombre": "Persona",
+                        "n_cortes": "Cortes",
+                        "diferencia_fmt": "Diferencia neta (S/)",
+                        "descuadre_abs": "Descuadre total (S/)",
                     }
                 ).drop(columns=["diferencia"])
             ),
             width="stretch",
             hide_index=True,
         )
+        fig_pers = px.bar(
+            acumulado.sort_values("diferencia"),
+            x="nombre",
+            y="diferencia",
+            labels={"nombre": "Persona", "diferencia": "Diferencia neta acumulada (S/)"},
+        )
+        st.plotly_chart(fig_pers, width="stretch")
 
-# Registrar/ver ajustes de un turno especifico (distinto de los "de la
-# noche" de Continuidad entre días). Solo para los que aun no cuadran ni
-# estan ya autorizados, y que no son un problema de secuencia (esos se
-# arreglan registrando bien, no con un ajuste de monto).
-_sospechosos_turno = resumen[
-    ~resumen["estado"].isin(["✅ Cuadrado", "🔷 Autorizado"])
-    & ~resumen["estado"].astype(str).str.startswith("⚠️")
-]
-if not _sospechosos_turno.empty:
-    st.markdown("**Registrar retiro/ingreso autorizado de un turno**")
-    for _, fila in _sospechosos_turno.iterrows():
-        titulo = f"{fila['local']} · {fila['fecha']} · {fila['turno']} · {fila['diferencia_fmt']} · {fila['estado']}"
-        with st.expander(titulo):
-            clave_t = f"turno|{fila['local']}|{fila['fecha']}|{fila['turno']}"
-            if not ajustes_turno.empty:
-                previos_t = ajustes_turno[
-                    (ajustes_turno["local"] == fila["local"])
-                    & (ajustes_turno["fecha"] == fila["fecha"])
-                    & (ajustes_turno["turno"] == fila["turno"])
-                ]
-                if not previos_t.empty:
-                    st.markdown("**Ajustes ya registrados para este turno:**")
-                    for _, aj in previos_t.iterrows():
-                        st.caption(
-                            f"S/ {aj['monto']:+,.2f} — {aj['motivo']} "
-                            f"(autorizó: {aj['autorizado_por'] or '—'})"
-                        )
-            col_m, col_q = st.columns(2)
-            monto_t = col_m.number_input(
-                "Monto (negativo = retiro, positivo = ingreso)",
-                value=round(float(fila["_restante"]), 2),
-                step=10.0,
-                key=f"aj_t_monto_{clave_t}",
+        # --- Detalle por persona: ver de dónde salió el descuadre ---------
+        # Sirve para distinguir un descuadre real de un error al registrar
+        # (p. ej. escribir 100 donde iba 1000 en una denominación).
+        persona_sel = st.selectbox(
+            "Ver el detalle de una persona (para revisar si fue error al registrar)",
+            ["—"] + acumulado["nombre"].tolist(),
+        )
+        if persona_sel != "—":
+            cortes_persona = cortes[cortes["nombre"] == persona_sel].copy().sort_values(
+                ["fecha", "local", "turno", "corte"]
             )
-            quien_t = col_q.text_input("Quién autoriza", key=f"aj_t_quien_{clave_t}")
-            motivo_t = st.text_area(
-                "Motivo",
-                key=f"aj_t_motivo_{clave_t}",
-                placeholder="Ej: retiro de efectivo a media tarde",
-            )
-            if st.button("✅ Registrar ajuste", key=f"aj_t_btn_{clave_t}"):
-                if not motivo_t.strip() or not quien_t.strip():
-                    st.error("Completa quién autoriza y el motivo antes de guardar.")
-                else:
-                    ahora_t = sh.ahora_local()
-                    sh.guardar_ajuste(
-                        {
-                            "id": sh.nuevo_id(),
-                            "timestamp": ahora_t.replace(tzinfo=None).isoformat(timespec="seconds"),
-                            "local": fila["local"],
-                            "fecha": fila["fecha"].isoformat(),
-                            "monto": monto_t,
-                            "motivo": motivo_t.strip(),
-                            "autorizado_por": quien_t.strip(),
-                            "turno": fila["turno"],
+            st.markdown(f"**Cortes de {persona_sel} en el rango:**")
+            st.dataframe(
+                sh.arrow_safe(
+                    cortes_persona[
+                        ["fecha", "local", "turno", "corte", "nombre_cierre",
+                         "apertura", "cierre", "diferencia_fmt", "estado"]
+                    ].rename(
+                        columns={
+                            "fecha": "Fecha", "local": "Local", "turno": "Turno",
+                            "corte": "Corte", "nombre_cierre": "Cerró",
+                            "apertura": "Apertura (S/)", "cierre": "Cierre (S/)",
+                            "diferencia_fmt": "Diferencia (S/)", "estado": "Estado",
                         }
                     )
-                    st.success("Ajuste guardado.")
-                    st.rerun()
+                ),
+                width="stretch",
+                hide_index=True,
+            )
 
-# Para el grafico dejamos fuera los turnos con la secuencia rota (su suma
-# de diferencias es parcial y engaña); los de "Cerró otro nombre" sí van.
-turnos_completos = resumen[~resumen["estado"].astype(str).str.contains("secuencia")]
-if not turnos_completos.empty:
-    fig_dif = px.bar(
-        turnos_completos.sort_values("fecha"),
-        x="fecha",
-        y="diferencia",
-        color="local",
-        barmode="group",
-        labels={"fecha": "Fecha", "diferencia": "Diferencia total del turno (S/)"},
-    )
-    st.plotly_chart(fig_dif, width="stretch")
+            st.markdown("**Revisión corte por corte** (Apertura vs Cierre, campo por campo):")
+            for _, c in cortes_persona.iterrows():
+                encabezado = (
+                    f"{c['fecha']} · {c['local']} · {c['turno']} · corte {c['corte']} · "
+                    f"{c['diferencia_fmt']} · {c['estado']}"
+                )
+                with st.expander(encabezado):
+                    id_ap, id_ci = c["id_apertura"], c["id_cierre"]
+                    if (
+                        id_ap in _registros_por_id.index
+                        and id_ci in _registros_por_id.index
+                    ):
+                        _comparar_par(
+                            _registros_por_id.loc[id_ap], _registros_por_id.loc[id_ci]
+                        )
+                    else:
+                        st.caption("Este corte no tiene Apertura y Cierre completos para comparar.")
 
-# ---------------------------------------------------------------------
-# Acumulado de diferencias por persona
-#
-# Cada corte se le atribuye a quien lo ABRIO (si el Cierre quedo a otro
-# nombre, igual va a quien abrio). Aca se suma, en el rango de fechas
-# filtrado, cuanto descuadre acumula cada persona -- para ver de un
-# vistazo si alguien viene arrastrando diferencias.
-# ---------------------------------------------------------------------
-st.subheader("👤 Acumulado de diferencias por persona")
-st.caption(
-    "En el rango de fechas filtrado. La diferencia de cada corte se le "
-    "atribuye a quien abrió. Ordenado por descuadre total (sin importar el signo)."
-)
-
-acumulado = sh.acumulado_por_persona(cortes)
-if acumulado.empty:
-    st.caption("Todavía no hay cortes completos en el rango seleccionado.")
-else:
+with tab_registros:
+    # -------------------------------------------------------------
+    # Tabla consolidada
+    # -------------------------------------------------------------
+    st.subheader("🗂️ Registros")
+    columnas_fotos = [c for c in df_filtrado.columns if c.startswith("foto_")]
     st.dataframe(
-        sh.arrow_safe(
-            acumulado.rename(
-                columns={
-                    "nombre": "Persona",
-                    "n_cortes": "Cortes",
-                    "diferencia_fmt": "Diferencia neta (S/)",
-                    "descuadre_abs": "Descuadre total (S/)",
-                }
-            ).drop(columns=["diferencia"])
-        ),
+        sh.arrow_safe(df_filtrado.drop(columns=columnas_fotos)),
         width="stretch",
         hide_index=True,
     )
-    fig_pers = px.bar(
-        acumulado.sort_values("diferencia"),
-        x="nombre",
-        y="diferencia",
-        labels={"nombre": "Persona", "diferencia": "Diferencia neta acumulada (S/)"},
-    )
-    st.plotly_chart(fig_pers, width="stretch")
 
-    # --- Detalle por persona: ver de dónde salió el descuadre ---------
-    # Sirve para distinguir un descuadre real de un error al registrar
-    # (p. ej. escribir 100 donde iba 1000 en una denominación).
-    persona_sel = st.selectbox(
-        "Ver el detalle de una persona (para revisar si fue error al registrar)",
-        ["—"] + acumulado["nombre"].tolist(),
-    )
-    if persona_sel != "—":
-        cortes_persona = cortes[cortes["nombre"] == persona_sel].copy().sort_values(
-            ["fecha", "local", "turno", "corte"]
+    with st.expander("Ver links de fotos de un registro"):
+        if not df_filtrado.empty:
+            id_elegido = st.selectbox("ID de registro", df_filtrado["id"])
+            fila = df_filtrado[df_filtrado["id"] == id_elegido].iloc[0]
+            for col in columnas_fotos:
+                if fila[col]:
+                    st.markdown(f"- [{col}]({fila[col]})")
+
+with tab_incentivos:
+    # -------------------------------------------------------------
+    # Incentivos por encuestas NPS (S/ 10 por encuesta calificada 9 o 10)
+    #
+    # Viene del incentivo interno del negocio: reemplaza el Google Form
+    # aparte que se usaba para esto. El personal registra cada encuesta
+    # desde pages/4_Encuestas.py (con el PIN de su local); cambiar el
+    # estado de pago SOLO se hace aca, protegido con tu PIN de dueno, para
+    # que nadie pueda marcar su propio incentivo como pagado (o invalidarlo)
+    # sin que tu lo hayas revisado.
+    # -------------------------------------------------------------
+    st.subheader("⭐ Incentivos por encuestas NPS (S/ 10 c/u)")
+
+    ESTADOS_PAGO_ENCUESTA = ["Pendiente", "Pagada", "No válido"]
+
+    encuestas_df = sh.get_encuestas_df()
+
+    if encuestas_df.empty:
+        st.caption("Todavia no se ha registrado ninguna encuesta NPS.")
+    else:
+        pendientes_df = encuestas_df[encuestas_df["estado_pago"] == "Pendiente"]
+        pagadas_df = encuestas_df[encuestas_df["estado_pago"] == "Pagada"]
+        no_validas_df = encuestas_df[encuestas_df["estado_pago"] == "No válido"]
+
+        colA, colB, colC, colD = st.columns(4)
+        colA.metric("Encuestas totales", len(encuestas_df))
+        colB.metric(
+            "Pendientes de pago",
+            f"{len(pendientes_df)} (S/ {pendientes_df['incentivo'].sum():,.2f})",
         )
-        st.markdown(f"**Cortes de {persona_sel} en el rango:**")
-        st.dataframe(
-            sh.arrow_safe(
-                cortes_persona[
-                    ["fecha", "local", "turno", "corte", "nombre_cierre",
-                     "apertura", "cierre", "diferencia_fmt", "estado"]
-                ].rename(
+        colC.metric(
+            "Ya pagadas",
+            f"{len(pagadas_df)} (S/ {pagadas_df['incentivo'].sum():,.2f})",
+        )
+        colD.metric("No validas", len(no_validas_df))
+
+        st.caption("Cuanto se le debe a cada trabajador (solo lo pendiente):")
+        if pendientes_df.empty:
+            st.success("No hay incentivos pendientes de pago. 👍")
+        else:
+            resumen_por_nombre = (
+                pendientes_df.groupby(["local", "nombre"])["incentivo"]
+                .agg(["count", "sum"])
+                .reset_index()
+                .rename(
                     columns={
-                        "fecha": "Fecha", "local": "Local", "turno": "Turno",
-                        "corte": "Corte", "nombre_cierre": "Cerró",
-                        "apertura": "Apertura (S/)", "cierre": "Cierre (S/)",
-                        "diferencia_fmt": "Diferencia (S/)", "estado": "Estado",
+                        "local": "Local",
+                        "nombre": "Nombre",
+                        "count": "Encuestas pendientes",
+                        "sum": "Monto pendiente (S/)",
                     }
                 )
-            ),
-            width="stretch",
-            hide_index=True,
-        )
-
-        st.markdown("**Revisión corte por corte** (Apertura vs Cierre, campo por campo):")
-        for _, c in cortes_persona.iterrows():
-            encabezado = (
-                f"{c['fecha']} · {c['local']} · {c['turno']} · corte {c['corte']} · "
-                f"{c['diferencia_fmt']} · {c['estado']}"
+                .sort_values("Monto pendiente (S/)", ascending=False)
             )
-            with st.expander(encabezado):
-                id_ap, id_ci = c["id_apertura"], c["id_cierre"]
-                if (
-                    id_ap in _registros_por_id.index
-                    and id_ci in _registros_por_id.index
-                ):
-                    _comparar_par(
-                        _registros_por_id.loc[id_ap], _registros_por_id.loc[id_ci]
-                    )
-                else:
-                    st.caption("Este corte no tiene Apertura y Cierre completos para comparar.")
+            st.dataframe(sh.arrow_safe(resumen_por_nombre), width="stretch", hide_index=True)
 
-# ---------------------------------------------------------------------
-# Tabla consolidada
-# ---------------------------------------------------------------------
-st.subheader("🗂️ Registros")
-columnas_fotos = [c for c in df_filtrado.columns if c.startswith("foto_")]
-st.dataframe(
-    sh.arrow_safe(df_filtrado.drop(columns=columnas_fotos)),
-    width="stretch",
-    hide_index=True,
-)
-
-with st.expander("Ver links de fotos de un registro"):
-    if not df_filtrado.empty:
-        id_elegido = st.selectbox("ID de registro", df_filtrado["id"])
-        fila = df_filtrado[df_filtrado["id"] == id_elegido].iloc[0]
-        for col in columnas_fotos:
-            if fila[col]:
-                st.markdown(f"- [{col}]({fila[col]})")
-
-# ---------------------------------------------------------------------
-# Incentivos por encuestas NPS (S/ 10 por encuesta calificada 9 o 10)
-#
-# Viene del incentivo interno del negocio: reemplaza el Google Form
-# aparte que se usaba para esto. El personal registra cada encuesta
-# desde pages/4_Encuestas.py (con el PIN de su local); cambiar el
-# estado de pago SOLO se hace aca, protegido con tu PIN de dueno, para
-# que nadie pueda marcar su propio incentivo como pagado (o invalidarlo)
-# sin que tu lo hayas revisado.
-# ---------------------------------------------------------------------
-st.divider()
-st.subheader("⭐ Incentivos por encuestas NPS (S/ 10 c/u)")
-
-ESTADOS_PAGO_ENCUESTA = ["Pendiente", "Pagada", "No válido"]
-
-encuestas_df = sh.get_encuestas_df()
-
-if encuestas_df.empty:
-    st.caption("Todavia no se ha registrado ninguna encuesta NPS.")
-else:
-    pendientes_df = encuestas_df[encuestas_df["estado_pago"] == "Pendiente"]
-    pagadas_df = encuestas_df[encuestas_df["estado_pago"] == "Pagada"]
-    no_validas_df = encuestas_df[encuestas_df["estado_pago"] == "No válido"]
-
-    colA, colB, colC, colD = st.columns(4)
-    colA.metric("Encuestas totales", len(encuestas_df))
-    colB.metric(
-        "Pendientes de pago",
-        f"{len(pendientes_df)} (S/ {pendientes_df['incentivo'].sum():,.2f})",
-    )
-    colC.metric(
-        "Ya pagadas",
-        f"{len(pagadas_df)} (S/ {pagadas_df['incentivo'].sum():,.2f})",
-    )
-    colD.metric("No validas", len(no_validas_df))
-
-    st.caption("Cuanto se le debe a cada trabajador (solo lo pendiente):")
-    if pendientes_df.empty:
-        st.success("No hay incentivos pendientes de pago. 👍")
-    else:
-        resumen_por_nombre = (
-            pendientes_df.groupby(["local", "nombre"])["incentivo"]
-            .agg(["count", "sum"])
-            .reset_index()
-            .rename(
-                columns={
-                    "local": "Local",
-                    "nombre": "Nombre",
-                    "count": "Encuestas pendientes",
-                    "sum": "Monto pendiente (S/)",
-                }
+        st.markdown("**Detalle de encuestas (ver capturas y cambiar estado):**")
+        for _, fila_encuesta in encuestas_df.sort_values("timestamp", ascending=False).iterrows():
+            titulo_encuesta = (
+                f"{fila_encuesta['fecha']} · {fila_encuesta['local']} · {fila_encuesta['nombre']} "
+                f"· Nota {fila_encuesta['nota']} · {fila_encuesta['estado_pago']}"
             )
-            .sort_values("Monto pendiente (S/)", ascending=False)
-        )
-        st.dataframe(sh.arrow_safe(resumen_por_nombre), width="stretch", hide_index=True)
+            with st.expander(titulo_encuesta):
+                # Chicas por defecto; con el check se ven a ancho completo. Las
+                # sirve la app (no un link de Drive), asi funciona aunque la
+                # carpeta de Drive no este compartida.
+                id_enc = fila_encuesta["id"]
+                for campo, etiqueta in [
+                    ("captura_correo", "Correo"),
+                    ("captura_mensaje_exito", "Mensaje de éxito"),
+                ]:
+                    imagen = sh.descargar_imagen_drive(fila_encuesta[campo])
+                    if imagen:
+                        grande = st.checkbox(
+                            f"🔍 Ver «{etiqueta}» más grande", key=f"zoom_{id_enc}_{campo}"
+                        )
+                        sh.mostrar_imagen(
+                            imagen, ancho_px=None if grande else 260, caption=etiqueta
+                        )
+                    else:
+                        st.caption(f"{etiqueta}: no se pudo cargar.")
 
-    st.markdown("**Detalle de encuestas (ver capturas y cambiar estado):**")
-    for _, fila_encuesta in encuestas_df.sort_values("timestamp", ascending=False).iterrows():
-        titulo_encuesta = (
-            f"{fila_encuesta['fecha']} · {fila_encuesta['local']} · {fila_encuesta['nombre']} "
-            f"· Nota {fila_encuesta['nota']} · {fila_encuesta['estado_pago']}"
-        )
-        with st.expander(titulo_encuesta):
-            # Chicas por defecto; con el check se ven a ancho completo. Las
-            # sirve la app (no un link de Drive), asi funciona aunque la
-            # carpeta de Drive no este compartida.
-            id_enc = fila_encuesta["id"]
-            for campo, etiqueta in [
-                ("captura_correo", "Correo"),
-                ("captura_mensaje_exito", "Mensaje de éxito"),
-            ]:
-                imagen = sh.descargar_imagen_drive(fila_encuesta[campo])
-                if imagen:
-                    grande = st.checkbox(
-                        f"🔍 Ver «{etiqueta}» más grande", key=f"zoom_{id_enc}_{campo}"
-                    )
-                    sh.mostrar_imagen(
-                        imagen, ancho_px=None if grande else 260, caption=etiqueta
-                    )
-                else:
-                    st.caption(f"{etiqueta}: no se pudo cargar.")
-
-            estado_actual = fila_encuesta["estado_pago"]
-            if estado_actual not in ESTADOS_PAGO_ENCUESTA:
-                estado_actual = "Pendiente"
-            nuevo_estado = st.selectbox(
-                "Estado",
-                ESTADOS_PAGO_ENCUESTA,
-                index=ESTADOS_PAGO_ENCUESTA.index(estado_actual),
-                key=f"estado_{fila_encuesta['id']}",
-            )
-            if nuevo_estado != estado_actual:
-                sh.actualizar_estado_pago(fila_encuesta["id"], nuevo_estado)
-                st.rerun()
+                estado_actual = fila_encuesta["estado_pago"]
+                if estado_actual not in ESTADOS_PAGO_ENCUESTA:
+                    estado_actual = "Pendiente"
+                nuevo_estado = st.selectbox(
+                    "Estado",
+                    ESTADOS_PAGO_ENCUESTA,
+                    index=ESTADOS_PAGO_ENCUESTA.index(estado_actual),
+                    key=f"estado_{fila_encuesta['id']}",
+                )
+                if nuevo_estado != estado_actual:
+                    sh.actualizar_estado_pago(fila_encuesta["id"], nuevo_estado)
+                    st.rerun()
