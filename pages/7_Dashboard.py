@@ -797,14 +797,31 @@ with tab_cuadre:
     # nombre, igual va a quien abrio). Aca se suma, en el rango de fechas
     # filtrado, cuanto descuadre acumula cada persona -- para ver de un
     # vistazo si alguien viene arrastrando diferencias.
+    #
+    # Los turnos que ya quedaron "🔷 Autorizado" (la diferencia tiene un
+    # retiro/ingreso registrado por administración que la explica) NO
+    # entran a esta suma -- ya no es un descuadre real, y sumarlo aca
+    # haría ver a la persona como si arrastrara una diferencia que en
+    # realidad ya está resuelta.
     # -------------------------------------------------------------
     st.subheader("👤 Acumulado de diferencias por persona")
     st.caption(
         "En el rango de fechas filtrado. La diferencia de cada corte se le "
-        "atribuye a quien abrió. Ordenado por descuadre total (sin importar el signo)."
+        "atribuye a quien abrió. No incluye turnos ya '🔷 Autorizado'. "
+        "Ordenado por descuadre total (sin importar el signo)."
     )
 
-    acumulado = sh.acumulado_por_persona(cortes)
+    _turnos_autorizados = set(
+        resumen.loc[resumen["estado"] == "🔷 Autorizado", ["local", "fecha", "turno"]]
+        .itertuples(index=False, name=None)
+    )
+    if _turnos_autorizados:
+        _claves_cortes = list(zip(cortes["local"], cortes["fecha"], cortes["turno"]))
+        cortes_acumulado = cortes[[c not in _turnos_autorizados for c in _claves_cortes]]
+    else:
+        cortes_acumulado = cortes
+
+    acumulado = sh.acumulado_por_persona(cortes_acumulado)
     if acumulado.empty:
         st.caption("Todavía no hay cortes completos en el rango seleccionado.")
     else:
