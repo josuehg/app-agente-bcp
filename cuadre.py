@@ -38,7 +38,7 @@ import pandas as pd
 UMBRAL_VERDE = 1.0  # 0 a S/1: cuadrado (redondeos normales); mas de S/1: diferencia
 
 ESTADO_CUADRADO = "✅ Cuadrado"
-ESTADO_GRANDE = "🔴 Diferencia grande"
+ESTADO_GRANDE = "🔴 Diferencia"
 ESTADO_ABIERTO = "⏳ Apertura sin Cierre"
 ESTADO_CIERRE_SUELTO = "⚠️ Cierre sin Apertura"
 ESTADO_NOMBRE_DISTINTO = "⚠️ Cerró otro nombre"

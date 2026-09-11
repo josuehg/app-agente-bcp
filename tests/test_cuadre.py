@@ -74,7 +74,7 @@ def test_corte_diferencia_grande(r):
 
 def test_corte_umbral_binario_sin_estado_intermedio(r):
     # Semaforo binario: hasta S/1 de diferencia cuadra (redondeos), mas de
-    # S/1 ya es "Diferencia grande" -- no hay un tercer estado intermedio.
+    # S/1 ya es "Diferencia" -- no hay un tercer estado intermedio.
     t_borde = _cortes([r("Apertura", 5000.00, "Ana"), r("Cierre", 5001.00, "Ana")])
     assert t_borde.iloc[0]["estado"] == ESTADO_CUADRADO
 

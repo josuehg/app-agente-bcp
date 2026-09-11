@@ -425,7 +425,7 @@ with tab_cuadre:
         dif_abs = abs(diferencia)
         if dif_abs <= 1.0:
             return "✅ Coincide"
-        return "🔴 Diferencia grande"
+        return "🔴 Diferencia"
 
 
     # Retiros/ingresos que la administración ya autorizó (ver más abajo, se
@@ -499,7 +499,7 @@ with tab_cuadre:
         if cont_df.empty:
             st.caption("No hay comparaciones en el rango de fechas seleccionado.")
         else:
-            con_diferencia = int((cont_df["Estado"] == "🔴 Diferencia grande").sum())
+            con_diferencia = int((cont_df["Estado"] == "🔴 Diferencia").sum())
             if con_diferencia:
                 st.error(
                     f"⚠️ {con_diferencia} caso(s) donde el fondo cambió entre el "
@@ -653,7 +653,7 @@ with tab_cuadre:
         if abs(restante) <= sh.UMBRAL_VERDE:
             nuevo_estado = "🔷 Autorizado"
         else:
-            nuevo_estado = "🔴 Diferencia grande"
+            nuevo_estado = "🔴 Diferencia"
         return pd.Series({"estado": nuevo_estado, "_ajuste_total": ajuste_total, "_restante": restante})
 
 
@@ -681,7 +681,7 @@ with tab_cuadre:
     )
     st.caption(
         "**+** = sobró (el Cierre quedó por encima de la Apertura), **−** = faltó. "
-        "🔴 Diferencia grande = más de S/1 sin explicar. "
+        "🔴 Diferencia = más de S/1 sin explicar. "
         "⚠️ Revisar secuencia = al turno le falta un Cierre o hay un Cierre sin Apertura."
     )
 
