@@ -858,11 +858,18 @@ def actualizar_estado_pago(id_encuesta: str, nuevo_estado: str) -> None:
 # Ajustes de fondo (retiros/ingresos autorizados por administracion)
 #
 # Cuando el dueno retira o deposita efectivo/saldo de un local FUERA de
-# un turno (p.ej. saca S/1000 de la tarjeta despues de que cerraron), el
-# fondo cambia sin que haya un error de registro. Sin esto, "Continuidad
-# entre dias" (pages/7_Dashboard.py) lo marcaria como una diferencia
-# sospechosa. Cada ajuste se registra aca (con motivo) y se resta de esa
-# comparacion, para distinguir un retiro autorizado de un faltante real.
+# un turno (p.ej. saca S/1000 de la tarjeta), el fondo cambia sin que haya
+# un error de registro. Sin esto, tanto "Continuidad entre dias" como
+# "Cuadre por turno" (pages/7_Dashboard.py) lo marcarian como una
+# diferencia sospechosa. Cada ajuste se registra aca (con motivo) y se
+# resta de la comparacion correspondiente.
+#
+# Un mismo ajuste aplica a UNA de estas dos cosas, segun la columna
+# "turno":
+# - turno = "" (vacio): es un ajuste "de la noche", se resta en
+#   Continuidad entre dias (compara local+fecha, sin importar el turno).
+# - turno = "Mañana" / "Tarde": es un ajuste de UN turno especifico, se
+#   resta en Cuadre por turno (compara local+fecha+turno).
 # ---------------------------------------------------------------------
 
 NOMBRE_HOJA_AJUSTES = "Ajustes"
@@ -870,14 +877,18 @@ COLUMNAS_AJUSTES = [
     "id",
     "timestamp",
     "local",
-    # La fecha del CIERRE del dia anterior a la Apertura que se compara
-    # -- el ajuste "vive" en la noche entre esos dos registros.
+    # Continuidad: fecha del CIERRE del dia anterior a la Apertura que se
+    # compara. Cuadre por turno: la fecha de ESE turno.
     "fecha",
     # Cuanto cambio el fondo a proposito: negativo = retiro, positivo =
-    # ingreso. Mismo signo que "Diferencia (S/)" de Continuidad entre dias.
+    # ingreso. Mismo signo que "Diferencia (S/)".
     "monto",
     "motivo",
     "autorizado_por",
+    # Agregada AL FINAL a proposito (ver _get_or_create_worksheet): asi
+    # los ajustes guardados antes de que existiera esta columna no quedan
+    # con los datos corridos -- simplemente quedan con turno = "".
+    "turno",
 ]
 
 

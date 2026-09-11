@@ -416,11 +416,17 @@ def _semaforo_continuidad(diferencia: float) -> str:
 # Retiros/ingresos que la administración ya autorizó (ver más abajo, se
 # registran desde esta misma sección). Se restan de la diferencia antes
 # de poner el semáforo -- así un retiro tuyo no sale como faltante.
+# Solo los ajustes "de la noche" (turno vacío) aplican aquí; los de un
+# turno especifico son para "Cuadre por turno", más abajo.
 ajustes_df = sh.get_ajustes_df()
 if ajustes_df.empty:
+    ajustes_continuidad = ajustes_df
     ajuste_por_local_fecha = {}
 else:
-    ajuste_por_local_fecha = ajustes_df.groupby(["local", "fecha"])["monto"].sum().to_dict()
+    ajustes_continuidad = ajustes_df[ajustes_df["turno"] == ""]
+    ajuste_por_local_fecha = (
+        ajustes_continuidad.groupby(["local", "fecha"])["monto"].sum().to_dict()
+    )
 
 registros_sel = df[df["local"].isin(locales_sel)].sort_values("timestamp")
 filas_continuidad = []
@@ -527,10 +533,11 @@ else:
                     st.caption("No se encontraron los dos registros para comparar.")
 
                 # Ajustes ya registrados para este local+día, si hay.
-                clave_ajuste = f"{fila['_local']}|{fila['_fecha']}"
-                if not ajustes_df.empty:
-                    previos = ajustes_df[
-                        (ajustes_df["local"] == fila["_local"]) & (ajustes_df["fecha"] == fila["_fecha"])
+                clave_ajuste = f"cont|{fila['_local']}|{fila['_fecha']}"
+                if not ajustes_continuidad.empty:
+                    previos = ajustes_continuidad[
+                        (ajustes_continuidad["local"] == fila["_local"])
+                        & (ajustes_continuidad["fecha"] == fila["_fecha"])
                     ]
                     if not previos.empty:
                         st.markdown("**Ajustes ya registrados para este día:**")
@@ -573,6 +580,7 @@ else:
                                 "monto": monto_ajuste,
                                 "motivo": motivo_ajuste.strip(),
                                 "autorizado_por": autorizo.strip(),
+                                "turno": "",  # ajuste "de la noche" (Continuidad entre días)
                             }
                         )
                         st.success("Ajuste guardado.")
@@ -598,6 +606,43 @@ cortes = sh.calcular_cortes(df_filtrado, INDICE_TURNO)
 resumen = sh.resumen_turnos(cortes, INDICE_TURNO)
 resumen = resumen.sort_values(["fecha", "local", "turno"], ascending=[False, True, True])
 
+# Ajustes de UN turno especifico (turno != "", a diferencia de los "de la
+# noche" que usa Continuidad entre días) ya autorizados por
+# administración: se restan de la diferencia de ESE turno antes del
+# semáforo. Si explican todo -> "🔷 Autorizado"; los estados de secuencia
+# (⚠️) no se tocan, esos son problemas estructurales, no de monto.
+if ajustes_df.empty:
+    ajustes_turno = ajustes_df
+    ajuste_turno_por_clave = {}
+else:
+    ajustes_turno = ajustes_df[ajustes_df["turno"] != ""]
+    ajuste_turno_por_clave = (
+        ajustes_turno.groupby(["local", "fecha", "turno"])["monto"].sum().to_dict()
+    )
+
+
+def _con_ajuste_turno(fila):
+    ajuste_total = float(
+        ajuste_turno_por_clave.get((fila["local"], fila["fecha"], fila["turno"]), 0.0)
+    )
+    diferencia = fila["diferencia"]
+    if ajuste_total == 0 or pd.isna(diferencia) or str(fila["estado"]).startswith("⚠️"):
+        return pd.Series({"estado": fila["estado"], "_ajuste_total": ajuste_total, "_restante": diferencia})
+    restante = diferencia - ajuste_total
+    if abs(restante) <= sh.UMBRAL_VERDE:
+        nuevo_estado = "🔷 Autorizado"
+    elif abs(restante) <= sh.UMBRAL_AMARILLO:
+        nuevo_estado = "🟡 Revisar"
+    else:
+        nuevo_estado = "🔴 Diferencia grande"
+    return pd.Series({"estado": nuevo_estado, "_ajuste_total": ajuste_total, "_restante": restante})
+
+
+_ajustado_turno = resumen.apply(_con_ajuste_turno, axis=1)
+resumen["estado"] = _ajustado_turno["estado"]
+resumen["_ajuste_total"] = _ajustado_turno["_ajuste_total"]
+resumen["_restante"] = _ajustado_turno["_restante"]
+
 st.dataframe(
     sh.arrow_safe(
         resumen.rename(
@@ -610,7 +655,7 @@ st.dataframe(
                 "diferencia_fmt": "Diferencia total (S/)",
                 "estado": "Estado",
             }
-        ).drop(columns=["diferencia"])
+        ).drop(columns=["diferencia", "_ajuste_total", "_restante"])
     ),
     width="stretch",
     hide_index=True,
@@ -651,6 +696,66 @@ with st.expander("Ver corte por corte"):
             width="stretch",
             hide_index=True,
         )
+
+# Registrar/ver ajustes de un turno especifico (distinto de los "de la
+# noche" de Continuidad entre días). Solo para los que aun no cuadran ni
+# estan ya autorizados, y que no son un problema de secuencia (esos se
+# arreglan registrando bien, no con un ajuste de monto).
+_sospechosos_turno = resumen[
+    ~resumen["estado"].isin(["✅ Cuadrado", "🔷 Autorizado"])
+    & ~resumen["estado"].astype(str).str.startswith("⚠️")
+]
+if not _sospechosos_turno.empty:
+    st.markdown("**Registrar retiro/ingreso autorizado de un turno**")
+    for _, fila in _sospechosos_turno.iterrows():
+        titulo = f"{fila['local']} · {fila['fecha']} · {fila['turno']} · {fila['diferencia_fmt']} · {fila['estado']}"
+        with st.expander(titulo):
+            clave_t = f"turno|{fila['local']}|{fila['fecha']}|{fila['turno']}"
+            if not ajustes_turno.empty:
+                previos_t = ajustes_turno[
+                    (ajustes_turno["local"] == fila["local"])
+                    & (ajustes_turno["fecha"] == fila["fecha"])
+                    & (ajustes_turno["turno"] == fila["turno"])
+                ]
+                if not previos_t.empty:
+                    st.markdown("**Ajustes ya registrados para este turno:**")
+                    for _, aj in previos_t.iterrows():
+                        st.caption(
+                            f"S/ {aj['monto']:+,.2f} — {aj['motivo']} "
+                            f"(autorizó: {aj['autorizado_por'] or '—'})"
+                        )
+            col_m, col_q = st.columns(2)
+            monto_t = col_m.number_input(
+                "Monto (negativo = retiro, positivo = ingreso)",
+                value=round(float(fila["_restante"]), 2),
+                step=10.0,
+                key=f"aj_t_monto_{clave_t}",
+            )
+            quien_t = col_q.text_input("Quién autoriza", key=f"aj_t_quien_{clave_t}")
+            motivo_t = st.text_area(
+                "Motivo",
+                key=f"aj_t_motivo_{clave_t}",
+                placeholder="Ej: retiro de efectivo a media tarde",
+            )
+            if st.button("✅ Registrar ajuste", key=f"aj_t_btn_{clave_t}"):
+                if not motivo_t.strip() or not quien_t.strip():
+                    st.error("Completa quién autoriza y el motivo antes de guardar.")
+                else:
+                    ahora_t = sh.ahora_local()
+                    sh.guardar_ajuste(
+                        {
+                            "id": sh.nuevo_id(),
+                            "timestamp": ahora_t.replace(tzinfo=None).isoformat(timespec="seconds"),
+                            "local": fila["local"],
+                            "fecha": fila["fecha"].isoformat(),
+                            "monto": monto_t,
+                            "motivo": motivo_t.strip(),
+                            "autorizado_por": quien_t.strip(),
+                            "turno": fila["turno"],
+                        }
+                    )
+                    st.success("Ajuste guardado.")
+                    st.rerun()
 
 # Para el grafico dejamos fuera los turnos con la secuencia rota (su suma
 # de diferencias es parcial y engaña); los de "Cerró otro nombre" sí van.
