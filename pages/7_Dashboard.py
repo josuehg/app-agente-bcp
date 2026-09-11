@@ -413,6 +413,15 @@ def _semaforo_continuidad(diferencia: float) -> str:
     return "🔴 Diferencia grande"
 
 
+# Retiros/ingresos que la administración ya autorizó (ver más abajo, se
+# registran desde esta misma sección). Se restan de la diferencia antes
+# de poner el semáforo -- así un retiro tuyo no sale como faltante.
+ajustes_df = sh.get_ajustes_df()
+if ajustes_df.empty:
+    ajuste_por_local_fecha = {}
+else:
+    ajuste_por_local_fecha = ajustes_df.groupby(["local", "fecha"])["monto"].sum().to_dict()
+
 registros_sel = df[df["local"].isin(locales_sel)].sort_values("timestamp")
 filas_continuidad = []
 for nombre_local, grupo_local in registros_sel.groupby("local", sort=True):
@@ -433,18 +442,29 @@ for nombre_local, grupo_local in registros_sel.groupby("local", sort=True):
         cierre = _num(fila_cierre.get("total"))
         apertura = _num(fila_apertura.get("total"))
         diferencia = apertura - cierre
+        ajuste_total = float(ajuste_por_local_fecha.get((nombre_local, dia_cierre), 0.0))
+        restante = diferencia - ajuste_total
+        if ajuste_total != 0 and abs(restante) <= 1.0:
+            estado = "🔷 Autorizado"
+        else:
+            estado = _semaforo_continuidad(restante)
         filas_continuidad.append(
             {
                 "_fecha": dia_cierre,
                 "_id_cierre": str(fila_cierre.get("id", "")),
                 "_id_apertura": str(fila_apertura.get("id", "")),
+                "_local": nombre_local,
+                "_ajuste_total": ajuste_total,
+                "_restante": restante,
                 "Local": nombre_local,
                 "Cierre del día": dia_cierre,
                 "Cierre (S/)": round(cierre, 2),
                 "Abre el día": dia_apertura,
                 "Apertura (S/)": round(apertura, 2),
                 "Diferencia (S/)": f"{diferencia:+,.2f}",
-                "Estado": _semaforo_continuidad(diferencia),
+                "Ajuste autorizado (S/)": f"{ajuste_total:+,.2f}" if ajuste_total else "",
+                "Restante (S/)": f"{restante:+,.2f}",
+                "Estado": estado,
             }
         )
 
@@ -462,17 +482,25 @@ else:
         if con_diferencia:
             st.error(
                 f"⚠️ {con_diferencia} caso(s) donde el fondo cambió entre el "
-                f"cierre de un día y la apertura del siguiente."
+                f"cierre de un día y la apertura del siguiente, sin autorización registrada."
             )
         else:
-            st.success("Todos los cierres coinciden con la apertura del día siguiente. 👍")
+            st.success("Todos los cierres coinciden (o están autorizados) con la apertura del día siguiente. 👍")
         st.dataframe(
-            sh.arrow_safe(cont_df.drop(columns=["_fecha", "_id_cierre", "_id_apertura"])),
+            sh.arrow_safe(
+                cont_df.drop(
+                    columns=["_fecha", "_id_cierre", "_id_apertura", "_local", "_ajuste_total", "_restante"]
+                )
+            ),
             width="stretch",
             hide_index=True,
         )
+        st.caption(
+            "🔷 Autorizado = tiene un retiro/ingreso registrado por administración que explica "
+            "la diferencia. Ábrelo para ver el motivo o registrar uno nuevo."
+        )
 
-        # Detalle campo por campo de los casos 🟡 / 🔴.
+        # Detalle campo por campo + registrar retiro/ingreso autorizado.
         sospechosos = cont_df[cont_df["Estado"] != "✅ Coincide"]
         for _, fila in sospechosos.iterrows():
             titulo = (
@@ -497,6 +525,58 @@ else:
                     )
                 else:
                     st.caption("No se encontraron los dos registros para comparar.")
+
+                # Ajustes ya registrados para este local+día, si hay.
+                clave_ajuste = f"{fila['_local']}|{fila['_fecha']}"
+                if not ajustes_df.empty:
+                    previos = ajustes_df[
+                        (ajustes_df["local"] == fila["_local"]) & (ajustes_df["fecha"] == fila["_fecha"])
+                    ]
+                    if not previos.empty:
+                        st.markdown("**Ajustes ya registrados para este día:**")
+                        for _, aj in previos.iterrows():
+                            st.caption(
+                                f"S/ {aj['monto']:+,.2f} — {aj['motivo']} "
+                                f"(autorizó: {aj['autorizado_por'] or '—'})"
+                            )
+
+                st.markdown("**Registrar retiro/ingreso autorizado por administración**")
+                st.caption(
+                    "Esto queda guardado con fecha, motivo y quién lo autorizó, y se resta "
+                    "de la diferencia de este local/día en adelante."
+                )
+                col_monto, col_quien = st.columns(2)
+                monto_ajuste = col_monto.number_input(
+                    "Monto (negativo = retiro, positivo = ingreso)",
+                    value=round(fila["_restante"], 2),
+                    step=10.0,
+                    key=f"ajuste_monto_{clave_ajuste}",
+                )
+                autorizo = col_quien.text_input(
+                    "Quién autoriza", key=f"ajuste_quien_{clave_ajuste}"
+                )
+                motivo_ajuste = st.text_area(
+                    "Motivo", key=f"ajuste_motivo_{clave_ajuste}",
+                    placeholder="Ej: retiro de efectivo para depósito en banco",
+                )
+                if st.button("✅ Registrar ajuste", key=f"ajuste_btn_{clave_ajuste}"):
+                    if not motivo_ajuste.strip() or not autorizo.strip():
+                        st.error("Completa quién autoriza y el motivo antes de guardar.")
+                    else:
+                        ahora_aj = sh.ahora_local()
+                        sh.guardar_ajuste(
+                            {
+                                "id": sh.nuevo_id(),
+                                "timestamp": ahora_aj.replace(tzinfo=None).isoformat(timespec="seconds"),
+                                "local": fila["_local"],
+                                "fecha": fila["_fecha"].isoformat(),
+                                "monto": monto_ajuste,
+                                "motivo": motivo_ajuste.strip(),
+                                "autorizado_por": autorizo.strip(),
+                            }
+                        )
+                        st.success("Ajuste guardado.")
+                        st.rerun()
 
 # ---------------------------------------------------------------------
 # Cuadre por turno (cortes Apertura -> Cierre)

@@ -852,3 +852,52 @@ def actualizar_estado_pago(id_encuesta: str, nuevo_estado: str) -> None:
     columna_estado = COLUMNAS_ENCUESTAS.index("estado_pago") + 1
     ws.update_cell(celda.row, columna_estado, nuevo_estado)
     get_encuestas_df.clear()
+
+
+# ---------------------------------------------------------------------
+# Ajustes de fondo (retiros/ingresos autorizados por administracion)
+#
+# Cuando el dueno retira o deposita efectivo/saldo de un local FUERA de
+# un turno (p.ej. saca S/1000 de la tarjeta despues de que cerraron), el
+# fondo cambia sin que haya un error de registro. Sin esto, "Continuidad
+# entre dias" (pages/7_Dashboard.py) lo marcaria como una diferencia
+# sospechosa. Cada ajuste se registra aca (con motivo) y se resta de esa
+# comparacion, para distinguir un retiro autorizado de un faltante real.
+# ---------------------------------------------------------------------
+
+NOMBRE_HOJA_AJUSTES = "Ajustes"
+COLUMNAS_AJUSTES = [
+    "id",
+    "timestamp",
+    "local",
+    # La fecha del CIERRE del dia anterior a la Apertura que se compara
+    # -- el ajuste "vive" en la noche entre esos dos registros.
+    "fecha",
+    # Cuanto cambio el fondo a proposito: negativo = retiro, positivo =
+    # ingreso. Mismo signo que "Diferencia (S/)" de Continuidad entre dias.
+    "monto",
+    "motivo",
+    "autorizado_por",
+]
+
+
+def guardar_ajuste(datos: dict) -> None:
+    ws = _get_or_create_worksheet(NOMBRE_HOJA_AJUSTES, COLUMNAS_AJUSTES)
+    fila = [datos.get(col, "") for col in COLUMNAS_AJUSTES]
+    ws.append_row(fila)
+    get_ajustes_df.clear()
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def get_ajustes_df() -> pd.DataFrame:
+    ws = _get_or_create_worksheet(NOMBRE_HOJA_AJUSTES, COLUMNAS_AJUSTES)
+    registros = ws.get_all_records()
+    df = pd.DataFrame(registros, columns=COLUMNAS_AJUSTES)
+    if df.empty:
+        return df
+    df = _texto_seguro(df, {"fecha", "timestamp", "monto"})
+    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce").dt.date
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    df["monto"] = pd.to_numeric(df["monto"], errors="coerce").fillna(0)
+    df["autorizado_por"] = _normalizar_nombre(df["autorizado_por"])
+    return df
