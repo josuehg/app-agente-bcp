@@ -17,6 +17,7 @@ trabajador puede registrar una encuesta nueva y ver el estado (Pendiente
 """
 
 import streamlit as st
+from googleapiclient.errors import HttpError
 
 import sheets_utils as sh
 
@@ -140,6 +141,23 @@ def _dialogo_confirmar_encuesta():
                     ),
                 }
                 sh.guardar_encuesta(datos)
+        except ValueError as error:
+            # Captura subida incompleta (se corto la conexion). Hay que
+            # volver a adjuntarla, no solo reintentar.
+            st.error(str(error))
+            st.stop()
+        except HttpError as error:
+            # Google respondio con un rechazo estructurado (404/403/etc),
+            # no un corte de red -- casi siempre es la carpeta de Drive mal
+            # configurada (drive_folder_id) o sin permisos. Reintentar no
+            # arregla esto: hay que avisarle a administracion.
+            st.error(
+                "No se pudo guardar: hay un problema de configuración de "
+                "Google Drive (no es tu conexión ni tu wifi). Avisa a "
+                "administración -- nada de lo que escribiste se perdió."
+            )
+            st.caption(f"Detalle tecnico: {error}")
+            st.stop()
         except Exception as error:
             st.error(
                 "No se pudo guardar: parece que se corto la conexion a "
