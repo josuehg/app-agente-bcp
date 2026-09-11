@@ -356,6 +356,54 @@ with tab_operaciones:
     else:
         st.caption("No hay cierres en el rango seleccionado para graficar.")
 
+    st.subheader("🕐 Movimientos por turno")
+    st.caption(
+        "Operaciones registradas en los Cierres, agrupadas por turno "
+        "(Mañana / Tarde), en el rango de fechas filtrado."
+    )
+
+    if _cierres_ops.empty or _cierres_ops["num_operaciones"].sum() == 0:
+        st.caption("No hay operaciones registradas en el rango seleccionado.")
+    else:
+        orden_turnos = sorted(_cierres_ops["turno"].dropna().unique())
+        ops_turno = (
+            _cierres_ops.groupby("turno")["num_operaciones"]
+            .sum()
+            .reindex(orden_turnos)
+            .fillna(0)
+            .reset_index()
+        )
+        fig_ops_turno = px.bar(
+            ops_turno,
+            x="turno",
+            y="num_operaciones",
+            labels={"turno": "Turno", "num_operaciones": "N° de operaciones"},
+        )
+        st.plotly_chart(fig_ops_turno, width="stretch")
+
+        total_ops_turnos = ops_turno["num_operaciones"].sum()
+        if total_ops_turnos:
+            for _, fila_t in ops_turno.iterrows():
+                pct = fila_t["num_operaciones"] / total_ops_turnos * 100
+                st.caption(
+                    f"**{fila_t['turno']}**: {int(fila_t['num_operaciones']):,} "
+                    f"operaciones ({pct:.0f}% del total)."
+                )
+
+        with st.expander("Ver turno por local"):
+            ops_turno_local = (
+                _cierres_ops.groupby(["turno", "local"])["num_operaciones"].sum().reset_index()
+            )
+            fig_ops_turno_local = px.bar(
+                ops_turno_local,
+                x="turno",
+                y="num_operaciones",
+                color="local",
+                barmode="group",
+                labels={"turno": "Turno", "num_operaciones": "N° de operaciones", "local": "Local"},
+            )
+            st.plotly_chart(fig_ops_turno_local, width="stretch")
+
     st.subheader("📉 Evolucion del fondo total (efectivo + tarjeta) por local")
     st.caption(
         "Se grafica el TOTAL, no solo el efectivo, porque el fondo rota entre "
