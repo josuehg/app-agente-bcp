@@ -164,6 +164,13 @@ with tab_resumen:
     cierres = df[df["tipo"] == "Cierre"].sort_values("timestamp")
     ultimo_cierre_por_local = cierres.groupby("local").tail(1).set_index("local")
 
+    # El fondo mostrado en la alerta sale del ULTIMO CIERRE (es lo contado);
+    # pero el ULTIMO CORTE de cualquier tipo (Apertura o Cierre, el que sea
+    # mas reciente) dice si el local esta abierto ahora mismo o no, y quien
+    # y cuando lo registro -- eso ayuda a saber que tan al dia esta la
+    # alerta.
+    ultimo_registro_por_local = df.sort_values("timestamp").groupby("local").tail(1).set_index("local")
+
     alertas = []
     for _, fila in config_df.iterrows():
         local = fila["local"]
@@ -175,9 +182,20 @@ with tab_resumen:
 
     if alertas:
         for local, fondo_actual, fondo_minimo in alertas:
+            detalle_ultimo = ""
+            if local in ultimo_registro_por_local.index:
+                ur = ultimo_registro_por_local.loc[local]
+                hora_ur = ""
+                if pd.notna(ur.get("timestamp")):
+                    hora_ur = pd.to_datetime(ur["timestamp"]).strftime("%H:%M")
+                nombre_ur = str(ur.get("nombre", "")).strip() or "—"
+                detalle_ultimo = (
+                    f"  \nÚltimo corte: **{ur.get('tipo', '')}** por **{nombre_ur}** "
+                    f"— {ur.get('fecha', '')} {hora_ur}"
+                )
             st.error(
                 f"**{local}**: fondo total en S/ {fondo_actual:,.2f} "
-                f"(minimo configurado: S/ {fondo_minimo:,.2f})"
+                f"(minimo configurado: S/ {fondo_minimo:,.2f}){detalle_ultimo}"
             )
     else:
         st.success("Todos los locales estan por encima de su fondo minimo. 👍")
