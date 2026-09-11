@@ -233,6 +233,20 @@ for posicion, (_, fila) in enumerate(df_local.iterrows()):
             st.write("**Fotos:**")
             for col in fotos_presentes:
                 etiqueta = col.replace("foto_voucher_", "").replace("_", " ").capitalize()
+                # Las fotos NO se muestran solas al abrir el registro -- cada
+                # una pesa varios MB en base64 y viaja entera por el
+                # websocket (no por un link aparte, ver mostrar_imagen). Con
+                # varias fotos mostrandose de una en el registro mas
+                # reciente (que se abre solo), en 4G/señal débil el celular
+                # puede cortar a medio mensaje y tirar un "Connection error".
+                # Pidiendo un click por foto, solo se manda lo que el
+                # cajero realmente quiere ver, de a una.
+                mostrar_key = f"mostrar_foto_{fila['id']}_{col}"
+                if not st.session_state.get(mostrar_key, False):
+                    if st.button(f"📷 Ver «{etiqueta}»", key=f"btn_foto_{fila['id']}_{col}"):
+                        st.session_state[mostrar_key] = True
+                        st.rerun()
+                    continue
                 imagen_bytes = sh.descargar_imagen_drive(fila[col])
                 if imagen_bytes:
                     # Chica por defecto; con el check se ve a ancho completo.
