@@ -31,15 +31,13 @@ from __future__ import annotations
 import pandas as pd
 
 # ---------------------------------------------------------------------
-# UMBRALES DEL SEMAFORO (por corte): punto de partida razonable, no una
-# regla fija. Si en la practica quedan muy estrictos o muy sueltos, se
-# cambian estos dos numeros.
+# UMBRAL DEL SEMAFORO (por corte): punto de partida razonable, no una
+# regla fija. Es binario a proposito (sin un estado intermedio "revisar")
+# -- o cuadra dentro de redondeos normales, o hay que mirarlo.
 # ---------------------------------------------------------------------
-UMBRAL_VERDE = 1.0  # 0 a S/1: cuadrado (redondeos normales)
-UMBRAL_AMARILLO = 50.0  # S/1 a S/50: revisar; mas de S/50: diferencia grande
+UMBRAL_VERDE = 1.0  # 0 a S/1: cuadrado (redondeos normales); mas de S/1: diferencia
 
 ESTADO_CUADRADO = "✅ Cuadrado"
-ESTADO_REVISAR = "🟡 Revisar"
 ESTADO_GRANDE = "🔴 Diferencia grande"
 ESTADO_ABIERTO = "⏳ Apertura sin Cierre"
 ESTADO_CIERRE_SUELTO = "⚠️ Cierre sin Apertura"
@@ -71,8 +69,6 @@ def _semaforo(diferencia: float) -> str:
     d = abs(diferencia)
     if d <= UMBRAL_VERDE:
         return ESTADO_CUADRADO
-    if d <= UMBRAL_AMARILLO:
-        return ESTADO_REVISAR
     return ESTADO_GRANDE
 
 
@@ -248,8 +244,6 @@ def _estado_turno(estados: set[str]) -> str:
         return ESTADO_NOMBRE_DISTINTO
     if ESTADO_GRANDE in estados:
         return ESTADO_GRANDE
-    if ESTADO_REVISAR in estados:
-        return ESTADO_REVISAR
     return ESTADO_CUADRADO
 
 

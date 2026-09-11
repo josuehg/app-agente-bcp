@@ -34,7 +34,6 @@ from googleapiclient.http import MediaIoBaseUpload
 # Logica pura del cuadre por turno (no depende de streamlit ni Google).
 # Se re-exporta para que el resto de la app la use como sh.calcular_cortes, etc.
 from cuadre import (  # noqa: F401  (re-export para el resto de la app)
-    UMBRAL_AMARILLO,
     UMBRAL_VERDE,
     acumulado_por_persona,
     calcular_cortes,

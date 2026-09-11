@@ -418,14 +418,13 @@ with tab_cuadre:
 
 
     def _semaforo_continuidad(diferencia: float) -> str:
-        # Mas estricto que el cuadre por turno: de un dia al otro el local
-        # esta cerrado, no hay operaciones que muevan el fondo -- cualquier
-        # diferencia real es sospechosa.
+        # Binario, sin estado intermedio: de un dia al otro el local esta
+        # cerrado, no hay operaciones que muevan el fondo, asi que
+        # cualquier diferencia mayor a redondeos normales (S/1) ya se
+        # marca como sospechosa.
         dif_abs = abs(diferencia)
         if dif_abs <= 1.0:
             return "✅ Coincide"
-        if dif_abs <= 10.0:
-            return "🟡 Revisar"
         return "🔴 Diferencia grande"
 
 
@@ -567,7 +566,7 @@ with tab_cuadre:
                     # explican toda la diferencia), no tiene sentido seguir
                     # mostrando el formulario para registrar OTRO ajuste -- ya
                     # está resuelto. Solo se ofrece el formulario mientras
-                    # falte explicar algo (🟡/🔴).
+                    # falte explicar algo (🔴).
                     if fila["Estado"] != "🔷 Autorizado":
                         st.markdown("**Registrar retiro/ingreso autorizado por administración**")
                         st.caption(
@@ -653,8 +652,6 @@ with tab_cuadre:
         restante = diferencia - ajuste_total
         if abs(restante) <= sh.UMBRAL_VERDE:
             nuevo_estado = "🔷 Autorizado"
-        elif abs(restante) <= sh.UMBRAL_AMARILLO:
-            nuevo_estado = "🟡 Revisar"
         else:
             nuevo_estado = "🔴 Diferencia grande"
         return pd.Series({"estado": nuevo_estado, "_ajuste_total": ajuste_total, "_restante": restante})
@@ -684,7 +681,7 @@ with tab_cuadre:
     )
     st.caption(
         "**+** = sobró (el Cierre quedó por encima de la Apertura), **−** = faltó. "
-        "🟡 Revisar / 🔴 Diferencia grande son una guía según el monto. "
+        "🔴 Diferencia grande = más de S/1 sin explicar. "
         "⚠️ Revisar secuencia = al turno le falta un Cierre o hay un Cierre sin Apertura."
     )
 

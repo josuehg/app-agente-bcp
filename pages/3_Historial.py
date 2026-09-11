@@ -116,8 +116,6 @@ else:
         restante = diferencia - ajuste_total
         if abs(restante) <= sh.UMBRAL_VERDE:
             return "🔷 Autorizado"
-        if abs(restante) <= sh.UMBRAL_AMARILLO:
-            return "🟡 Revisar"
         return "🔴 Diferencia grande"
 
     resumen["estado"] = resumen.apply(_con_ajuste_turno_local, axis=1)
@@ -167,8 +165,8 @@ st.dataframe(
 )
 st.caption(
     "La fila resaltada 🟡 es la del turno del último registro. "
-    "**+** = sobró, **−** = faltó. 🟡 Revisar / 🔴 Diferencia grande son una "
-    "guía según el monto. ⚠️ Revisar secuencia = falta un Cierre o hay un "
+    "**+** = sobró, **−** = faltó. 🔴 Diferencia grande = más de S/1 sin "
+    "explicar. ⚠️ Revisar secuencia = falta un Cierre o hay un "
     "Cierre sin Apertura."
 )
 

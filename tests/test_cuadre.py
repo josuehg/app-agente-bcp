@@ -17,7 +17,6 @@ from cuadre import (
     ESTADO_CUADRADO,
     ESTADO_GRANDE,
     ESTADO_NOMBRE_DISTINTO,
-    ESTADO_REVISAR,
     ESTADO_SECUENCIA,
     acumulado_por_persona,
     calcular_cortes,
@@ -68,14 +67,19 @@ def test_corte_cuadrado(r):
     assert t.iloc[0]["nombre"] == "Ana"
 
 
-def test_corte_revisar(r):
-    t = _cortes([r("Apertura", 5000.00, "Ana"), r("Cierre", 4970.00, "Ana")])
-    assert t.iloc[0]["estado"] == ESTADO_REVISAR
-
-
 def test_corte_diferencia_grande(r):
     t = _cortes([r("Apertura", 5000.00, "Ana"), r("Cierre", 4000.00, "Ana")])
     assert t.iloc[0]["estado"] == ESTADO_GRANDE
+
+
+def test_corte_umbral_binario_sin_estado_intermedio(r):
+    # Semaforo binario: hasta S/1 de diferencia cuadra (redondeos), mas de
+    # S/1 ya es "Diferencia grande" -- no hay un tercer estado intermedio.
+    t_borde = _cortes([r("Apertura", 5000.00, "Ana"), r("Cierre", 5001.00, "Ana")])
+    assert t_borde.iloc[0]["estado"] == ESTADO_CUADRADO
+
+    t_pasado = _cortes([r("Apertura", 5000.00, "Ana"), r("Cierre", 4970.00, "Ana")])
+    assert t_pasado.iloc[0]["estado"] == ESTADO_GRANDE
 
 
 # --- Cierres parciales (varios cortes) --------------------------------
