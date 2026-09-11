@@ -89,7 +89,7 @@ def mostrar_bienvenida():
         - **Ayuda**: videos cortos y guias sobre como usar la app y el equipo.
 
         **Si eres administración:**
-        - **Dashboard**: consolidado de todos los locales, alertas de fondo, cuadre por turno e incentivos pendientes de pago (pide PIN). Lo encuentras aparte, abajo del todo en el menu.
+        - **Dashboard**: consolidado de todos los locales, alertas de fondo, cuadre por turno, comisiones estimadas e incentivos pendientes de pago (pide PIN, organizado en pestañas). Lo encuentras aparte, abajo del todo en el menu.
         """
     )
 
@@ -111,7 +111,6 @@ pagina_encuestas = st.Page("pages/4_Encuestas.py", title="Encuestas", icon="⭐"
 pagina_campanas = st.Page("pages/5_Campanas.py", title="Campañas", icon="📢")
 pagina_ayuda = st.Page("pages/6_Ayuda.py", title="Ayuda", icon="❓")
 pagina_dashboard = st.Page("pages/7_Dashboard.py", title="Dashboard", icon="📊")
-pagina_comisiones = st.Page("pages/8_Comisiones.py", title="Comisiones", icon="💰")
 
 navegacion = st.navigation(
     {
@@ -123,7 +122,10 @@ navegacion = st.navigation(
             pagina_campanas,
             pagina_ayuda,
         ],
-        "Administración": [pagina_dashboard, pagina_comisiones],
+        # Comisiones vivia aca como pagina aparte; ahora es una pestaña
+        # mas dentro del Dashboard (pestaña "💰 Comisiones"), asi que ya
+        # no hace falta una pagina de navegacion separada para eso.
+        "Administración": [pagina_dashboard],
     }
 )
 navegacion.run()

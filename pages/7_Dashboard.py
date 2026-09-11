@@ -144,8 +144,8 @@ def _comparar_par(row_izq, row_der, label_izq="Apertura", label_der="Cierre"):
 # secciones reusan variables calculadas por la de arriba, por ejemplo
 # "Cuadre por turno" calcula `cortes` y "Acumulado por persona" lo usa).
 # ---------------------------------------------------------------------
-tab_resumen, tab_cuadre, tab_operaciones, tab_incentivos, tab_registros = st.tabs(
-    ["🏠 Resumen", "🔍 Cuadre", "📈 Operaciones", "⭐ Incentivos", "🗂️ Registros"]
+tab_resumen, tab_cuadre, tab_operaciones, tab_comisiones, tab_incentivos, tab_registros = st.tabs(
+    ["🏠 Resumen", "🔍 Cuadre", "📈 Operaciones", "💰 Comisiones", "⭐ Incentivos", "🗂️ Registros"]
 )
 
 with tab_resumen:
@@ -563,44 +563,50 @@ with tab_cuadre:
                                     f"(autorizó: {aj['autorizado_por'] or '—'})"
                                 )
 
-                    st.markdown("**Registrar retiro/ingreso autorizado por administración**")
-                    st.caption(
-                        "Esto queda guardado con fecha, motivo y quién lo autorizó, y se resta "
-                        "de la diferencia de este local/día en adelante."
-                    )
-                    col_monto, col_quien = st.columns(2)
-                    monto_ajuste = col_monto.number_input(
-                        "Monto (negativo = retiro, positivo = ingreso)",
-                        value=round(fila["_restante"], 2),
-                        step=10.0,
-                        key=f"ajuste_monto_{clave_ajuste}",
-                    )
-                    autorizo = col_quien.text_input(
-                        "Quién autoriza", key=f"ajuste_quien_{clave_ajuste}"
-                    )
-                    motivo_ajuste = st.text_area(
-                        "Motivo", key=f"ajuste_motivo_{clave_ajuste}",
-                        placeholder="Ej: retiro de efectivo para depósito en banco",
-                    )
-                    if st.button("✅ Registrar ajuste", key=f"ajuste_btn_{clave_ajuste}"):
-                        if not motivo_ajuste.strip() or not autorizo.strip():
-                            st.error("Completa quién autoriza y el motivo antes de guardar.")
-                        else:
-                            ahora_aj = sh.ahora_local()
-                            sh.guardar_ajuste(
-                                {
-                                    "id": sh.nuevo_id(),
-                                    "timestamp": ahora_aj.replace(tzinfo=None).isoformat(timespec="seconds"),
-                                    "local": fila["_local"],
-                                    "fecha": fila["_fecha"].isoformat(),
-                                    "monto": monto_ajuste,
-                                    "motivo": motivo_ajuste.strip(),
-                                    "autorizado_por": autorizo.strip(),
-                                    "turno": "",  # ajuste "de la noche" (Continuidad entre días)
-                                }
-                            )
-                            st.success("Ajuste guardado.")
-                            st.rerun()
+                    # Si ya quedó "Autorizado" (el/los ajuste(s) ya registrados
+                    # explican toda la diferencia), no tiene sentido seguir
+                    # mostrando el formulario para registrar OTRO ajuste -- ya
+                    # está resuelto. Solo se ofrece el formulario mientras
+                    # falte explicar algo (🟡/🔴).
+                    if fila["Estado"] != "🔷 Autorizado":
+                        st.markdown("**Registrar retiro/ingreso autorizado por administración**")
+                        st.caption(
+                            "Esto queda guardado con fecha, motivo y quién lo autorizó, y se resta "
+                            "de la diferencia de este local/día en adelante."
+                        )
+                        col_monto, col_quien = st.columns(2)
+                        monto_ajuste = col_monto.number_input(
+                            "Monto (negativo = retiro, positivo = ingreso)",
+                            value=round(fila["_restante"], 2),
+                            step=10.0,
+                            key=f"ajuste_monto_{clave_ajuste}",
+                        )
+                        autorizo = col_quien.text_input(
+                            "Quién autoriza", key=f"ajuste_quien_{clave_ajuste}"
+                        )
+                        motivo_ajuste = st.text_area(
+                            "Motivo", key=f"ajuste_motivo_{clave_ajuste}",
+                            placeholder="Ej: retiro de efectivo para depósito en banco",
+                        )
+                        if st.button("✅ Registrar ajuste", key=f"ajuste_btn_{clave_ajuste}"):
+                            if not motivo_ajuste.strip() or not autorizo.strip():
+                                st.error("Completa quién autoriza y el motivo antes de guardar.")
+                            else:
+                                ahora_aj = sh.ahora_local()
+                                sh.guardar_ajuste(
+                                    {
+                                        "id": sh.nuevo_id(),
+                                        "timestamp": ahora_aj.replace(tzinfo=None).isoformat(timespec="seconds"),
+                                        "local": fila["_local"],
+                                        "fecha": fila["_fecha"].isoformat(),
+                                        "monto": monto_ajuste,
+                                        "motivo": motivo_ajuste.strip(),
+                                        "autorizado_por": autorizo.strip(),
+                                        "turno": "",  # ajuste "de la noche" (Continuidad entre días)
+                                    }
+                                )
+                                st.success("Ajuste guardado.")
+                                st.rerun()
 
     # -------------------------------------------------------------
     # Cuadre por turno (cortes Apertura -> Cierre)
@@ -874,6 +880,138 @@ with tab_cuadre:
                         )
                     else:
                         st.caption("Este corte no tiene Apertura y Cierre completos para comparar.")
+
+with tab_comisiones:
+    # -------------------------------------------------------------
+    # Comisiones estimadas (antes pages/8_Comisiones.py, movido acá
+    # como pestaña para no tener una pagina de administracion aparte).
+    #
+    # Estima cuanto genera cada local en comision, a partir del numero
+    # de operaciones registradas en los Cierres, multiplicado por una
+    # tarifa PROMEDIO por operacion (configurable por local en la hoja
+    # 'Config', columna 'soles_por_operacion'). La comision real del
+    # BCP varia por tipo de operacion y por contrato, asi que esto es
+    # un ESTIMADO, para tener una idea del mes, no el numero exacto.
+    #
+    # Usa los mismos filtros de Locales / Rango de fechas del sidebar
+    # que el resto del Dashboard (no un sidebar aparte, para no
+    # duplicar los mismos widgets dos veces en la misma pagina).
+    # -------------------------------------------------------------
+    st.subheader("💰 Comisiones estimadas")
+
+    cierres_comision = df[
+        (df["tipo"] == "Cierre")
+        & (df["local"].isin(locales_sel))
+        & (df["fecha"].between(desde, hasta))
+    ].copy()
+    cierres_comision["num_operaciones"] = pd.to_numeric(
+        cierres_comision["num_operaciones"], errors="coerce"
+    ).fillna(0)
+
+    ops_por_local = (
+        cierres_comision.groupby("local")["num_operaciones"].sum().rename("operaciones").reset_index()
+    )
+
+    cfg = config_df.drop_duplicates("local").set_index("local")
+    # Tolerante a que Config todavia no tenga las columnas nuevas (caché vieja
+    # tras un deploy): si faltan, se cae al tipo por nombre y la tarifa default.
+    tipo_por_local = cfg["tipo_agente"].to_dict() if "tipo_agente" in cfg.columns else {}
+    tarifa_por_local = (
+        pd.to_numeric(cfg["soles_por_operacion"], errors="coerce").to_dict()
+        if "soles_por_operacion" in cfg.columns
+        else {}
+    )
+
+
+    def _tipo_comision(local):
+        return tipo_por_local.get(local) or sh._tipo_agente_por_nombre(local)
+
+
+    def _tarifa_comision(local):
+        valor = tarifa_por_local.get(local)
+        if valor is None or pd.isna(valor) or valor <= 0:
+            return sh.TARIFA_DEFAULT.get(_tipo_comision(local), sh.TARIFA_DEFAULT["normal"])
+        return float(valor)
+
+
+    ops_por_local["tipo_agente"] = ops_por_local["local"].map(_tipo_comision)
+    ops_por_local["soles_por_operacion"] = ops_por_local["local"].map(_tarifa_comision)
+    ops_por_local["comision"] = (
+        ops_por_local["operaciones"] * ops_por_local["soles_por_operacion"]
+    )
+    ops_por_local = ops_por_local.sort_values("comision", ascending=False)
+
+    st.caption(
+        f"Rango: **{desde}** a **{hasta}**. Comisión = operaciones × tarifa promedio por "
+        "operación (configurable por local en la hoja `Config`, columna "
+        "`soles_por_operacion`). Es un **estimado**."
+    )
+
+    # --- KPIs ---
+    total_ops_comision = int(ops_por_local["operaciones"].sum())
+    total_comision = float(ops_por_local["comision"].sum())
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Operaciones totales", f"{total_ops_comision:,}")
+    col2.metric("Comisión estimada total", f"S/ {total_comision:,.2f}")
+    dias_rango = max((hasta - desde).days + 1, 1)
+    col3.metric("Promedio por día", f"S/ {total_comision / dias_rango:,.2f}")
+
+    # --- Por tipo de agente ---
+    por_tipo = (
+        ops_por_local.groupby("tipo_agente")
+        .agg(operaciones=("operaciones", "sum"), comision=("comision", "sum"))
+        .reset_index()
+    )
+    st.markdown("**Por tipo de agente**")
+    st.dataframe(
+        sh.arrow_safe(
+            por_tipo.rename(
+                columns={
+                    "tipo_agente": "Tipo",
+                    "operaciones": "Operaciones",
+                    "comision": "Comisión estimada (S/)",
+                }
+            )
+        ),
+        width="stretch",
+        hide_index=True,
+    )
+
+    # --- Por local ---
+    st.markdown("**Por local**")
+    st.dataframe(
+        sh.arrow_safe(
+            ops_por_local.rename(
+                columns={
+                    "local": "Local",
+                    "tipo_agente": "Tipo",
+                    "soles_por_operacion": "Tarifa (S/ x op)",
+                    "operaciones": "Operaciones",
+                    "comision": "Comisión estimada (S/)",
+                }
+            )
+        ),
+        width="stretch",
+        hide_index=True,
+    )
+
+    if not ops_por_local.empty:
+        fig_comision = px.bar(
+            ops_por_local,
+            x="local",
+            y="comision",
+            color="tipo_agente",
+            labels={"local": "Local", "comision": "Comisión estimada (S/)", "tipo_agente": "Tipo"},
+        )
+        st.plotly_chart(fig_comision, width="stretch")
+
+    st.caption(
+        "Para ajustar una tarifa: en la hoja `Config` del Google Sheet, escribe el "
+        "valor en la columna `soles_por_operacion` de ese local (y `tipo_agente` = "
+        "superagente / normal). Si lo dejas vacío, se usa el promedio por defecto "
+        f"(superagente S/ {sh.TARIFA_DEFAULT['superagente']:.3f}, normal "
+        f"S/ {sh.TARIFA_DEFAULT['normal']:.3f})."
+    )
 
 with tab_registros:
     # -------------------------------------------------------------
