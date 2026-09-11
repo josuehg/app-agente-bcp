@@ -1,0 +1,15 @@
+# No metas nada de esto dentro de la imagen de Docker.
+.git
+.github
+__pycache__
+*.pyc
+.pytest_cache
+tests
+requirements-dev.txt
+conftest.py
+README.md
+SETUP.md
+
+# El secrets.toml real NUNCA va en la imagen -- se pasa como variable de
+# entorno STREAMLIT_SECRETS (ver docker-entrypoint.sh).
+.streamlit/secrets.toml

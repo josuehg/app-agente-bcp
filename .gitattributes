@@ -1,0 +1,6 @@
+# El entrypoint de Docker tiene que tener saltos de linea Unix (LF) SI o
+# SI -- un shebang con CRLF no arranca dentro del contenedor Linux. Sin
+# esto, Git en Windows (core.autocrlf=true) lo reescribiria a CRLF la
+# proxima vez que alguien lo toque.
+docker-entrypoint.sh text eol=lf
+*.sh text eol=lf
