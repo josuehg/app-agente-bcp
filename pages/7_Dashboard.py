@@ -727,7 +727,10 @@ with tab_cuadre:
     if not _sospechosos_turno.empty:
         st.markdown("**Registrar retiro/ingreso autorizado de un turno**")
         for _, fila in _sospechosos_turno.iterrows():
-            titulo = f"{fila['local']} · {fila['fecha']} · {fila['turno']} · {fila['diferencia_fmt']} · {fila['estado']}"
+            titulo = (
+                f"{fila['local']} · {fila['fecha']} · {fila['turno']} · {fila['nombres']} · "
+                f"{fila['diferencia_fmt']} · {fila['estado']}"
+            )
             with st.expander(titulo):
                 clave_t = f"turno|{fila['local']}|{fila['fecha']}|{fila['turno']}"
                 if not ajustes_turno.empty:
