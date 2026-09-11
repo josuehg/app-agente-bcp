@@ -170,6 +170,84 @@ if not cortes.empty and (cortes["corte"].max() > 1 or "⚠️" in " ".join(resum
         )
 
 # ---------------------------------------------------------------------
+# Continuidad entre días: el ULTIMO Cierre de un día vs la PRIMERA
+# Apertura del día siguiente. Debe coincidir (el fondo se queda guardado
+# de un día para otro); si no, se marca para que el equipo lo vea. Igual
+# que en el Dashboard, pero SOLO el estado -- el motivo y quién autorizó
+# un ajuste es información de administración, no se muestra aquí.
+# ---------------------------------------------------------------------
+st.subheader(f"Continuidad entre días — {local}")
+
+todos_local = df[df["local"] == local].sort_values("timestamp")
+ajustes_local = sh.get_ajustes_df()
+if not ajustes_local.empty:
+    ajustes_local = ajustes_local[ajustes_local["local"] == local]
+ajuste_por_fecha = (
+    {} if ajustes_local.empty else ajustes_local.groupby("fecha")["monto"].sum().to_dict()
+)
+
+ult_cierre_dia = (
+    todos_local[todos_local["tipo"] == "Cierre"].groupby("fecha").tail(1).set_index("fecha")
+)
+prim_apertura_dia = (
+    todos_local[todos_local["tipo"] == "Apertura"].groupby("fecha").head(1).set_index("fecha")
+)
+dias_con_apertura = sorted(d for d in prim_apertura_dia.index if pd.notna(d))
+
+filas_cont_local = []
+for dia_cierre in sorted(d for d in ult_cierre_dia.index if pd.notna(d)):
+    posteriores = [d for d in dias_con_apertura if d > dia_cierre]
+    if not posteriores:
+        continue
+    dia_apertura = posteriores[0]
+    cierre = pd.to_numeric(ult_cierre_dia.loc[dia_cierre].get("total"), errors="coerce")
+    apertura = pd.to_numeric(prim_apertura_dia.loc[dia_apertura].get("total"), errors="coerce")
+    cierre = 0.0 if pd.isna(cierre) else float(cierre)
+    apertura = 0.0 if pd.isna(apertura) else float(apertura)
+    diferencia = apertura - cierre
+    ajuste_total = float(ajuste_por_fecha.get(dia_cierre, 0.0))
+    restante = diferencia - ajuste_total
+    if ajuste_total != 0 and abs(restante) <= 1.0:
+        estado = "🔷 Autorizado"
+    elif abs(restante) <= 1.0:
+        estado = "✅ Coincide"
+    elif abs(restante) <= 10.0:
+        estado = "🟡 Revisar"
+    else:
+        estado = "🔴 Diferencia grande"
+    filas_cont_local.append(
+        {
+            "_fecha": dia_cierre,
+            "Cierre del día": dia_cierre,
+            "Cierre (S/)": round(cierre, 2),
+            "Abre el día": dia_apertura,
+            "Apertura (S/)": round(apertura, 2),
+            "Diferencia (S/)": f"{diferencia:+,.2f}",
+            "Estado": estado,
+        }
+    )
+
+cont_local_df = pd.DataFrame(filas_cont_local)
+if cont_local_df.empty:
+    st.caption("Todavía no hay días consecutivos con Cierre y Apertura para comparar.")
+else:
+    cont_local_df = cont_local_df[cont_local_df["_fecha"] >= desde].sort_values(
+        "_fecha", ascending=False
+    )
+    if cont_local_df.empty:
+        st.caption("No hay comparaciones en el rango de días elegido.")
+    else:
+        st.dataframe(
+            sh.arrow_safe(cont_local_df.drop(columns=["_fecha"])),
+            width="stretch",
+            hide_index=True,
+        )
+        st.caption(
+            "🔷 Autorizado = administración registró un retiro/ingreso que explica la "
+            "diferencia. 🟡/🔴 sin ese ícono: coméntalo con administración."
+        )
+
+# ---------------------------------------------------------------------
 # Detalle registro por registro, con fotos, mas facil de revisar en el
 # celular que una tabla gigante.
 # ---------------------------------------------------------------------
