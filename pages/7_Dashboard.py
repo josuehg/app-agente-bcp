@@ -373,6 +373,36 @@ with tab_operaciones:
             .fillna(0)
             .reset_index()
         )
+
+        # KPIs grandes: promedio de operaciones por cada turno de Mañana y
+        # de Tarde (cuantas operaciones tiene, en promedio, UN turno de ese
+        # tipo -- no el total acumulado), y cual de los dos mueve mas, para
+        # ayudar a decidir donde reforzar personal.
+        prom_manana = _cierres_ops.loc[_cierres_ops["turno"] == "Mañana", "num_operaciones"].mean()
+        prom_tarde = _cierres_ops.loc[_cierres_ops["turno"] == "Tarde", "num_operaciones"].mean()
+        col_km, col_kt, col_ke = st.columns(3)
+        col_km.metric(
+            "Promedio por turno — Mañana",
+            f"{prom_manana:,.0f}" if pd.notna(prom_manana) else "—",
+        )
+        col_kt.metric(
+            "Promedio por turno — Tarde",
+            f"{prom_tarde:,.0f}" if pd.notna(prom_tarde) else "—",
+        )
+        total_manana = ops_turno.loc[ops_turno["turno"] == "Mañana", "num_operaciones"].sum()
+        total_tarde = ops_turno.loc[ops_turno["turno"] == "Tarde", "num_operaciones"].sum()
+        if total_manana and total_tarde:
+            turno_top = "Tarde" if total_tarde > total_manana else "Mañana"
+            base = min(total_manana, total_tarde)
+            diff_pct = abs(total_tarde - total_manana) / base * 100 if base else 0
+            col_ke.metric(
+                "Turno con más movimiento",
+                turno_top,
+                delta=f"{diff_pct:.0f}% más que el otro turno",
+            )
+        else:
+            col_ke.metric("Turno con más movimiento", "—")
+
         fig_ops_turno = px.bar(
             ops_turno,
             x="turno",
