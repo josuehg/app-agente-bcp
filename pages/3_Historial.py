@@ -224,6 +224,19 @@ for posicion, (_, fila) in enumerate(df_local.iterrows()):
         colB.metric("Tarjeta", f"S/ {fila['tarjeta']:,.2f}")
         colC.metric("Total", f"S/ {fila['total']:,.2f}")
 
+        filas_denom = []
+        for etiqueta, col, valor_denom in sh.DENOMINACIONES:
+            monto = pd.to_numeric(fila.get(col), errors="coerce")
+            if pd.notna(monto) and monto != 0:
+                filas_denom.append({"Denominación": f"S/ {valor_denom:g}", "Monto (S/)": float(monto)})
+        if filas_denom:
+            st.caption("Detalle del efectivo por billetes/monedas:")
+            st.dataframe(
+                sh.arrow_safe(pd.DataFrame(filas_denom)),
+                width="stretch",
+                hide_index=True,
+            )
+
         if pd.notna(fila.get("num_operaciones")) and str(fila.get("num_operaciones")) != "":
             st.caption(f"N° de operaciones: {int(fila['num_operaciones'])}")
         if fila.get("observaciones"):
