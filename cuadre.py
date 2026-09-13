@@ -56,6 +56,7 @@ COLUMNAS_CORTE = [
     "diferencia_fmt",
     "estado",
     "motivo",  # motivo por el que cerro otra persona, si aplica
+    "observaciones",  # lo que escribieron en Apertura y/o Cierre de este corte
     "id_apertura",  # id del registro de Apertura (para cruzar con la hoja)
     "id_cierre",  # id del registro de Cierre
 ]
@@ -103,6 +104,19 @@ def _fila_corte(contexto: dict, numero: int, apertura, cierre, estado_forzado) -
     if cierre is not None:
         motivo = str(cierre.get("motivo_cierre_otro_nombre", "") or "").strip()
 
+    # Observaciones que se hayan escrito en la Apertura y/o el Cierre de
+    # este corte -- util para ver, sin salir de esta tabla, si alguien ya
+    # dejo anotado el motivo de una diferencia (p. ej. "retiro para pago
+    # de letra").
+    obs_apertura = str(apertura.get("observaciones", "") or "").strip() if apertura is not None else ""
+    obs_cierre = str(cierre.get("observaciones", "") or "").strip() if cierre is not None else ""
+    partes_obs = []
+    if obs_apertura:
+        partes_obs.append(f"Apertura: {obs_apertura}")
+    if obs_cierre:
+        partes_obs.append(f"Cierre: {obs_cierre}")
+    observaciones = " | ".join(partes_obs)
+
     if pd.notna(ap_total) and pd.notna(ci_total):
         diferencia = ci_total - ap_total
         if nombre_ap and nombre_ci and nombre_ap.lower() != nombre_ci.lower():
@@ -129,6 +143,7 @@ def _fila_corte(contexto: dict, numero: int, apertura, cierre, estado_forzado) -
             "diferencia_fmt": _fmt(diferencia),
             "estado": estado,
             "motivo": motivo,
+            "observaciones": observaciones,
             "id_apertura": "" if apertura is None else str(apertura.get("id", "")),
             "id_cierre": "" if cierre is None else str(cierre.get("id", "")),
         }

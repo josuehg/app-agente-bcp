@@ -189,6 +189,7 @@ if not cortes.empty and (cortes["corte"].max() > 1 or "⚠️" in " ".join(resum
                         "diferencia_fmt": "Diferencia (S/)",
                         "estado": "Estado",
                         "motivo": "Motivo (otro nombre)",
+                        "observaciones": "Observaciones",
                     }
                 )
                 .drop(columns=["diferencia"])

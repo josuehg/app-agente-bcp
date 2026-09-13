@@ -775,6 +775,7 @@ with tab_cuadre:
                             "diferencia_fmt": "Diferencia (S/)",
                             "estado": "Estado",
                             "motivo": "Motivo (otro nombre)",
+                            "observaciones": "Observaciones",
                         }
                     ).drop(columns=["diferencia"])
                 ),
