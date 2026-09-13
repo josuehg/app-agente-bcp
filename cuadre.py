@@ -61,7 +61,7 @@ COLUMNAS_CORTE = [
     "id_cierre",  # id del registro de Cierre
 ]
 
-COLUMNAS_RESUMEN = ["n_cortes", "nombres", "diferencia", "diferencia_fmt", "estado"]
+COLUMNAS_RESUMEN = ["n_cortes", "nombres", "diferencia", "diferencia_fmt", "estado", "observaciones"]
 
 COLUMNAS_PERSONA = ["nombre", "n_cortes", "diferencia", "diferencia_fmt", "descuadre_abs"]
 
@@ -278,6 +278,10 @@ def resumen_turnos(cortes: pd.DataFrame, columnas_indice: list[str]) -> pd.DataF
         # Personas que trabajaron el turno (quien abrio cada corte), sin
         # repetir y en el orden en que aparecieron.
         nombres = ", ".join(dict.fromkeys(n for n in grupo["nombre"].astype(str) if n))
+        # Observaciones de todos los cortes del turno, sin repetir (cada
+        # una ya viene etiquetada "Apertura: ..." / "Cierre: ..." desde
+        # _fila_corte).
+        observaciones = " | ".join(dict.fromkeys(o for o in grupo["observaciones"].astype(str) if o))
         filas.append(
             {
                 **contexto,
@@ -286,6 +290,7 @@ def resumen_turnos(cortes: pd.DataFrame, columnas_indice: list[str]) -> pd.DataF
                 "diferencia": diferencia_total,
                 "diferencia_fmt": f"{diferencia_total:+,.2f}",
                 "estado": _estado_turno(set(grupo["estado"])),
+                "observaciones": observaciones,
             }
         )
     return pd.DataFrame(filas, columns=columnas_salida)

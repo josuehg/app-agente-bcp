@@ -144,6 +144,7 @@ tabla_resumen = sh.arrow_safe(
             "nombres": "Personas",
             "diferencia_fmt": "Diferencia total (S/)",
             "estado": "Estado",
+            "observaciones": "Observaciones",
         }
     ).drop(columns=["diferencia"])
 )
@@ -189,10 +190,9 @@ if not cortes.empty and (cortes["corte"].max() > 1 or "⚠️" in " ".join(resum
                         "diferencia_fmt": "Diferencia (S/)",
                         "estado": "Estado",
                         "motivo": "Motivo (otro nombre)",
-                        "observaciones": "Observaciones",
                     }
                 )
-                .drop(columns=["diferencia"])
+                .drop(columns=["diferencia", "observaciones"])
             ),
             width="stretch",
             hide_index=True,
