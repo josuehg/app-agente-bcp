@@ -232,16 +232,96 @@ with tab_operaciones:
     # -------------------------------------------------------------
     # Graficos
     # -------------------------------------------------------------
+    _cierres_ops = df_filtrado[df_filtrado["tipo"] == "Cierre"].copy()
+    _cierres_ops["num_operaciones"] = pd.to_numeric(
+        _cierres_ops["num_operaciones"], errors="coerce"
+    ).fillna(0)
+
+    st.subheader("🕐 Movimientos por turno")
+    st.caption(
+        "Operaciones registradas en los Cierres, agrupadas por turno "
+        "(Mañana / Tarde), en el rango de fechas filtrado."
+    )
+
+    if _cierres_ops.empty or _cierres_ops["num_operaciones"].sum() == 0:
+        st.caption("No hay operaciones registradas en el rango seleccionado.")
+    else:
+        orden_turnos = sorted(_cierres_ops["turno"].dropna().unique())
+        ops_turno = (
+            _cierres_ops.groupby("turno")["num_operaciones"]
+            .sum()
+            .reindex(orden_turnos)
+            .fillna(0)
+            .reset_index()
+        )
+
+        # KPIs grandes: promedio TOTAL DIARIO de operaciones por turno --
+        # para cada dia se suma el total de operaciones de Mañana (todos
+        # los locales seleccionados juntos) y el de Tarde, y despues se
+        # promedia esa suma diaria a lo largo del rango. Asi "Promedio
+        # diario" responde "en un dia cualquiera, cuanto se mueve en
+        # Mañana vs en Tarde", no "cuanto mueve un local en un turno".
+        ops_dia_turno = (
+            _cierres_ops.groupby(["fecha", "turno"])["num_operaciones"].sum().reset_index()
+        )
+        prom_diario_manana = ops_dia_turno.loc[
+            ops_dia_turno["turno"] == "Mañana", "num_operaciones"
+        ].mean()
+        prom_diario_tarde = ops_dia_turno.loc[
+            ops_dia_turno["turno"] == "Tarde", "num_operaciones"
+        ].mean()
+        suma_promedios = (prom_diario_manana or 0) + (prom_diario_tarde or 0)
+        pct_manana = prom_diario_manana / suma_promedios * 100 if suma_promedios else 0
+        pct_tarde = prom_diario_tarde / suma_promedios * 100 if suma_promedios else 0
+
+        col_km, col_kt = st.columns(2)
+        col_km.metric(
+            "Promedio diario — Mañana",
+            f"{prom_diario_manana:,.0f}" if pd.notna(prom_diario_manana) else "—",
+            f"{pct_manana:.0f}% del total diario" if suma_promedios else None,
+        )
+        col_kt.metric(
+            "Promedio diario — Tarde",
+            f"{prom_diario_tarde:,.0f}" if pd.notna(prom_diario_tarde) else "—",
+            f"{pct_tarde:.0f}% del total diario" if suma_promedios else None,
+        )
+
+        fig_ops_turno = px.bar(
+            ops_turno,
+            x="turno",
+            y="num_operaciones",
+            labels={"turno": "Turno", "num_operaciones": "N° de operaciones"},
+        )
+        st.plotly_chart(fig_ops_turno, width="stretch")
+
+        total_ops_turnos = ops_turno["num_operaciones"].sum()
+        if total_ops_turnos:
+            for _, fila_t in ops_turno.iterrows():
+                pct = fila_t["num_operaciones"] / total_ops_turnos * 100
+                st.caption(
+                    f"**{fila_t['turno']}**: {int(fila_t['num_operaciones']):,} "
+                    f"operaciones ({pct:.0f}% del total)."
+                )
+
+        with st.expander("Ver turno por local"):
+            ops_turno_local = (
+                _cierres_ops.groupby(["turno", "local"])["num_operaciones"].sum().reset_index()
+            )
+            fig_ops_turno_local = px.bar(
+                ops_turno_local,
+                x="turno",
+                y="num_operaciones",
+                color="local",
+                barmode="group",
+                labels={"turno": "Turno", "num_operaciones": "N° de operaciones", "local": "Local"},
+            )
+            st.plotly_chart(fig_ops_turno_local, width="stretch")
+
     st.subheader("📅 Operaciones por día")
     st.caption(
         "Número de operaciones registradas en los Cierres, día a día (suma de "
         "todos los locales seleccionados)."
     )
-
-    _cierres_ops = df_filtrado[df_filtrado["tipo"] == "Cierre"].copy()
-    _cierres_ops["num_operaciones"] = pd.to_numeric(
-        _cierres_ops["num_operaciones"], errors="coerce"
-    ).fillna(0)
 
     if _cierres_ops.empty or _cierres_ops["num_operaciones"].sum() == 0:
         st.caption("No hay operaciones registradas en el rango seleccionado.")
@@ -355,86 +435,6 @@ with tab_operaciones:
         st.plotly_chart(fig_dias, width="stretch")
     else:
         st.caption("No hay cierres en el rango seleccionado para graficar.")
-
-    st.subheader("🕐 Movimientos por turno")
-    st.caption(
-        "Operaciones registradas en los Cierres, agrupadas por turno "
-        "(Mañana / Tarde), en el rango de fechas filtrado."
-    )
-
-    if _cierres_ops.empty or _cierres_ops["num_operaciones"].sum() == 0:
-        st.caption("No hay operaciones registradas en el rango seleccionado.")
-    else:
-        orden_turnos = sorted(_cierres_ops["turno"].dropna().unique())
-        ops_turno = (
-            _cierres_ops.groupby("turno")["num_operaciones"]
-            .sum()
-            .reindex(orden_turnos)
-            .fillna(0)
-            .reset_index()
-        )
-
-        # KPIs grandes: promedio TOTAL DIARIO de operaciones por turno --
-        # para cada dia se suma el total de operaciones de Mañana (todos
-        # los locales seleccionados juntos) y el de Tarde, y despues se
-        # promedia esa suma diaria a lo largo del rango. Asi "Promedio
-        # diario" responde "en un dia cualquiera, cuanto se mueve en
-        # Mañana vs en Tarde", no "cuanto mueve un local en un turno".
-        ops_dia_turno = (
-            _cierres_ops.groupby(["fecha", "turno"])["num_operaciones"].sum().reset_index()
-        )
-        prom_diario_manana = ops_dia_turno.loc[
-            ops_dia_turno["turno"] == "Mañana", "num_operaciones"
-        ].mean()
-        prom_diario_tarde = ops_dia_turno.loc[
-            ops_dia_turno["turno"] == "Tarde", "num_operaciones"
-        ].mean()
-        suma_promedios = (prom_diario_manana or 0) + (prom_diario_tarde or 0)
-        pct_manana = prom_diario_manana / suma_promedios * 100 if suma_promedios else 0
-        pct_tarde = prom_diario_tarde / suma_promedios * 100 if suma_promedios else 0
-
-        col_km, col_kt = st.columns(2)
-        col_km.metric(
-            "Promedio diario — Mañana",
-            f"{prom_diario_manana:,.0f}" if pd.notna(prom_diario_manana) else "—",
-            f"{pct_manana:.0f}% del total diario" if suma_promedios else None,
-        )
-        col_kt.metric(
-            "Promedio diario — Tarde",
-            f"{prom_diario_tarde:,.0f}" if pd.notna(prom_diario_tarde) else "—",
-            f"{pct_tarde:.0f}% del total diario" if suma_promedios else None,
-        )
-
-        fig_ops_turno = px.bar(
-            ops_turno,
-            x="turno",
-            y="num_operaciones",
-            labels={"turno": "Turno", "num_operaciones": "N° de operaciones"},
-        )
-        st.plotly_chart(fig_ops_turno, width="stretch")
-
-        total_ops_turnos = ops_turno["num_operaciones"].sum()
-        if total_ops_turnos:
-            for _, fila_t in ops_turno.iterrows():
-                pct = fila_t["num_operaciones"] / total_ops_turnos * 100
-                st.caption(
-                    f"**{fila_t['turno']}**: {int(fila_t['num_operaciones']):,} "
-                    f"operaciones ({pct:.0f}% del total)."
-                )
-
-        with st.expander("Ver turno por local"):
-            ops_turno_local = (
-                _cierres_ops.groupby(["turno", "local"])["num_operaciones"].sum().reset_index()
-            )
-            fig_ops_turno_local = px.bar(
-                ops_turno_local,
-                x="turno",
-                y="num_operaciones",
-                color="local",
-                barmode="group",
-                labels={"turno": "Turno", "num_operaciones": "N° de operaciones", "local": "Local"},
-            )
-            st.plotly_chart(fig_ops_turno_local, width="stretch")
 
     st.subheader("📉 Evolucion del fondo total (efectivo + tarjeta) por local")
     st.caption(
