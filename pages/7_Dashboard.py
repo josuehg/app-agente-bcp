@@ -1071,11 +1071,24 @@ with tab_cuadre:
                     (saltos["nombre_cierre"] == persona_sel)
                     & (saltos["fecha_cierre"] >= desde)
                     & (saltos["fecha_cierre"] <= hasta)
-                ]
+                ].copy()
                 if not saltos.empty
                 else saltos
             )
             if not saltos_persona.empty:
+                # El "estado" que trae calcular_saltos() es el semaforo CRUDO
+                # (no sabe de ajustes). Lo pisamos con el Estado ya calculado
+                # en cont_df (que sí considera ajustes -> "🔷 Autorizado"),
+                # para que este detalle diga lo mismo que la tabla de
+                # Continuidad de más arriba.
+                _estado_ajustado_por_id_cierre = (
+                    dict(zip(cont_df["_id_cierre"], cont_df["Estado"])) if not cont_df.empty else {}
+                )
+                saltos_persona["estado"] = (
+                    saltos_persona["id_cierre"]
+                    .map(_estado_ajustado_por_id_cierre)
+                    .fillna(saltos_persona["estado"])
+                )
                 st.markdown(f"**Entregas de caja de {persona_sel} en el rango:**")
                 st.dataframe(
                     sh.arrow_safe(
