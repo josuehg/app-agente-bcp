@@ -25,6 +25,7 @@ queda ligado a un local verificado por PIN, y no a lo que alguien haya
 elegido (por error o a proposito) en un dropdown.
 """
 
+import pandas as pd
 import streamlit as st
 from googleapiclient.errors import HttpError
 
@@ -266,6 +267,74 @@ if enviado:
 
 @st.dialog("¿Confirmar registro?")
 def _dialogo_confirmar_registro():
+    # Si es Apertura, comparamos contra el ULTIMO Cierre de este local
+    # (el mismo "salto" que revisa Continuidad en el Dashboard) ANTES de
+    # guardar -- asi quien abre ve enseguida si algo no cuadra, en vez de
+    # enterarse recien cuando alguien lo revise despues. Solo AVISA: no
+    # bloquea el guardado, porque a veces la diferencia es real (un
+    # retiro autorizado por administración).
+    if tipo == "Apertura":
+        _cierres_local = sh.get_registros_df()
+        _cierres_local = _cierres_local[
+            (_cierres_local["local"] == local) & (_cierres_local["tipo"] == "Cierre")
+        ].sort_values("timestamp")
+        if not _cierres_local.empty:
+            _ultimo_cierre = _cierres_local.iloc[-1]
+            _hora_cierre = ""
+            if pd.notna(_ultimo_cierre.get("timestamp")):
+                _hora_cierre = pd.to_datetime(_ultimo_cierre["timestamp"]).strftime("%H:%M")
+            _ref_cierre = (
+                f"{_ultimo_cierre['turno']}, {_ultimo_cierre['nombre'] or 'alguien'}, "
+                f"{_ultimo_cierre['fecha']} {_hora_cierre}"
+            )
+            _dif_total = total - float(_ultimo_cierre["total"])
+            if abs(_dif_total) <= sh.UMBRAL_VERDE:
+                st.success(f"✅ Coincide con el último Cierre ({_ref_cierre}).")
+            else:
+                st.warning(
+                    f"⚠️ No coincide con el último Cierre ({_ref_cierre}): fue "
+                    f"S/ {float(_ultimo_cierre['total']):,.2f}, esta Apertura es "
+                    f"S/ {total:,.2f} — diferencia de S/ {_dif_total:+,.2f}."
+                )
+                _filas_comp = []
+                for etiqueta, col, valor_d in sh.DENOMINACIONES:
+                    _v_cierre = pd.to_numeric(_ultimo_cierre.get(col), errors="coerce")
+                    _v_cierre = 0.0 if pd.isna(_v_cierre) else float(_v_cierre)
+                    _v_apertura = float(cantidades.get(col, 0.0))
+                    _filas_comp.append(
+                        {
+                            "Campo": f"S/ {valor_d:g}",
+                            "Cierre anterior": _v_cierre,
+                            "Esta Apertura": _v_apertura,
+                            "Diferencia": _v_apertura - _v_cierre,
+                        }
+                    )
+                _tarjeta_cierre = pd.to_numeric(_ultimo_cierre.get("tarjeta"), errors="coerce")
+                _tarjeta_cierre = 0.0 if pd.isna(_tarjeta_cierre) else float(_tarjeta_cierre)
+                _filas_comp.append(
+                    {
+                        "Campo": "Tarjeta",
+                        "Cierre anterior": _tarjeta_cierre,
+                        "Esta Apertura": tarjeta,
+                        "Diferencia": tarjeta - _tarjeta_cierre,
+                    }
+                )
+                _filas_comp.append(
+                    {
+                        "Campo": "Total",
+                        "Cierre anterior": float(_ultimo_cierre["total"]),
+                        "Esta Apertura": total,
+                        "Diferencia": _dif_total,
+                    }
+                )
+                with st.expander("Ver comparación por denominación", expanded=True):
+                    st.dataframe(
+                        sh.arrow_safe(pd.DataFrame(_filas_comp)),
+                        width="stretch",
+                        hide_index=True,
+                    )
+        st.divider()
+
     st.write(f"Vas a guardar un registro de **{tipo}** del turno **{turno}** en **{local}**:")
     st.markdown(
         f"""
