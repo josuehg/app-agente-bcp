@@ -133,6 +133,24 @@ with tab_cuadre:
 
         resumen["estado"] = resumen.apply(_con_ajuste_turno_local, axis=1)
 
+    # Turnos ya "🔷 Autorizado": se pisa el Estado de CADA corte que
+    # pertenece a ese turno (en "cortes" mismo, asi que se ve igual en
+    # "Ver corte por corte" y se reusa mas abajo en Acumulado) -- sin
+    # esto, el corte seguia mostrando el semaforo crudo aunque el turno
+    # entero ya estuviera resuelto.
+    _turnos_autorizados_local = set(
+        resumen.loc[resumen["estado"] == "🔷 Autorizado", ["fecha", "turno"]]
+        .itertuples(index=False, name=None)
+    )
+    if _turnos_autorizados_local:
+        cortes.loc[
+            [
+                (f, t) in _turnos_autorizados_local
+                for f, t in zip(cortes["fecha"], cortes["turno"])
+            ],
+            "estado",
+        ] = "🔷 Autorizado"
+
     # df_local ya viene ordenado por timestamp descendente, asi que la
     # primera fila es el registro MAS RECIENTE. Lo usamos para (1) un aviso
     # claro arriba y (2) resaltar su turno en la tabla.
@@ -319,10 +337,8 @@ with tab_acumulado:
         "'🔷 Autorizado'. Ordenado por descuadre total (sin importar el signo)."
     )
 
-    _turnos_autorizados_local = set(
-        resumen.loc[resumen["estado"] == "🔷 Autorizado", ["fecha", "turno"]]
-        .itertuples(index=False, name=None)
-    )
+    # _turnos_autorizados_local ya se calculó arriba, en Cuadre por turno
+    # (se reusa aca para no recalcularlo).
     if _turnos_autorizados_local:
         _claves_cortes_local = list(zip(cortes["fecha"], cortes["turno"]))
         cortes_acumulado_local = cortes[

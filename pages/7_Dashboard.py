@@ -782,6 +782,24 @@ with tab_cuadre:
     resumen["_ajuste_total"] = _ajustado_turno["_ajuste_total"]
     resumen["_restante"] = _ajustado_turno["_restante"]
 
+    # Turnos ya "🔷 Autorizado": se pisa el Estado de CADA corte que
+    # pertenece a ese turno (en "cortes" mismo, asi que se ve igual en
+    # "Ver corte por corte" y en el detalle por persona, mas abajo) --
+    # sin esto, el corte seguia mostrando el semaforo crudo aunque el
+    # turno entero ya estuviera resuelto.
+    _turnos_autorizados = set(
+        resumen.loc[resumen["estado"] == "🔷 Autorizado", ["local", "fecha", "turno"]]
+        .itertuples(index=False, name=None)
+    )
+    if _turnos_autorizados:
+        cortes.loc[
+            [
+                (l, f, t) in _turnos_autorizados
+                for l, f, t in zip(cortes["local"], cortes["fecha"], cortes["turno"])
+            ],
+            "estado",
+        ] = "🔷 Autorizado"
+
     st.dataframe(
         sh.arrow_safe(
             resumen.rename(
@@ -936,10 +954,8 @@ with tab_cuadre:
         "'🔷 Autorizado'. Ordenado por descuadre total (sin importar el signo)."
     )
 
-    _turnos_autorizados = set(
-        resumen.loc[resumen["estado"] == "🔷 Autorizado", ["local", "fecha", "turno"]]
-        .itertuples(index=False, name=None)
-    )
+    # _turnos_autorizados ya se calculó arriba, en Cuadre por turno (se
+    # reusa aca para no recalcularlo).
     if _turnos_autorizados:
         _claves_cortes = list(zip(cortes["local"], cortes["fecha"], cortes["turno"]))
         cortes_acumulado = cortes[[c not in _turnos_autorizados for c in _claves_cortes]]
