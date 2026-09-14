@@ -378,13 +378,11 @@ with tab_acumulado:
                 acumulado_local.rename(
                     columns={
                         "nombre": "Persona",
-                        "n_cortes": "Cortes",
                         "diferencia_fmt": "Diferencia neta (S/, sobra − falta, se cancelan)",
                         "descuadre_abs": "Descuadre total (S/, sin importar el signo)",
-                        "n_saltos": "Saltos cerrados",
                         "diferencia_saltos_fmt": "Diferencia entre cortes (S/, atribuida a quien cerró)",
                     }
-                ).drop(columns=["diferencia", "diferencia_saltos"])
+                ).drop(columns=["diferencia", "diferencia_saltos", "n_cortes", "n_saltos"])
             ),
             width="stretch",
             hide_index=True,
