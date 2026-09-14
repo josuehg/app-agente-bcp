@@ -955,8 +955,8 @@ with tab_cuadre:
                     columns={
                         "nombre": "Persona",
                         "n_cortes": "Cortes",
-                        "diferencia_fmt": "Diferencia neta (S/)",
-                        "descuadre_abs": "Descuadre total (S/)",
+                        "diferencia_fmt": "Diferencia neta (S/, sobra − falta, se cancelan)",
+                        "descuadre_abs": "Descuadre total (S/, sin importar el signo)",
                     }
                 ).drop(columns=["diferencia"])
             ),

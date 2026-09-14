@@ -64,11 +64,18 @@ with col1:
         "Turno", ["Mañana", "Tarde"], default=["Mañana", "Tarde"]
     )
 with col2:
-    dias_atras = st.selectbox(
-        "Ver desde", [7, 14, 30, 90], index=1, format_func=lambda d: f"Ultimos {d} dias"
+    opcion_rango = st.selectbox(
+        "Ver desde",
+        [7, 14, 30, "mes", 90],
+        index=1,
+        format_func=lambda d: "Este mes" if d == "mes" else f"Ultimos {d} dias",
     )
 
-desde = sh.hoy_local() - timedelta(days=dias_atras)
+desde = (
+    sh.hoy_local().replace(day=1)
+    if opcion_rango == "mes"
+    else sh.hoy_local() - timedelta(days=opcion_rango)
+)
 
 df_local = df[
     (df["local"] == local)
@@ -244,8 +251,8 @@ with tab_acumulado:
                     columns={
                         "nombre": "Persona",
                         "n_cortes": "Cortes",
-                        "diferencia_fmt": "Diferencia neta (S/)",
-                        "descuadre_abs": "Descuadre total (S/)",
+                        "diferencia_fmt": "Diferencia neta (S/, sobra − falta, se cancelan)",
+                        "descuadre_abs": "Descuadre total (S/, sin importar el signo)",
                     }
                 ).drop(columns=["diferencia"])
             ),
