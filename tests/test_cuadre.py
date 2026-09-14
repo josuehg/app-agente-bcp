@@ -17,9 +17,12 @@ from cuadre import (
     ESTADO_CUADRADO,
     ESTADO_GRANDE,
     ESTADO_NOMBRE_DISTINTO,
+    ESTADO_SALTO_COINCIDE,
+    ESTADO_SALTO_DIFERENCIA,
     ESTADO_SECUENCIA,
     acumulado_por_persona,
     calcular_cortes,
+    calcular_saltos,
     resumen_turnos,
 )
 
@@ -201,3 +204,75 @@ def test_df_vacio():
     assert "estado" in t.columns
     assert resumen_turnos(t, INDICE).empty
     assert acumulado_por_persona(t).empty
+
+
+# --- calcular_saltos: continuidad Cierre -> siguiente Apertura --------
+# (a diferencia de calcular_cortes, que mide cada corte contra su propia
+# Apertura y a proposito ignora lo que pasa ENTRE cortes, calcular_saltos
+# mide justo ese "entre medio": cualquier salto Cierre -> Apertura, sea
+# dentro del mismo turno, entre turnos del mismo dia, o entre dias.)
+
+def _reg(local, fecha, turno, tipo, total, nombre, ts):
+    return {
+        "local": local, "fecha": fecha, "turno": turno, "tipo": tipo,
+        "total": total, "nombre": nombre, "timestamp": ts,
+    }
+
+
+def test_salto_mismo_turno_coincide():
+    df = pd.DataFrame([
+        _reg("Fau", "2026-09-06", "Mañana", "Apertura", 5000, "Ana", "2026-09-06T08:00:00"),
+        _reg("Fau", "2026-09-06", "Mañana", "Cierre", 5000, "Ana", "2026-09-06T12:00:00"),
+        _reg("Fau", "2026-09-06", "Mañana", "Apertura", 5000, "Ana", "2026-09-06T12:05:00"),
+        _reg("Fau", "2026-09-06", "Mañana", "Cierre", 5000, "Ana", "2026-09-06T15:00:00"),
+    ])
+    saltos = calcular_saltos(df)
+    assert len(saltos) == 1
+    assert saltos.iloc[0]["tipo_salto"] == "Mismo turno"
+    assert saltos.iloc[0]["estado"] == ESTADO_SALTO_COINCIDE
+    assert saltos.iloc[0]["diferencia"] == pytest.approx(0.0)
+
+
+def test_salto_entre_turnos_mismo_dia_con_diferencia():
+    df = pd.DataFrame([
+        _reg("Fau", "2026-09-06", "Mañana", "Apertura", 5000, "Ana", "2026-09-06T08:00:00"),
+        _reg("Fau", "2026-09-06", "Mañana", "Cierre", 5000, "Ana", "2026-09-06T13:00:00"),
+        _reg("Fau", "2026-09-06", "Tarde", "Apertura", 4700, "Beto", "2026-09-06T14:00:00"),
+        _reg("Fau", "2026-09-06", "Tarde", "Cierre", 4700, "Beto", "2026-09-06T20:00:00"),
+    ])
+    saltos = calcular_saltos(df)
+    assert len(saltos) == 1
+    fila = saltos.iloc[0]
+    assert fila["tipo_salto"] == "Entre turnos"
+    assert fila["diferencia"] == pytest.approx(-300.0)
+    assert fila["estado"] == ESTADO_SALTO_DIFERENCIA
+    # Sin columna "id" en los registros de prueba -> queda vacio, no falla.
+    assert fila["id_cierre"] == ""
+
+
+def test_salto_entre_dias():
+    df = pd.DataFrame([
+        _reg("Fau", "2026-09-06", "Tarde", "Apertura", 5000, "Ana", "2026-09-06T14:00:00"),
+        _reg("Fau", "2026-09-06", "Tarde", "Cierre", 5000, "Ana", "2026-09-06T20:00:00"),
+        _reg("Fau", "2026-09-07", "Mañana", "Apertura", 5000, "Beto", "2026-09-07T08:00:00"),
+        _reg("Fau", "2026-09-07", "Mañana", "Cierre", 5000, "Beto", "2026-09-07T13:00:00"),
+    ])
+    saltos = calcular_saltos(df)
+    assert len(saltos) == 1
+    assert saltos.iloc[0]["tipo_salto"] == "Entre días"
+    assert saltos.iloc[0]["estado"] == ESTADO_SALTO_COINCIDE
+
+
+def test_saltos_no_se_mezclan_entre_locales():
+    df = pd.DataFrame([
+        _reg("Fau", "2026-09-06", "Mañana", "Cierre", 5000, "Ana", "2026-09-06T13:00:00"),
+        _reg("Zol", "2026-09-06", "Mañana", "Apertura", 3000, "Beto", "2026-09-06T08:05:00"),
+    ])
+    # Un Cierre de "Fau" no debe emparejarse con una Apertura de "Zol".
+    assert calcular_saltos(df).empty
+
+
+def test_saltos_df_vacio():
+    saltos = calcular_saltos(pd.DataFrame())
+    assert saltos.empty
+    assert "estado" in saltos.columns

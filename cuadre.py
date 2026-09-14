@@ -44,6 +44,12 @@ ESTADO_CIERRE_SUELTO = "⚠️ Cierre sin Apertura"
 ESTADO_NOMBRE_DISTINTO = "⚠️ Cerró otro nombre"
 ESTADO_SECUENCIA = "⚠️ Revisar secuencia"
 
+# Estados para calcular_saltos() (ver mas abajo): mismo umbral binario,
+# etiquetas propias porque ahi no se habla de "cortes" sino de la
+# continuidad del fondo entre un Cierre y la Apertura que le sigue.
+ESTADO_SALTO_COINCIDE = "✅ Coincide"
+ESTADO_SALTO_DIFERENCIA = "🔴 Diferencia"
+
 COLUMNAS_CORTE = [
     "corte",
     "nombre",  # a quien se le atribuye: SIEMPRE quien abrio
@@ -64,6 +70,26 @@ COLUMNAS_CORTE = [
 COLUMNAS_RESUMEN = ["n_cortes", "nombres", "diferencia", "diferencia_fmt", "estado", "observaciones"]
 
 COLUMNAS_PERSONA = ["nombre", "n_cortes", "diferencia", "diferencia_fmt", "descuadre_abs"]
+
+COLUMNAS_SALTO = [
+    "local",
+    "tipo_salto",  # "Mismo turno" / "Entre turnos" / "Entre días"
+    "fecha_cierre",
+    "turno_cierre",
+    "nombre_cierre",
+    "hora_cierre",
+    "fecha_apertura",
+    "turno_apertura",
+    "nombre_apertura",
+    "hora_apertura",
+    "cierre",
+    "apertura",
+    "diferencia",
+    "diferencia_fmt",
+    "estado",
+    "id_cierre",  # clave unica del salto: un Cierre solo tiene UNA siguiente Apertura
+    "id_apertura",
+]
 
 
 def _semaforo(diferencia: float) -> str:
@@ -318,3 +344,104 @@ def acumulado_por_persona(cortes: pd.DataFrame) -> pd.DataFrame:
     )
     agrupado["diferencia_fmt"] = agrupado["diferencia"].apply(lambda x: f"{x:+,.2f}")
     return agrupado.sort_values("descuadre_abs", ascending=False)[COLUMNAS_PERSONA]
+
+
+def _tipo_salto(fecha_cierre, turno_cierre, fecha_apertura, turno_apertura) -> str:
+    if fecha_cierre != fecha_apertura:
+        return "Entre días"
+    if turno_cierre != turno_apertura:
+        return "Entre turnos"
+    return "Mismo turno"
+
+
+def _fila_salto(local: str, cierre: dict, apertura: dict) -> dict:
+    ci_total = _total(cierre)
+    ap_total = _total(apertura)
+    if pd.notna(ci_total) and pd.notna(ap_total):
+        diferencia = ap_total - ci_total
+        estado = ESTADO_SALTO_COINCIDE if abs(diferencia) <= UMBRAL_VERDE else ESTADO_SALTO_DIFERENCIA
+    else:
+        diferencia = pd.NA
+        estado = ESTADO_SALTO_COINCIDE
+
+    fecha_cierre = cierre.get("fecha")
+    turno_cierre = cierre.get("turno")
+    fecha_apertura = apertura.get("fecha")
+    turno_apertura = apertura.get("turno")
+
+    return {
+        "local": local,
+        "tipo_salto": _tipo_salto(fecha_cierre, turno_cierre, fecha_apertura, turno_apertura),
+        "fecha_cierre": fecha_cierre,
+        "turno_cierre": turno_cierre,
+        "nombre_cierre": _nombre(cierre),
+        "hora_cierre": _hora(cierre),
+        "fecha_apertura": fecha_apertura,
+        "turno_apertura": turno_apertura,
+        "nombre_apertura": _nombre(apertura),
+        "hora_apertura": _hora(apertura),
+        "cierre": ci_total,
+        "apertura": ap_total,
+        "diferencia": diferencia,
+        "diferencia_fmt": _fmt(diferencia),
+        "estado": estado,
+        "id_cierre": str(cierre.get("id", "")),
+        "id_apertura": str(apertura.get("id", "")),
+    }
+
+
+def calcular_saltos(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Recorre TODOS los registros de cada local en orden cronologico y arma
+    un "salto" por cada Cierre seguido de una Apertura -- sea el mismo
+    turno (corte parcial), el turno siguiente del mismo dia, o el dia
+    siguiente. El fondo deberia quedar guardado de un salto a otro; si no
+    coincide, alguien movio la caja entre medio (o hubo un error).
+
+    A diferencia de calcular_cortes() (que mide cada corte contra su
+    PROPIA Apertura, ignorando a proposito lo que pasa ENTRE cortes),
+    esto mide exactamente ese "entre medio" que calcular_cortes() deja
+    afuera -- son complementarios, no reemplazan el uno al otro.
+
+    Cada salto se identifica de forma unica por "id_cierre" (un Cierre
+    solo puede tener UNA Apertura siguiente), util para que un ajuste
+    autorizado apunte a un salto especifico y no a "todo el dia".
+    """
+    if df is None or df.empty:
+        return pd.DataFrame(columns=COLUMNAS_SALTO)
+
+    faltan = {"local", "tipo", "fecha", "turno", "total", "nombre"} - set(df.columns)
+    if faltan:
+        raise KeyError(f"Faltan columnas para calcular_saltos: {sorted(faltan)}")
+
+    trabajo = df.copy().reset_index(drop=True)
+    if "timestamp" in trabajo.columns:
+        trabajo["_ts"] = pd.to_datetime(trabajo["timestamp"], errors="coerce")
+    else:
+        trabajo["_ts"] = pd.NaT
+    trabajo["_orden"] = range(len(trabajo))
+    trabajo = trabajo.sort_values(["_ts", "_orden"], kind="stable")
+
+    filas: list[dict] = []
+    for local, grupo in trabajo.groupby("local", dropna=False, sort=False):
+        registros = grupo.to_dict("records")
+        for actual, siguiente in zip(registros, registros[1:]):
+            if (
+                str(actual.get("tipo", "")).strip() == "Cierre"
+                and str(siguiente.get("tipo", "")).strip() == "Apertura"
+            ):
+                filas.append(_fila_salto(local, actual, siguiente))
+
+    salida = pd.DataFrame(filas, columns=COLUMNAS_SALTO)
+    if salida.empty:
+        return salida
+    for col in ["cierre", "apertura", "diferencia"]:
+        salida[col] = pd.to_numeric(salida[col], errors="coerce")
+    # fecha_cierre/fecha_apertura se dejan como vienen (objetos date), igual
+    # que "fecha" en calcular_cortes(), para poder filtrar por rango de
+    # fechas antes de mostrar (arrow_safe() ya las pasa a texto al pintar).
+    for col in salida.columns:
+        if col in {"cierre", "apertura", "diferencia", "fecha_cierre", "fecha_apertura"}:
+            continue
+        salida[col] = salida[col].fillna("").astype(str).replace({"nan": "", "None": ""})
+    return salida

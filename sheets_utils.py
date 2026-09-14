@@ -34,9 +34,12 @@ from googleapiclient.http import MediaIoBaseUpload
 # Logica pura del cuadre por turno (no depende de streamlit ni Google).
 # Se re-exporta para que el resto de la app la use como sh.calcular_cortes, etc.
 from cuadre import (  # noqa: F401  (re-export para el resto de la app)
+    ESTADO_SALTO_COINCIDE,
+    ESTADO_SALTO_DIFERENCIA,
     UMBRAL_VERDE,
     acumulado_por_persona,
     calcular_cortes,
+    calcular_saltos,
     resumen_turnos,
 )
 
@@ -858,17 +861,22 @@ def actualizar_estado_pago(id_encuesta: str, nuevo_estado: str) -> None:
 #
 # Cuando el dueno retira o deposita efectivo/saldo de un local FUERA de
 # un turno (p.ej. saca S/1000 de la tarjeta), el fondo cambia sin que haya
-# un error de registro. Sin esto, tanto "Continuidad entre dias" como
-# "Cuadre por turno" (pages/7_Dashboard.py) lo marcarian como una
-# diferencia sospechosa. Cada ajuste se registra aca (con motivo) y se
-# resta de la comparacion correspondiente.
+# un error de registro. Sin esto, tanto "Continuidad" como "Cuadre por
+# turno" (pages/7_Dashboard.py) lo marcarian como una diferencia
+# sospechosa. Cada ajuste se registra aca (con motivo) y se resta de la
+# comparacion correspondiente.
 #
-# Un mismo ajuste aplica a UNA de estas dos cosas, segun la columna
-# "turno":
-# - turno = "" (vacio): es un ajuste "de la noche", se resta en
-#   Continuidad entre dias (compara local+fecha, sin importar el turno).
+# Un mismo ajuste aplica a UNA de estas tres cosas:
 # - turno = "Mañana" / "Tarde": es un ajuste de UN turno especifico, se
 #   resta en Cuadre por turno (compara local+fecha+turno).
+# - salto_id_cierre = <id de un Cierre>: es un ajuste de UN salto
+#   especifico (Cierre -> Apertura siguiente, sea mismo turno, entre
+#   turnos o entre dias) en Continuidad -- el esquema NUEVO, preciso
+#   porque un mismo dia puede tener varios saltos.
+# - turno = "" Y salto_id_cierre = "": esquema VIEJO de Continuidad
+#   (de antes de que existiera calcular_saltos), un ajuste "de la noche"
+#   por local+fecha -- se sigue leyendo para no perder ajustes ya
+#   guardados, pero los nuevos ya no se guardan asi.
 # ---------------------------------------------------------------------
 
 NOMBRE_HOJA_AJUSTES = "Ajustes"
@@ -876,7 +884,7 @@ COLUMNAS_AJUSTES = [
     "id",
     "timestamp",
     "local",
-    # Continuidad: fecha del CIERRE del dia anterior a la Apertura que se
+    # Continuidad (esquema viejo): fecha del CIERRE del salto que se
     # compara. Cuadre por turno: la fecha de ESE turno.
     "fecha",
     # Cuanto cambio el fondo a proposito: negativo = retiro, positivo =
@@ -888,6 +896,11 @@ COLUMNAS_AJUSTES = [
     # los ajustes guardados antes de que existiera esta columna no quedan
     # con los datos corridos -- simplemente quedan con turno = "".
     "turno",
+    # Igual: agregada al final. Id del registro de Cierre de un salto
+    # especifico (ver cuadre.calcular_saltos) -- identifica de forma
+    # unica UN salto Cierre->Apertura, para que un ajuste no aplique "a
+    # todo el dia" sino solo al hueco que realmente explica.
+    "salto_id_cierre",
 ]
 
 
