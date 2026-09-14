@@ -171,34 +171,47 @@ with tab_resumen:
     ultimo_cierre_por_local = cierres.groupby("local").tail(1).set_index("local")
     ultimo_registro_por_local = df.sort_values("timestamp").groupby("local").tail(1).set_index("local")
 
-    alertas = []
+    # Se muestran TODOS los locales (no solo los que estan bajos), asi de
+    # un vistazo se ve el fondo de cada uno -- en rojo los que estan bajo
+    # el minimo, en verde el resto. Antes un local por encima del minimo
+    # simplemente no aparecia por ningun lado en esta lista.
+    estado_locales = []
     for _, fila in config_df.iterrows():
         local = fila["local"]
         fondo_minimo = fila["fondo_minimo"]
-        if local in ultimo_registro_por_local.index:
-            fondo_actual = ultimo_registro_por_local.loc[local, "total"]
-            if pd.notna(fondo_actual) and fondo_actual < fondo_minimo:
-                alertas.append((local, fondo_actual, fondo_minimo))
+        if local not in ultimo_registro_por_local.index:
+            continue
+        fondo_actual = ultimo_registro_por_local.loc[local, "total"]
+        if pd.isna(fondo_actual):
+            continue
+        bajo_minimo = fondo_actual < fondo_minimo
+        estado_locales.append((local, fondo_actual, fondo_minimo, bajo_minimo))
 
-    if alertas:
-        for local, fondo_actual, fondo_minimo in alertas:
-            detalle_ultimo = ""
-            if local in ultimo_registro_por_local.index:
-                ur = ultimo_registro_por_local.loc[local]
-                hora_ur = ""
-                if pd.notna(ur.get("timestamp")):
-                    hora_ur = pd.to_datetime(ur["timestamp"]).strftime("%H:%M")
-                nombre_ur = str(ur.get("nombre", "")).strip() or "—"
-                detalle_ultimo = (
-                    f"  \nÚltimo corte: **{ur.get('tipo', '')}** por **{nombre_ur}** "
-                    f"— {ur.get('fecha', '')} {hora_ur}"
-                )
-            st.error(
-                f"**{local}**: fondo total en S/ {fondo_actual:,.2f} "
-                f"(minimo configurado: S/ {fondo_minimo:,.2f}){detalle_ultimo}"
-            )
-    else:
-        st.success("Todos los locales estan por encima de su fondo minimo. 👍")
+    # Los que estan bajos primero (lo mas urgente arriba).
+    estado_locales.sort(key=lambda x: x[3], reverse=True)
+
+    for local, fondo_actual, fondo_minimo, bajo_minimo in estado_locales:
+        detalle_ultimo = ""
+        ur = ultimo_registro_por_local.loc[local]
+        hora_ur = ""
+        if pd.notna(ur.get("timestamp")):
+            hora_ur = pd.to_datetime(ur["timestamp"]).strftime("%H:%M")
+        nombre_ur = str(ur.get("nombre", "")).strip() or "—"
+        detalle_ultimo = (
+            f"  \nÚltimo corte: **{ur.get('tipo', '')}** por **{nombre_ur}** "
+            f"— {ur.get('fecha', '')} {hora_ur}"
+        )
+        mensaje = (
+            f"**{local}**: fondo total en S/ {fondo_actual:,.2f} "
+            f"(minimo configurado: S/ {fondo_minimo:,.2f}){detalle_ultimo}"
+        )
+        if bajo_minimo:
+            st.error(mensaje)
+        else:
+            st.success(mensaje)
+
+    if not estado_locales:
+        st.caption("Todavía no hay registros para calcular el fondo de ningún local.")
 
     st.caption(
         "El fondo minimo de cada local se edita directamente en la hoja "
