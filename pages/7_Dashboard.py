@@ -161,14 +161,11 @@ with tab_resumen:
     # -------------------------------------------------------------
     st.subheader("🚨 Alertas de fondo")
 
-    # ultimo_cierre_por_local se usa mas abajo, en el KPI "Fondo total
-    # actual" (que a propósito solo mira Cierres, lo ya contado y
-    # cerrado). Para la ALERTA usamos ultimo_registro_por_local (el
-    # registro mas reciente sea Apertura o Cierre): si alguien acaba de
-    # abrir con plata nueva agregada, eso ya es real y debe reflejarse de
-    # una, sin esperar a que cierren para que la alerta se actualice.
-    cierres = df[df["tipo"] == "Cierre"].sort_values("timestamp")
-    ultimo_cierre_por_local = cierres.groupby("local").tail(1).set_index("local")
+    # ultimo_registro_por_local: el registro mas reciente de cada local,
+    # sea Apertura o Cierre -- lo usan tanto la alerta como el KPI de
+    # "Fondo total actual" mas abajo. Si alguien acaba de abrir con plata
+    # nueva agregada, eso ya es real y debe contar, sin esperar a que
+    # cierren.
     ultimo_registro_por_local = df.sort_values("timestamp").groupby("local").tail(1).set_index("local")
 
     # Se muestran TODOS los locales (no solo los que estan bajos), asi de
@@ -224,17 +221,19 @@ with tab_resumen:
     col1, col2, col3 = st.columns(3)
     col1.metric("Registros en el rango", len(df_filtrado))
 
-    # Fondo total AHORA = suma del ULTIMO cierre de cada local (no la suma de
-    # todos los cierres del rango, que no significa nada). Usa el mismo
-    # ultimo_cierre_por_local de las alertas, sin el filtro de fechas, pero
+    # Fondo total AHORA = suma del ULTIMO REGISTRO (Apertura o Cierre, el
+    # que sea mas reciente) de cada local -- misma logica que Alertas de
+    # fondo, mas arriba: si alguien acaba de abrir con plata agregada,
+    # eso ya es real y debe contar, sin esperar a que cierren. Usa
+    # ultimo_registro_por_local, sin el filtro de fechas, pero
     # respetando el filtro de locales.
-    fondo_actual_total = ultimo_cierre_por_local.loc[
-        ultimo_cierre_por_local.index.isin(locales_sel), "total"
+    fondo_actual_total = ultimo_registro_por_local.loc[
+        ultimo_registro_por_local.index.isin(locales_sel), "total"
     ].sum()
     col2.metric(
-        "Fondo total actual (último cierre de cada local)",
+        "Fondo total actual (último registro de cada local)",
         f"S/ {fondo_actual_total:,.2f}",
-        help="Suma del total (efectivo + tarjeta) del último Cierre registrado de cada local seleccionado.",
+        help="Suma del total (efectivo + tarjeta) del último registro (Apertura o Cierre) de cada local seleccionado.",
     )
     col3.metric(
         "Operaciones totales",
