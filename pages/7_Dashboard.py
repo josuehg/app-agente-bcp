@@ -931,8 +931,9 @@ with tab_cuadre:
     st.subheader("👤 Acumulado de diferencias por persona")
     st.caption(
         "En el rango de fechas filtrado. La diferencia de cada corte se le "
-        "atribuye a quien abrió. No incluye turnos ya '🔷 Autorizado'. "
-        "Ordenado por descuadre total (sin importar el signo)."
+        "atribuye a quien abrió; la diferencia en la entrega se le atribuye "
+        "a quien cerró (ver Continuidad, más arriba). No incluye lo ya "
+        "'🔷 Autorizado'. Ordenado por descuadre total (sin importar el signo)."
     )
 
     _turnos_autorizados = set(
@@ -997,8 +998,8 @@ with tab_cuadre:
                         "n_cortes": "Cortes",
                         "diferencia_fmt": "Diferencia neta (S/, sobra − falta, se cancelan)",
                         "descuadre_abs": "Descuadre total (S/, sin importar el signo)",
-                        "n_saltos": "Saltos cerrados",
-                        "diferencia_saltos_fmt": "Diferencia entre cortes (S/, atribuida a quien cerró)",
+                        "n_saltos": "Entregas de caja",
+                        "diferencia_saltos_fmt": "Diferencia en la entrega (S/, atribuida a quien cerró)",
                     }
                 ).drop(columns=["diferencia", "diferencia_saltos"])
             ),

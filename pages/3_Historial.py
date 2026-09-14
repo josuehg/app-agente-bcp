@@ -314,7 +314,7 @@ with tab_acumulado:
     st.subheader(f"Acumulado de diferencias por persona — {local}")
     st.caption(
         "En el rango de fechas filtrado. La diferencia de cada corte se le "
-        "atribuye a quien abrió; la diferencia entre cortes se le atribuye "
+        "atribuye a quien abrió; la diferencia en la entrega se le atribuye "
         "a quien cerró (ver pestaña Continuidad). No incluye lo ya "
         "'🔷 Autorizado'. Ordenado por descuadre total (sin importar el signo)."
     )
@@ -380,7 +380,7 @@ with tab_acumulado:
                         "nombre": "Persona",
                         "diferencia_fmt": "Diferencia neta (S/, sobra − falta, se cancelan)",
                         "descuadre_abs": "Descuadre total (S/, sin importar el signo)",
-                        "diferencia_saltos_fmt": "Diferencia entre cortes (S/, atribuida a quien cerró)",
+                        "diferencia_saltos_fmt": "Diferencia en la entrega (S/, atribuida a quien cerró)",
                     }
                 ).drop(columns=["diferencia", "diferencia_saltos", "n_cortes", "n_saltos"])
             ),
