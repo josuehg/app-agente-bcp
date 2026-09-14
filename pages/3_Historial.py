@@ -67,7 +67,7 @@ with col2:
     opcion_rango = st.selectbox(
         "Ver desde",
         [7, 14, 30, "mes", 90],
-        index=1,
+        index=3,
         format_func=lambda d: "Este mes" if d == "mes" else f"Ultimos {d} dias",
     )
 
