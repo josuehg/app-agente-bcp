@@ -161,22 +161,22 @@ with tab_resumen:
     # -------------------------------------------------------------
     st.subheader("🚨 Alertas de fondo")
 
+    # ultimo_cierre_por_local se usa mas abajo, en el KPI "Fondo total
+    # actual" (que a propósito solo mira Cierres, lo ya contado y
+    # cerrado). Para la ALERTA usamos ultimo_registro_por_local (el
+    # registro mas reciente sea Apertura o Cierre): si alguien acaba de
+    # abrir con plata nueva agregada, eso ya es real y debe reflejarse de
+    # una, sin esperar a que cierren para que la alerta se actualice.
     cierres = df[df["tipo"] == "Cierre"].sort_values("timestamp")
     ultimo_cierre_por_local = cierres.groupby("local").tail(1).set_index("local")
-
-    # El fondo mostrado en la alerta sale del ULTIMO CIERRE (es lo contado);
-    # pero el ULTIMO CORTE de cualquier tipo (Apertura o Cierre, el que sea
-    # mas reciente) dice si el local esta abierto ahora mismo o no, y quien
-    # y cuando lo registro -- eso ayuda a saber que tan al dia esta la
-    # alerta.
     ultimo_registro_por_local = df.sort_values("timestamp").groupby("local").tail(1).set_index("local")
 
     alertas = []
     for _, fila in config_df.iterrows():
         local = fila["local"]
         fondo_minimo = fila["fondo_minimo"]
-        if local in ultimo_cierre_por_local.index:
-            fondo_actual = ultimo_cierre_por_local.loc[local, "total"]
+        if local in ultimo_registro_por_local.index:
+            fondo_actual = ultimo_registro_por_local.loc[local, "total"]
             if pd.notna(fondo_actual) and fondo_actual < fondo_minimo:
                 alertas.append((local, fondo_actual, fondo_minimo))
 
