@@ -1062,6 +1062,63 @@ with tab_cuadre:
                     else:
                         st.caption("Este corte no tiene Apertura y Cierre completos para comparar.")
 
+            # --- Entregas de caja: los saltos que esta persona CERRÓ -----
+            # Complementa lo de arriba (que mide DENTRO de un corte): esto
+            # es lo que pasó en el hueco entre su Cierre y la Apertura
+            # siguiente (ver Continuidad, más arriba en esta pestaña).
+            saltos_persona = (
+                saltos[
+                    (saltos["nombre_cierre"] == persona_sel)
+                    & (saltos["fecha_cierre"] >= desde)
+                    & (saltos["fecha_cierre"] <= hasta)
+                ]
+                if not saltos.empty
+                else saltos
+            )
+            if not saltos_persona.empty:
+                st.markdown(f"**Entregas de caja de {persona_sel} en el rango:**")
+                st.dataframe(
+                    sh.arrow_safe(
+                        saltos_persona[
+                            ["tipo_salto", "fecha_cierre", "turno_cierre", "fecha_apertura",
+                             "turno_apertura", "nombre_apertura", "cierre", "apertura",
+                             "diferencia_fmt", "estado"]
+                        ].rename(
+                            columns={
+                                "tipo_salto": "Tipo", "fecha_cierre": "Fecha cierre",
+                                "turno_cierre": "Turno cierre", "fecha_apertura": "Fecha apertura",
+                                "turno_apertura": "Turno apertura", "nombre_apertura": "Abrió después",
+                                "cierre": "Cierre (S/)", "apertura": "Apertura (S/)",
+                                "diferencia_fmt": "Diferencia (S/)", "estado": "Estado",
+                            }
+                        )
+                    ),
+                    width="stretch",
+                    hide_index=True,
+                )
+
+                st.markdown("**Revisión de cada entrega** (Cierre vs Apertura siguiente, campo por campo):")
+                for _, sp in saltos_persona.iterrows():
+                    encabezado_salto = (
+                        f"{sp['tipo_salto']} · {sp['fecha_cierre']} {sp['turno_cierre']} → "
+                        f"{sp['fecha_apertura']} {sp['turno_apertura']} · "
+                        f"{sp['diferencia_fmt']} · {sp['estado']}"
+                    )
+                    with st.expander(encabezado_salto):
+                        id_ci_s, id_ap_s = sp["id_cierre"], sp["id_apertura"]
+                        if (
+                            id_ci_s in _registros_por_id.index
+                            and id_ap_s in _registros_por_id.index
+                        ):
+                            _comparar_par(
+                                _registros_por_id.loc[id_ci_s],
+                                _registros_por_id.loc[id_ap_s],
+                                "Cierre",
+                                "Apertura siguiente",
+                            )
+                        else:
+                            st.caption("No se encontraron los dos registros para comparar.")
+
 with tab_comisiones:
     # -------------------------------------------------------------
     # Comisiones estimadas (antes pages/8_Comisiones.py, movido acá
