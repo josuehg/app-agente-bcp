@@ -133,11 +133,13 @@ with tab_cuadre:
 
         resumen["estado"] = resumen.apply(_con_ajuste_turno_local, axis=1)
 
-    # Turnos ya "🔷 Autorizado": se pisa el Estado de CADA corte que
-    # pertenece a ese turno (en "cortes" mismo, asi que se ve igual en
-    # "Ver corte por corte" y se reusa mas abajo en Acumulado) -- sin
-    # esto, el corte seguia mostrando el semaforo crudo aunque el turno
-    # entero ya estuviera resuelto.
+    # Turnos ya "🔷 Autorizado": se pisa el Estado de los cortes de ese
+    # turno que YA estaban en "🔴 Diferencia" (en "cortes" mismo, asi que
+    # se ve igual en "Ver corte por corte" y se reusa mas abajo en
+    # Acumulado). Un corte que ya estaba "✅ Cuadrado" por si solo NO se
+    # toca -- el ajuste se calcula sobre la SUMA del turno, y si el turno
+    # tiene varios cortes, marcar el que ya estaba bien como "Autorizado"
+    # daria a entender que tenia algo que explicar cuando no era asi.
     _turnos_autorizados_local = set(
         resumen.loc[resumen["estado"] == "🔷 Autorizado", ["fecha", "turno"]]
         .itertuples(index=False, name=None)
@@ -145,8 +147,8 @@ with tab_cuadre:
     if _turnos_autorizados_local:
         cortes.loc[
             [
-                (f, t) in _turnos_autorizados_local
-                for f, t in zip(cortes["fecha"], cortes["turno"])
+                (f, t) in _turnos_autorizados_local and est == "🔴 Diferencia"
+                for f, t, est in zip(cortes["fecha"], cortes["turno"], cortes["estado"])
             ],
             "estado",
         ] = "🔷 Autorizado"
