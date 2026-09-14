@@ -945,9 +945,49 @@ with tab_cuadre:
     else:
         cortes_acumulado = cortes
 
-    acumulado = sh.acumulado_por_persona(cortes_acumulado)
+    # "Diferencia entre cortes": ademas de lo que pasa DENTRO de un corte
+    # (arriba), tambien se suma lo que pasa en el HUECO entre un Cierre y
+    # la Apertura siguiente (ver Continuidad, mas arriba en esta misma
+    # pestaña) -- eso se le atribuye a quien CERRO (ver
+    # acumulado_saltos_por_persona). Igual que arriba, lo ya "🔷
+    # Autorizado" no cuenta.
+    _ids_autorizados_salto = (
+        set(cont_df.loc[cont_df["Estado"] == "🔷 Autorizado", "_id_cierre"])
+        if not cont_df.empty
+        else set()
+    )
+    saltos_para_acumulado = (
+        saltos[
+            (saltos["fecha_cierre"] >= desde)
+            & (saltos["fecha_cierre"] <= hasta)
+            & (~saltos["id_cierre"].isin(_ids_autorizados_salto))
+        ]
+        if not saltos.empty
+        else saltos
+    )
+    acumulado_saltos = sh.acumulado_saltos_por_persona(saltos_para_acumulado)
+
+    acumulado = pd.merge(
+        sh.acumulado_por_persona(cortes_acumulado)[
+            ["nombre", "n_cortes", "diferencia", "diferencia_fmt", "descuadre_abs"]
+        ],
+        acumulado_saltos[["nombre", "n_saltos", "diferencia_saltos", "diferencia_saltos_fmt"]],
+        on="nombre",
+        how="outer",
+    )
+    for _col, _default in [
+        ("n_cortes", 0), ("diferencia", 0.0), ("descuadre_abs", 0.0),
+        ("n_saltos", 0), ("diferencia_saltos", 0.0),
+    ]:
+        acumulado[_col] = acumulado[_col].fillna(_default)
+    acumulado["n_cortes"] = acumulado["n_cortes"].astype(int)
+    acumulado["n_saltos"] = acumulado["n_saltos"].astype(int)
+    acumulado["diferencia_fmt"] = acumulado["diferencia"].apply(lambda x: f"{x:+,.2f}")
+    acumulado["diferencia_saltos_fmt"] = acumulado["diferencia_saltos"].apply(lambda x: f"{x:+,.2f}")
+    acumulado = acumulado.sort_values("descuadre_abs", ascending=False)
+
     if acumulado.empty:
-        st.caption("Todavía no hay cortes completos en el rango seleccionado.")
+        st.caption("Todavía no hay cortes ni saltos completos en el rango seleccionado.")
     else:
         st.dataframe(
             sh.arrow_safe(
@@ -957,8 +997,10 @@ with tab_cuadre:
                         "n_cortes": "Cortes",
                         "diferencia_fmt": "Diferencia neta (S/, sobra − falta, se cancelan)",
                         "descuadre_abs": "Descuadre total (S/, sin importar el signo)",
+                        "n_saltos": "Saltos cerrados",
+                        "diferencia_saltos_fmt": "Diferencia entre cortes (S/, atribuida a quien cerró)",
                     }
-                ).drop(columns=["diferencia"])
+                ).drop(columns=["diferencia", "diferencia_saltos"])
             ),
             width="stretch",
             hide_index=True,

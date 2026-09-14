@@ -38,6 +38,7 @@ from cuadre import (  # noqa: F401  (re-export para el resto de la app)
     ESTADO_SALTO_DIFERENCIA,
     UMBRAL_VERDE,
     acumulado_por_persona,
+    acumulado_saltos_por_persona,
     calcular_cortes,
     calcular_saltos,
     resumen_turnos,

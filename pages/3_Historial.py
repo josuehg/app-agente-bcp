@@ -87,8 +87,8 @@ if df_local.empty:
     st.info("No hay registros de este local en el rango elegido (turno / días).")
     st.stop()
 
-tab_cuadre, tab_acumulado, tab_registros = st.tabs(
-    ["🔍 Cuadre por turno", "👤 Acumulado por persona", "🗂️ Detalle de registros"]
+tab_cuadre, tab_continuidad, tab_acumulado, tab_registros = st.tabs(
+    ["🔍 Cuadre por turno", "🔗 Continuidad", "👤 Acumulado por persona", "🗂️ Detalle de registros"]
 )
 
 with tab_cuadre:
@@ -211,6 +211,95 @@ with tab_cuadre:
                 hide_index=True,
             )
 
+with tab_continuidad:
+    # -------------------------------------------------------------
+    # Continuidad: compara cada Cierre con la Apertura que le sigue
+    # (mismo turno / entre turnos / entre días) -- igual que en el
+    # Dashboard, pero SOLO LECTURA: se ve el Estado, no el motivo ni
+    # quién autorizó un ajuste (eso es información de administración).
+    #
+    # Se calcula sobre TODO el historial del local (no solo lo filtrado
+    # por fecha), para no perder el salto justo en el borde del rango
+    # -- recien despues se filtra lo que se muestra.
+    # -------------------------------------------------------------
+    st.subheader(f"Continuidad — {local}")
+    st.caption(
+        "Compara cada Cierre con la Apertura que le sigue (mismo turno, "
+        "entre turnos, o entre días): el fondo debería quedar guardado de "
+        "un salto a otro. Aquí solo se ve el Estado."
+    )
+
+    saltos_local = sh.calcular_saltos(df[df["local"] == local])
+
+    _ajustes_todas_local = sh.get_ajustes_df()
+    if not _ajustes_todas_local.empty:
+        _ajustes_todas_local = _ajustes_todas_local[_ajustes_todas_local["local"] == local]
+    if _ajustes_todas_local.empty:
+        _ajuste_por_salto_local = {}
+        _ajuste_viejo_por_fecha_local = {}
+    else:
+        _ajustes_salto_local = _ajustes_todas_local[_ajustes_todas_local["salto_id_cierre"] != ""]
+        _ajuste_por_salto_local = _ajustes_salto_local.groupby("salto_id_cierre")["monto"].sum().to_dict()
+        _ajustes_viejo_local = _ajustes_todas_local[
+            (_ajustes_todas_local["turno"] == "") & (_ajustes_todas_local["salto_id_cierre"] == "")
+        ]
+        _ajuste_viejo_por_fecha_local = _ajustes_viejo_local.groupby("fecha")["monto"].sum().to_dict()
+
+    filas_cont_local = []
+    for _, s in saltos_local.iterrows():
+        if pd.isna(s["diferencia"]):
+            continue
+        ajuste_nuevo = float(_ajuste_por_salto_local.get(s["id_cierre"], 0.0))
+        ajuste_viejo = 0.0
+        if s["tipo_salto"] == "Entre días":
+            ajuste_viejo = float(_ajuste_viejo_por_fecha_local.get(s["fecha_cierre"], 0.0))
+        ajuste_total = ajuste_nuevo + ajuste_viejo
+        diferencia = s["diferencia"]
+        restante = diferencia - ajuste_total
+        if ajuste_total != 0 and abs(restante) <= sh.UMBRAL_VERDE:
+            estado = "🔷 Autorizado"
+        elif abs(restante) <= sh.UMBRAL_VERDE:
+            estado = "✅ Coincide"
+        else:
+            estado = "🔴 Diferencia"
+        filas_cont_local.append(
+            {
+                "_fecha_cierre": s["fecha_cierre"],
+                "_id_cierre": s["id_cierre"],
+                "Tipo": s["tipo_salto"],
+                "Cierre": f"{s['fecha_cierre']} {s['turno_cierre']} {s['hora_cierre']} — {s['nombre_cierre']}",
+                "Apertura": f"{s['fecha_apertura']} {s['turno_apertura']} {s['hora_apertura']} — {s['nombre_apertura']}",
+                "Diferencia (S/)": f"{diferencia:+,.2f}",
+                "Estado": estado,
+            }
+        )
+
+    cont_local_df = pd.DataFrame(filas_cont_local)
+    if cont_local_df.empty:
+        st.caption("Todavía no hay saltos Cierre → Apertura para comparar.")
+    else:
+        cont_local_df = cont_local_df[cont_local_df["_fecha_cierre"] >= desde].sort_values(
+            "_fecha_cierre", ascending=False
+        )
+        if cont_local_df.empty:
+            st.caption("No hay comparaciones en el rango de fechas seleccionado.")
+        else:
+            con_diferencia_local = int((cont_local_df["Estado"] == "🔴 Diferencia").sum())
+            if con_diferencia_local:
+                st.warning(f"⚠️ {con_diferencia_local} caso(s) sin explicar todavía.")
+            else:
+                st.success("Todo coincide (o está autorizado). 👍")
+            st.dataframe(
+                sh.arrow_safe(cont_local_df.drop(columns=["_fecha_cierre", "_id_cierre"])),
+                width="stretch",
+                hide_index=True,
+            )
+            st.caption(
+                "🔷 Autorizado = administración ya registró un ajuste que explica la "
+                "diferencia. **Tipo** dice si el salto es dentro del mismo turno, entre "
+                "Mañana y Tarde, o entre un día y el siguiente."
+            )
+
 with tab_acumulado:
     # -------------------------------------------------------------
     # Acumulado de diferencias por persona: quien abrio cada corte se
@@ -225,8 +314,9 @@ with tab_acumulado:
     st.subheader(f"Acumulado de diferencias por persona — {local}")
     st.caption(
         "En el rango de fechas filtrado. La diferencia de cada corte se le "
-        "atribuye a quien abrió. No incluye turnos ya '🔷 Autorizado'. "
-        "Ordenado por descuadre total (sin importar el signo)."
+        "atribuye a quien abrió; la diferencia entre cortes se le atribuye "
+        "a quien cerró (ver pestaña Continuidad). No incluye lo ya "
+        "'🔷 Autorizado'. Ordenado por descuadre total (sin importar el signo)."
     )
 
     _turnos_autorizados_local = set(
@@ -241,9 +331,47 @@ with tab_acumulado:
     else:
         cortes_acumulado_local = cortes
 
-    acumulado_local = sh.acumulado_por_persona(cortes_acumulado_local)
+    # "Diferencia entre cortes": lo que pasa en el HUECO entre un Cierre y
+    # la Apertura siguiente (pestaña Continuidad), atribuido a quien
+    # cerró -- distinto de la diferencia DENTRO de un corte (arriba).
+    _ids_autorizados_salto_local = (
+        set(cont_local_df.loc[cont_local_df["Estado"] == "🔷 Autorizado", "_id_cierre"])
+        if not cont_local_df.empty
+        else set()
+    )
+    saltos_para_acumulado_local = (
+        saltos_local[
+            (saltos_local["fecha_cierre"] >= desde)
+            & (~saltos_local["id_cierre"].isin(_ids_autorizados_salto_local))
+        ]
+        if not saltos_local.empty
+        else saltos_local
+    )
+    acumulado_saltos_local = sh.acumulado_saltos_por_persona(saltos_para_acumulado_local)
+
+    acumulado_local = pd.merge(
+        sh.acumulado_por_persona(cortes_acumulado_local)[
+            ["nombre", "n_cortes", "diferencia", "diferencia_fmt", "descuadre_abs"]
+        ],
+        acumulado_saltos_local[["nombre", "n_saltos", "diferencia_saltos", "diferencia_saltos_fmt"]],
+        on="nombre",
+        how="outer",
+    )
+    for _col, _default in [
+        ("n_cortes", 0), ("diferencia", 0.0), ("descuadre_abs", 0.0),
+        ("n_saltos", 0), ("diferencia_saltos", 0.0),
+    ]:
+        acumulado_local[_col] = acumulado_local[_col].fillna(_default)
+    acumulado_local["n_cortes"] = acumulado_local["n_cortes"].astype(int)
+    acumulado_local["n_saltos"] = acumulado_local["n_saltos"].astype(int)
+    acumulado_local["diferencia_fmt"] = acumulado_local["diferencia"].apply(lambda x: f"{x:+,.2f}")
+    acumulado_local["diferencia_saltos_fmt"] = acumulado_local["diferencia_saltos"].apply(
+        lambda x: f"{x:+,.2f}"
+    )
+    acumulado_local = acumulado_local.sort_values("descuadre_abs", ascending=False)
+
     if acumulado_local.empty:
-        st.caption("Todavía no hay cortes completos en el rango seleccionado.")
+        st.caption("Todavía no hay cortes ni saltos completos en el rango seleccionado.")
     else:
         st.dataframe(
             sh.arrow_safe(
@@ -253,8 +381,10 @@ with tab_acumulado:
                         "n_cortes": "Cortes",
                         "diferencia_fmt": "Diferencia neta (S/, sobra − falta, se cancelan)",
                         "descuadre_abs": "Descuadre total (S/, sin importar el signo)",
+                        "n_saltos": "Saltos cerrados",
+                        "diferencia_saltos_fmt": "Diferencia entre cortes (S/, atribuida a quien cerró)",
                     }
-                ).drop(columns=["diferencia"])
+                ).drop(columns=["diferencia", "diferencia_saltos"])
             ),
             width="stretch",
             hide_index=True,

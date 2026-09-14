@@ -21,6 +21,7 @@ from cuadre import (
     ESTADO_SALTO_DIFERENCIA,
     ESTADO_SECUENCIA,
     acumulado_por_persona,
+    acumulado_saltos_por_persona,
     calcular_cortes,
     calcular_saltos,
     resumen_turnos,
@@ -276,3 +277,28 @@ def test_saltos_df_vacio():
     saltos = calcular_saltos(pd.DataFrame())
     assert saltos.empty
     assert "estado" in saltos.columns
+
+
+# --- acumulado_saltos_por_persona: se atribuye a quien CIERRA ---------
+
+def test_acumulado_saltos_se_atribuye_a_quien_cierra():
+    df = pd.DataFrame([
+        _reg("Fau", "2026-09-06", "Mañana", "Apertura", 5000, "Ana", "2026-09-06T08:00:00"),
+        _reg("Fau", "2026-09-06", "Mañana", "Cierre", 5000, "Ana", "2026-09-06T13:00:00"),
+        _reg("Fau", "2026-09-06", "Tarde", "Apertura", 4970, "Beto", "2026-09-06T14:00:00"),
+        _reg("Fau", "2026-09-06", "Tarde", "Cierre", 4970, "Beto", "2026-09-06T20:00:00"),
+        _reg("Fau", "2026-09-07", "Mañana", "Apertura", 4960, "Ana", "2026-09-07T08:00:00"),
+        _reg("Fau", "2026-09-07", "Mañana", "Cierre", 4960, "Ana", "2026-09-07T13:00:00"),
+    ])
+    saltos = calcular_saltos(df)
+    acum = acumulado_saltos_por_persona(saltos).set_index("nombre")
+    # Salto 1 (Ana cierra Mañana -> Beto abre Tarde): -30, se le atribuye a Ana.
+    # Salto 2 (Beto cierra Tarde -> Ana abre Mañana siguiente): -10, se le atribuye a Beto.
+    assert acum.loc["Ana", "diferencia_saltos"] == pytest.approx(-30.0)
+    assert acum.loc["Beto", "diferencia_saltos"] == pytest.approx(-10.0)
+    assert acum.loc["Ana", "n_saltos"] == 1
+    assert acum.loc["Beto", "n_saltos"] == 1
+
+
+def test_acumulado_saltos_vacio():
+    assert acumulado_saltos_por_persona(pd.DataFrame()).empty

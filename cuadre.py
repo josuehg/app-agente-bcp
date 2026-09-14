@@ -71,6 +71,8 @@ COLUMNAS_RESUMEN = ["n_cortes", "nombres", "diferencia", "diferencia_fmt", "esta
 
 COLUMNAS_PERSONA = ["nombre", "n_cortes", "diferencia", "diferencia_fmt", "descuadre_abs"]
 
+COLUMNAS_SALTO_PERSONA = ["nombre", "n_saltos", "diferencia_saltos", "diferencia_saltos_fmt"]
+
 COLUMNAS_SALTO = [
     "local",
     "tipo_salto",  # "Mismo turno" / "Entre turnos" / "Entre días"
@@ -344,6 +346,36 @@ def acumulado_por_persona(cortes: pd.DataFrame) -> pd.DataFrame:
     )
     agrupado["diferencia_fmt"] = agrupado["diferencia"].apply(lambda x: f"{x:+,.2f}")
     return agrupado.sort_values("descuadre_abs", ascending=False)[COLUMNAS_PERSONA]
+
+
+def acumulado_saltos_por_persona(saltos: pd.DataFrame) -> pd.DataFrame:
+    """Por cada persona que CERRO un salto (Cierre -> Apertura siguiente,
+    ver calcular_saltos): cuantos saltos tuvo y la SUMA de sus
+    diferencias, con signo.
+
+    Se atribuye a quien CERRO (no a quien abrio despues) porque el que
+    cierra es quien certifica el monto que deberia quedarse igual hasta
+    el siguiente conteo -- si no coincide, lo mas comun es que el
+    problema este en como se dejo la caja, no en quien la vuelve a
+    abrir. Es un acumulado DISTINTO al de acumulado_por_persona() (que
+    mide los cortes en si, atribuidos a quien abrio): uno mide lo que
+    pasa DENTRO de un corte, este mide el hueco ENTRE cortes.
+    """
+    if saltos is None or saltos.empty:
+        return pd.DataFrame(columns=COLUMNAS_SALTO_PERSONA)
+
+    completos = saltos[saltos["diferencia"].notna() & (saltos["nombre_cierre"].astype(str) != "")]
+    if completos.empty:
+        return pd.DataFrame(columns=COLUMNAS_SALTO_PERSONA)
+
+    agrupado = (
+        completos.groupby("nombre_cierre")
+        .agg(n_saltos=("diferencia", "count"), diferencia_saltos=("diferencia", "sum"))
+        .reset_index()
+        .rename(columns={"nombre_cierre": "nombre"})
+    )
+    agrupado["diferencia_saltos_fmt"] = agrupado["diferencia_saltos"].apply(lambda x: f"{x:+,.2f}")
+    return agrupado[COLUMNAS_SALTO_PERSONA]
 
 
 def _tipo_salto(fecha_cierre, turno_cierre, fecha_apertura, turno_apertura) -> str:
