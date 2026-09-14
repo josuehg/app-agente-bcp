@@ -333,7 +333,75 @@ def _dialogo_confirmar_registro():
                         width="stretch",
                         hide_index=True,
                     )
-        st.divider()
+
+    # Si es Cierre, comparamos contra la Apertura de ESTE MISMO corte (lo
+    # que revisa Cuadre por turno en el Dashboard/Historial) -- mismo
+    # motivo: que quien cierra vea al instante si el corte no cuadró, en
+    # vez de enterarse despues. Tampoco bloquea el guardado.
+    elif tipo == "Cierre":
+        _aperturas_corte = sh.get_registros_df()
+        _aperturas_corte = _aperturas_corte[
+            (_aperturas_corte["local"] == local)
+            & (_aperturas_corte["fecha"] == sh.hoy_local())
+            & (_aperturas_corte["turno"] == turno)
+            & (_aperturas_corte["tipo"] == "Apertura")
+        ].sort_values("timestamp")
+        if not _aperturas_corte.empty:
+            _apertura_corte = _aperturas_corte.iloc[-1]
+            _hora_apertura = ""
+            if pd.notna(_apertura_corte.get("timestamp")):
+                _hora_apertura = pd.to_datetime(_apertura_corte["timestamp"]).strftime("%H:%M")
+            _ref_apertura = (
+                f"{_apertura_corte['nombre'] or 'alguien'}, {_hora_apertura}"
+            )
+            _dif_corte = total - float(_apertura_corte["total"])
+            if abs(_dif_corte) <= sh.UMBRAL_VERDE:
+                st.success(f"✅ Cuadra con la Apertura de este corte ({_ref_apertura}).")
+            else:
+                st.warning(
+                    f"⚠️ No cuadra con la Apertura de este corte ({_ref_apertura}): fue "
+                    f"S/ {float(_apertura_corte['total']):,.2f}, este Cierre es "
+                    f"S/ {total:,.2f} — diferencia de S/ {_dif_corte:+,.2f}."
+                )
+                _filas_comp = []
+                for etiqueta, col, valor_d in sh.DENOMINACIONES:
+                    _v_apertura = pd.to_numeric(_apertura_corte.get(col), errors="coerce")
+                    _v_apertura = 0.0 if pd.isna(_v_apertura) else float(_v_apertura)
+                    _v_cierre = float(cantidades.get(col, 0.0))
+                    _filas_comp.append(
+                        {
+                            "Campo": f"S/ {valor_d:g}",
+                            "Apertura del corte": _v_apertura,
+                            "Este Cierre": _v_cierre,
+                            "Diferencia": _v_cierre - _v_apertura,
+                        }
+                    )
+                _tarjeta_apertura = pd.to_numeric(_apertura_corte.get("tarjeta"), errors="coerce")
+                _tarjeta_apertura = 0.0 if pd.isna(_tarjeta_apertura) else float(_tarjeta_apertura)
+                _filas_comp.append(
+                    {
+                        "Campo": "Tarjeta",
+                        "Apertura del corte": _tarjeta_apertura,
+                        "Este Cierre": tarjeta,
+                        "Diferencia": tarjeta - _tarjeta_apertura,
+                    }
+                )
+                _filas_comp.append(
+                    {
+                        "Campo": "Total",
+                        "Apertura del corte": float(_apertura_corte["total"]),
+                        "Este Cierre": total,
+                        "Diferencia": _dif_corte,
+                    }
+                )
+                with st.expander("Ver comparación por denominación", expanded=True):
+                    st.dataframe(
+                        sh.arrow_safe(pd.DataFrame(_filas_comp)),
+                        width="stretch",
+                        hide_index=True,
+                    )
+
+    st.divider()
 
     st.write(f"Vas a guardar un registro de **{tipo}** del turno **{turno}** en **{local}**:")
     st.markdown(
