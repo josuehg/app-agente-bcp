@@ -1062,13 +1062,14 @@ with tab_cuadre:
                 sh.arrow_safe(
                     cortes_persona[
                         ["fecha", "local", "turno", "corte", "nombre_cierre",
-                         "apertura", "cierre", "diferencia_fmt", "estado"]
+                         "apertura", "cierre", "diferencia_fmt", "estado", "observaciones"]
                     ].rename(
                         columns={
                             "fecha": "Fecha", "local": "Local", "turno": "Turno",
                             "corte": "Corte", "nombre_cierre": "Cerró",
                             "apertura": "Apertura (S/)", "cierre": "Cierre (S/)",
                             "diferencia_fmt": "Diferencia (S/)", "estado": "Estado",
+                            "observaciones": "Observaciones",
                         }
                     )
                 ),
