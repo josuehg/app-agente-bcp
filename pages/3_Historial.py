@@ -473,12 +473,25 @@ with tab_registros:
                     # puede cortar a medio mensaje y tirar un "Connection error".
                     # Pidiendo un click por foto, solo se manda lo que el
                     # cajero realmente quiere ver, de a una.
+                    #
+                    # IMPORTANTE: solo se deja UNA foto abierta a la vez (una
+                    # sola clave global, no una por foto). Si se guardaba una
+                    # bandera por foto, cada foto que el cajero abria se
+                    # quedaba marcada "abierta" para siempre y se volvia a
+                    # mandar ENTERA en cada recarga siguiente -- al abrir una
+                    # segunda foto, el celular tenia que bajar las dos juntas
+                    # y en señal débil la segunda (o ambas) se quedaba sin
+                    # cargar. Al abrir una foto nueva, esta clave reemplaza a
+                    # la anterior, asi que la anterior se cierra sola.
                     mostrar_key = f"mostrar_foto_{fila['id']}_{col}"
-                    if not st.session_state.get(mostrar_key, False):
+                    if st.session_state.get("foto_abierta") != mostrar_key:
                         if st.button(f"📷 Ver «{etiqueta}»", key=f"btn_foto_{fila['id']}_{col}"):
-                            st.session_state[mostrar_key] = True
+                            st.session_state["foto_abierta"] = mostrar_key
                             st.rerun()
                         continue
+                    if st.button(f"✖️ Cerrar «{etiqueta}»", key=f"cerrar_foto_{fila['id']}_{col}"):
+                        st.session_state["foto_abierta"] = None
+                        st.rerun()
                     imagen_bytes = sh.descargar_imagen_drive(fila[col])
                     if imagen_bytes:
                         # Chica por defecto; con el check se ve a ancho completo.
