@@ -59,13 +59,34 @@ if col_salir.button("Cambiar de PIN"):
     st.session_state["local_autenticado"] = None
     st.rerun()
 
+fecha_hoy_iso = sh.hoy_local().isoformat()
+
+if "turno_sel" not in st.session_state:
+    # Primera vez que carga el formulario en esta sesion (recien entro con
+    # el PIN, o recargo la pagina): adivinamos con que arrancar mirando lo
+    # que YA esta abierto hoy en este local -- mas confiable que la hora
+    # del reloj, porque dice exactamente lo que falta hacer. Si no hay
+    # nada abierto en ningun turno, recien ahi usamos la hora como pista
+    # para una Apertura nueva (antes del mediodia se asume Mañana).
+    _est_manana_inicial = sh.estado_turno_cache(local, fecha_hoy_iso, "Mañana")
+    _est_tarde_inicial = sh.estado_turno_cache(local, fecha_hoy_iso, "Tarde")
+    if _est_manana_inicial["abierto"]:
+        st.session_state["turno_sel"] = "Mañana"
+        st.session_state["tipo_sel"] = "Cierre"
+    elif _est_tarde_inicial["abierto"]:
+        st.session_state["turno_sel"] = "Tarde"
+        st.session_state["tipo_sel"] = "Cierre"
+    else:
+        st.session_state["turno_sel"] = "Mañana" if sh.ahora_local().hour < 13 else "Tarde"
+        st.session_state["tipo_sel"] = "Apertura"
+
 col2, col3 = st.columns(2)
 with col2:
     # Cada local trabaja 2 turnos al dia, y cada turno tiene su propia
     # Apertura y Cierre (o sea, hasta 4 registros por local por dia).
-    turno = st.radio("Turno", ["Mañana", "Tarde"], horizontal=True)
+    turno = st.radio("Turno", ["Mañana", "Tarde"], horizontal=True, key="turno_sel")
 with col3:
-    tipo = st.radio("Tipo de registro", ["Apertura", "Cierre"], horizontal=True)
+    tipo = st.radio("Tipo de registro", ["Apertura", "Cierre"], horizontal=True, key="tipo_sel")
 
 nombre = st.text_input("Nombre de quien registra", key=f"nombre_{v}")
 
@@ -76,15 +97,27 @@ nombre = st.text_input("Nombre de quien registra", key=f"nombre_{v}")
 # si ya hay una Apertura sin cerrar, quien la hizo y a que hora. Con eso:
 #  - si eligio "Apertura" pero el turno ya esta abierto -> aviso (y al
 #    guardar se bloquea del todo en sheets_utils).
-#  - si eligio "Cierre" pero no hay nada abierto -> aviso.
+#  - si eligio "Cierre" pero no hay nada abierto -> aviso. Si el OTRO
+#    turno (Mañana <-> Tarde) SI tiene algo abierto, se lo decimos directo
+#    con un boton para cambiar de una -- esto es lo que le paso a Ana de
+#    Colon: cerro pensando que era "Tarde" cuando lo abierto de verdad
+#    seguia bajo "Mañana", y el aviso generico no la mandaba al turno
+#    correcto.
 #  - si eligio "Cierre" y el nombre no coincide con quien abrio -> se
 #    ofrece corregir; si igual quiere cerrar con otro nombre, se le pide
 #    un MOTIVO obligatorio. La diferencia del corte se le atribuye a
 #    quien abrio (eso lo maneja cuadre.py).
 # ---------------------------------------------------------------------
-fecha_hoy_iso = sh.hoy_local().isoformat()
+turno_correspondiente = "Tarde" if turno == "Mañana" else "Mañana"
 est_turno = sh.estado_turno_cache(local, fecha_hoy_iso, turno)
+est_otro_turno = sh.estado_turno_cache(local, fecha_hoy_iso, turno_correspondiente)
 motivo_cierre_otro_nombre = ""
+
+
+def _cambiar_seleccion(nuevo_turno, nuevo_tipo):
+    st.session_state["turno_sel"] = nuevo_turno
+    st.session_state["tipo_sel"] = nuevo_tipo
+
 
 if tipo == "Apertura" and est_turno["abierto"]:
     ab = est_turno["apertura_abierta"]
@@ -93,13 +126,47 @@ if tipo == "Apertura" and est_turno["abierto"]:
         f"({ab['nombre'] or 'alguien'}, {ab['hora'] or '--:--'}). No se puede "
         f"abrir de nuevo: cambia arriba a **Cierre** para cerrar ese corte."
     )
+    st.button(
+        "Cambiar a Cierre",
+        on_click=_cambiar_seleccion,
+        args=(turno, "Cierre"),
+    )
+elif tipo == "Apertura" and est_otro_turno["abierto"]:
+    # No bloquea (puede ser normal tener los dos turnos abiertos a la vez
+    # en algunos locales), pero avisa por si en realidad se le olvido
+    # cerrar el otro antes de abrir uno nuevo.
+    ab_otro = est_otro_turno["apertura_abierta"]
+    st.info(
+        f"ℹ️ El turno **{turno_correspondiente}** todavía tiene una Apertura "
+        f"sin cerrar ({ab_otro['nombre'] or 'alguien'}, {ab_otro['hora'] or '--:--'}). "
+        f"Si es la misma caja, seguramente falta cerrar eso antes de abrir uno nuevo."
+    )
+    st.button(
+        f"Ir a cerrar «{turno_correspondiente}»",
+        on_click=_cambiar_seleccion,
+        args=(turno_correspondiente, "Cierre"),
+    )
 
 if tipo == "Cierre":
     if not est_turno["abierto"]:
-        st.warning(
-            "⚠️ Este turno **no tiene una Apertura abierta** para cerrar. "
-            "Si te toca abrir, cambia arriba a **Apertura**."
-        )
+        if est_otro_turno["abierto"]:
+            ab_otro = est_otro_turno["apertura_abierta"]
+            st.warning(
+                f"⚠️ El turno **{turno}** no tiene nada abierto, pero **"
+                f"{turno_correspondiente}** SÍ tiene una Apertura sin cerrar "
+                f"({ab_otro['nombre'] or 'alguien'}, {ab_otro['hora'] or '--:--'}). "
+                f"Seguramente es ese el que quieres cerrar."
+            )
+            st.button(
+                f"Usar «{turno_correspondiente}»",
+                on_click=_cambiar_seleccion,
+                args=(turno_correspondiente, "Cierre"),
+            )
+        else:
+            st.warning(
+                "⚠️ Este turno **no tiene una Apertura abierta** para cerrar. "
+                "Si te toca abrir, cambia arriba a **Apertura**."
+            )
     else:
         ab = est_turno["apertura_abierta"]
         st.info(
@@ -235,10 +302,18 @@ if enviado:
         if foto_voucher_nro_movimientos is None:
             errores.append("Falta la foto del voucher con el N° de movimientos.")
         if not est_turno["abierto"]:
-            errores.append(
-                "Este turno no tiene una Apertura abierta para cerrar. "
-                "Cambia a «Apertura» si te toca abrir."
-            )
+            if est_otro_turno["abierto"]:
+                ab_otro = est_otro_turno["apertura_abierta"]
+                errores.append(
+                    f"El turno «{turno}» no tiene nada abierto, pero «{turno_correspondiente}» "
+                    f"SÍ tiene una Apertura sin cerrar ({ab_otro['nombre'] or 'alguien'}, "
+                    f"{ab_otro['hora'] or '--:--'}). Cambia el Turno arriba a «{turno_correspondiente}»."
+                )
+            else:
+                errores.append(
+                    "Este turno no tiene una Apertura abierta para cerrar. "
+                    "Cambia a «Apertura» si te toca abrir."
+                )
         else:
             nombre_apertura = est_turno["apertura_abierta"]["nombre"]
             if (
