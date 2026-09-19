@@ -104,6 +104,13 @@ def _comparar_par(row_izq, row_der, label_izq="Apertura", label_der="Cierre"):
         filas.append({"Campo": etiqueta, label_izq: vi, label_der: vd, "Diferencia": vd - vi})
     st.dataframe(sh.arrow_safe(pd.DataFrame(filas)), width="stretch", hide_index=True)
 
+    obs_i = str(row_izq.get("observaciones", "") or "").strip()
+    obs_d = str(row_der.get("observaciones", "") or "").strip()
+    if obs_i:
+        st.caption(f"📝 Observación en «{label_izq}»: {obs_i}")
+    if obs_d:
+        st.caption(f"📝 Observación en «{label_der}»: {obs_d}")
+
     n_i = str(row_izq.get("nombre", "")).strip() or "—"
     n_d = str(row_der.get("nombre", "")).strip() or "—"
     st.caption(f"Registró el «{label_izq}»: **{n_i}**  ·  el «{label_der}»: **{n_d}**")
