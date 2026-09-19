@@ -223,6 +223,48 @@ with tab_resumen:
     )
 
     # -------------------------------------------------------------
+    # Turnos que debieron cerrar y no cerraron (posible olvido)
+    # -------------------------------------------------------------
+    # La app no tiene un horario de turno configurado (Config solo trae
+    # fondo_minimo/pin/etc.), asi que se usa un umbral generico: un turno
+    # cuya Apertura lleva mas de UMBRAL_HORAS_TURNO_ABIERTO horas sin su
+    # Cierre probablemente ya no sigue en curso -- se quedo sin cerrar por
+    # olvido. Esto tambien atrapa turnos abiertos de un dia anterior (las
+    # horas transcurridas ya son varias decenas).
+    UMBRAL_HORAS_TURNO_ABIERTO = 9
+
+    ultimo_por_turno = (
+        df[df["local"].isin(locales_sel) & (df["fecha"] >= sh.hoy_local() - timedelta(days=1))]
+        .sort_values("timestamp")
+        .groupby(["local", "fecha", "turno"])
+        .tail(1)
+    )
+    turnos_abiertos = ultimo_por_turno[ultimo_por_turno["tipo"] == "Apertura"].copy()
+    if not turnos_abiertos.empty:
+        _ahora_naive = sh.ahora_local().replace(tzinfo=None)
+        turnos_abiertos["horas_abierto"] = (
+            _ahora_naive - turnos_abiertos["timestamp"]
+        ).dt.total_seconds() / 3600
+        turnos_abiertos = turnos_abiertos[
+            turnos_abiertos["horas_abierto"] >= UMBRAL_HORAS_TURNO_ABIERTO
+        ].sort_values("horas_abierto", ascending=False)
+
+    if not turnos_abiertos.empty:
+        st.subheader("⏰ Turnos sin cerrar")
+        for _, t in turnos_abiertos.iterrows():
+            hora_ap = t["timestamp"].strftime("%H:%M") if pd.notna(t["timestamp"]) else ""
+            st.warning(
+                f"**{t['local']}** · turno **{t['turno']}** del {t['fecha']}: "
+                f"Apertura de **{t['nombre']}** a las {hora_ap} "
+                f"(hace {t['horas_abierto']:.0f} horas) sin Cierre registrado."
+            )
+        st.caption(
+            "Puede ser que se olvidaron de registrar el Cierre, o que el "
+            "Cierre se hizo pero no se guardo bien -- conviene revisar con "
+            "el local."
+        )
+
+    # -------------------------------------------------------------
     # KPIs rapidos
     # -------------------------------------------------------------
     col1, col2, col3 = st.columns(3)
