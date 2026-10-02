@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 from cuadre import (
+    creditos_repuso,
     items_ticket,
     totales_ticket,
     ESTADO_ABIERTO,
@@ -333,3 +334,20 @@ def test_ticket_vacio():
     items = items_ticket(None, None)
     assert items.empty
     assert totales_ticket(items)["a_revisar"] == 0.0
+
+
+def test_creditos_repuso_solo_ingresos_con_repuso_en_rango():
+    from datetime import date
+
+    aj = pd.DataFrame(
+        [
+            {"local": "L1", "fecha": date(2026, 9, 30), "monto": 10.0, "motivo": "repuso", "repuso": "María"},
+            {"local": "L1", "fecha": date(2026, 9, 30), "monto": -10.0, "motivo": "retiro", "repuso": "María"},
+            {"local": "L1", "fecha": date(2026, 9, 30), "monto": 5.0, "motivo": "otro", "repuso": ""},
+            {"local": "L2", "fecha": date(2026, 9, 30), "monto": 7.0, "motivo": "x", "repuso": "Ana"},
+            {"local": "L1", "fecha": date(2026, 8, 1), "monto": 9.0, "motivo": "viejo", "repuso": "Ana"},
+        ]
+    )
+    c = creditos_repuso(aj, date(2026, 9, 1), date(2026, 10, 2), ["L1"])
+    assert list(c["persona"]) == ["María"] and list(c["monto"]) == [10.0]
+    assert creditos_repuso(None, date(2026, 9, 1), date(2026, 10, 2)).empty

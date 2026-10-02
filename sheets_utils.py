@@ -41,6 +41,7 @@ from cuadre import (  # noqa: F401  (re-export para el resto de la app)
     acumulado_saltos_por_persona,
     calcular_cortes,
     calcular_saltos,
+    creditos_repuso,
     items_ticket,
     resumen_turnos,
     totales_ticket,
@@ -904,6 +905,11 @@ COLUMNAS_AJUSTES = [
     # unica UN salto Cierre->Apertura, para que un ajuste no aplique "a
     # todo el dia" sino solo al hueco que realmente explica.
     "salto_id_cierre",
+    # Igual: al final. Nombre de quien PUSO la plata de su bolsillo para
+    # cubrir una diferencia (p. ej. la persona que abre y repone lo que
+    # falto del dia anterior). Opcional: vacio = nadie repuso. Se usa en
+    # la Liquidacion para ponerlo "a favor" de esa persona.
+    "repuso",
 ]
 
 
@@ -926,4 +932,5 @@ def get_ajustes_df() -> pd.DataFrame:
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df["monto"] = pd.to_numeric(df["monto"], errors="coerce").fillna(0)
     df["autorizado_por"] = _normalizar_nombre(df["autorizado_por"])
+    df["repuso"] = _normalizar_nombre(df["repuso"])
     return df

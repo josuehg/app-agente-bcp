@@ -550,3 +550,26 @@ def totales_ticket(items: pd.DataFrame, compensar: bool = False) -> dict:
     neto = sobrantes - faltantes
     a_revisar = max(0.0, -neto) if compensar else faltantes
     return {"faltantes": faltantes, "sobrantes": sobrantes, "neto": neto, "a_revisar": a_revisar}
+
+
+COLUMNAS_CREDITO = ["persona", "fecha", "local", "monto", "motivo"]
+
+
+def creditos_repuso(ajustes: pd.DataFrame, desde, hasta, locales=None) -> pd.DataFrame:
+    """Plata que una persona repuso de su bolsillo (columna 'repuso' del
+    ajuste): queda 'a favor' de esa persona. Solo cuentan ajustes con
+    monto positivo (un ingreso) dentro del rango y de los locales."""
+    if ajustes is None or ajustes.empty or "repuso" not in ajustes.columns:
+        return pd.DataFrame(columns=COLUMNAS_CREDITO)
+    sel = ajustes[
+        (ajustes["repuso"].astype(str) != "")
+        & (ajustes["monto"] > 0)
+        & (ajustes["fecha"] >= desde)
+        & (ajustes["fecha"] <= hasta)
+    ]
+    if locales is not None:
+        sel = sel[sel["local"].isin(locales)]
+    if sel.empty:
+        return pd.DataFrame(columns=COLUMNAS_CREDITO)
+    salida = sel.rename(columns={"repuso": "persona"})[COLUMNAS_CREDITO]
+    return salida.sort_values(["persona", "fecha"], kind="stable").reset_index(drop=True)

@@ -81,6 +81,9 @@ df_filtrado = df[
     & df["fecha"].between(desde, hasta)
 ].sort_values("timestamp", ascending=False)
 
+# Personal que ha registrado algo (para elegir quien "repuso" en un ajuste).
+nombres_personal = sorted(n for n in df["nombre"].unique() if str(n).strip())
+
 # Registro por id (para el "campo por campo" de abajo).
 _registros_por_id = df.drop_duplicates("id").set_index("id")
 _COLS_COMPARA = [col for _, col, _ in sh.DENOMINACIONES]
@@ -736,9 +739,10 @@ with tab_cuadre:
                     if not previos.empty:
                         st.markdown("**Ajustes ya registrados para este salto:**")
                         for _, aj in previos.iterrows():
+                            _repuso_txt = f" · repuso: {aj['repuso']}" if aj.get("repuso") else ""
                             st.caption(
                                 f"S/ {aj['monto']:+,.2f} — {aj['motivo']} "
-                                f"(autorizó: {aj['autorizado_por'] or '—'})"
+                                f"(autorizó: {aj['autorizado_por'] or '—'}){_repuso_txt}"
                             )
 
                     # Si ya quedó "Autorizado" (el/los ajuste(s) ya registrados
@@ -752,7 +756,7 @@ with tab_cuadre:
                             "Esto queda guardado con motivo y quién lo autorizó, y se resta de la "
                             "diferencia de este salto específico en adelante."
                         )
-                        col_monto, col_quien = st.columns(2)
+                        col_monto, col_quien, col_repuso = st.columns(3)
                         monto_ajuste = col_monto.number_input(
                             "Monto (negativo = retiro, positivo = ingreso)",
                             value=round(fila["_restante"], 2),
@@ -762,6 +766,13 @@ with tab_cuadre:
                         autorizo = col_quien.text_input(
                             "Quién autoriza", key=f"ajuste_quien_{clave_ajuste}"
                         )
+                        repuso_sel = col_repuso.selectbox(
+                            "Repuso (quién puso la plata)",
+                            ["— Nadie —"] + nombres_personal,
+                            key=f"ajuste_repuso_{clave_ajuste}",
+                            help="Opcional. Si alguien puso plata de su bolsillo para cubrir la diferencia, "
+                            "queda a su favor en la Liquidación.",
+                        )
                         motivo_ajuste = st.text_area(
                             "Motivo", key=f"ajuste_motivo_{clave_ajuste}",
                             placeholder="Ej: retiro de efectivo para depósito en banco",
@@ -769,6 +780,8 @@ with tab_cuadre:
                         if st.button("✅ Registrar ajuste", key=f"ajuste_btn_{clave_ajuste}"):
                             if not motivo_ajuste.strip() or not autorizo.strip():
                                 st.error("Completa quién autoriza y el motivo antes de guardar.")
+                            elif repuso_sel != "— Nadie —" and monto_ajuste <= 0:
+                                st.error("«Repuso» solo aplica a un ingreso: el monto debe ser positivo.")
                             else:
                                 ahora_aj = sh.ahora_local()
                                 sh.guardar_ajuste(
@@ -782,6 +795,7 @@ with tab_cuadre:
                                         "autorizado_por": autorizo.strip(),
                                         "turno": "",
                                         "salto_id_cierre": fila["_id_cierre"],
+                                        "repuso": "" if repuso_sel == "— Nadie —" else repuso_sel,
                                     }
                                 )
                                 st.success("Ajuste guardado.")
@@ -1263,48 +1277,61 @@ with tab_liquidacion:
     )
 
     items_liq = sh.items_ticket(cortes_acumulado, saltos_para_acumulado, incluir_entregas_liq)
+    creditos_liq = sh.creditos_repuso(ajustes_df, desde, hasta, locales_sel)
 
-    if items_liq.empty:
+    personas_liq = sorted(set(items_liq["persona"]) | set(creditos_liq["persona"]))
+
+    if not personas_liq:
         st.success("Sin diferencias para revisar en el rango seleccionado.")
     else:
         filas_resumen_liq = []
-        for _persona, _grupo in items_liq.groupby("persona"):
-            _t = sh.totales_ticket(_grupo, compensar_liq)
+        for _persona in personas_liq:
+            _t = sh.totales_ticket(items_liq[items_liq["persona"] == _persona], compensar_liq)
             filas_resumen_liq.append(
                 {
                     "Persona": _persona,
-                    "Ítems": len(_grupo),
+                    "Ítems": int((items_liq["persona"] == _persona).sum()),
                     "Faltantes (S/)": _t["faltantes"],
                     "Sobrantes (S/)": _t["sobrantes"],
                     "Neto (S/)": _t["neto"],
                     "A revisar (S/)": _t["a_revisar"],
+                    "A favor (S/)": float(creditos_liq.loc[creditos_liq["persona"] == _persona, "monto"].sum()),
                 }
             )
-        resumen_liq = pd.DataFrame(filas_resumen_liq).sort_values("A revisar (S/)", ascending=False)
+        resumen_liq = pd.DataFrame(filas_resumen_liq).sort_values(
+            ["A revisar (S/)", "A favor (S/)"], ascending=False
+        )
         st.dataframe(
             sh.arrow_safe(resumen_liq),
             width="stretch",
             hide_index=True,
             column_config={
                 c: st.column_config.NumberColumn(format="%.2f")
-                for c in ["Faltantes (S/)", "Sobrantes (S/)", "Neto (S/)", "A revisar (S/)"]
+                for c in ["Faltantes (S/)", "Sobrantes (S/)", "Neto (S/)", "A revisar (S/)", "A favor (S/)"]
             },
+        )
+        st.caption(
+            "A favor = plata que la persona repuso de su bolsillo para cubrir una diferencia "
+            "(se registra en el ajuste, campo «Repuso»). No compensa los faltantes propios."
         )
 
         persona_liq = st.selectbox("Ticket de", resumen_liq["Persona"].tolist())
         items_persona = items_liq[items_liq["persona"] == persona_liq]
+        creditos_persona = creditos_liq[creditos_liq["persona"] == persona_liq]
         tot = sh.totales_ticket(items_persona, compensar_liq)
+        a_favor = float(creditos_persona["monto"].sum())
 
         with st.container(border=True):
             st.markdown(f"### 🧾 {persona_liq}")
             st.caption(
                 f"Periodo: {desde} al {hasta} · Locales: {', '.join(locales_sel)}"
             )
-            m1, m2, m3, m4 = st.columns(4)
+            m1, m2, m3, m4, m5 = st.columns(5)
             m1.metric("Faltantes", f"S/ {tot['faltantes']:,.2f}")
             m2.metric("Sobrantes", f"S/ {tot['sobrantes']:,.2f}")
             m3.metric("Neto", f"S/ {tot['neto']:+,.2f}")
             m4.metric("A revisar", f"S/ {tot['a_revisar']:,.2f}")
+            m5.metric("A favor", f"S/ {a_favor:,.2f}")
 
             tabla_ticket = items_persona.drop(columns=["persona"]).rename(
                 columns={
@@ -1313,15 +1340,43 @@ with tab_liquidacion:
                     "observaciones": "Observaciones",
                 }
             )
-            st.dataframe(
-                sh.arrow_safe(tabla_ticket),
-                width="stretch",
-                hide_index=True,
-                column_config={"Diferencia (S/)": st.column_config.NumberColumn(format="%+.2f")},
+            if not tabla_ticket.empty:
+                st.dataframe(
+                    sh.arrow_safe(tabla_ticket),
+                    width="stretch",
+                    hide_index=True,
+                    column_config={"Diferencia (S/)": st.column_config.NumberColumn(format="%+.2f")},
+                )
+            else:
+                st.caption("Sin diferencias propias por revisar.")
+
+            tabla_favor = creditos_persona.drop(columns=["persona"]).rename(
+                columns={"fecha": "Fecha", "local": "Local", "monto": "Repuso (S/)", "motivo": "Motivo"}
             )
+            if not tabla_favor.empty:
+                st.markdown("**A favor (repuso de su bolsillo):**")
+                st.dataframe(
+                    sh.arrow_safe(tabla_favor),
+                    width="stretch",
+                    hide_index=True,
+                    column_config={"Repuso (S/)": st.column_config.NumberColumn(format="%.2f")},
+                )
+
+            _csv = sh.arrow_safe(tabla_ticket)
+            if not tabla_favor.empty:
+                _csv = pd.concat(
+                    [
+                        _csv,
+                        sh.arrow_safe(
+                            tabla_favor.rename(columns={"Repuso (S/)": "Diferencia (S/)", "Motivo": "Detalle"})
+                            .assign(Tipo="A favor (repuso)")
+                        ),
+                    ],
+                    ignore_index=True,
+                )
             st.download_button(
                 "Descargar ticket (CSV)",
-                data=sh.arrow_safe(tabla_ticket).to_csv(index=False).encode("utf-8-sig"),
+                data=_csv.to_csv(index=False).encode("utf-8-sig"),
                 file_name=f"ticket_{persona_liq}_{desde}_{hasta}.csv".replace(" ", "_"),
                 mime="text/csv",
             )
