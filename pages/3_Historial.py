@@ -114,9 +114,8 @@ with tab_cuadre:
         _ajustes_turno_local = _ajustes_turno_local[
             (_ajustes_turno_local["local"] == local) & (_ajustes_turno_local["turno"] != "")
         ]
-    if resumen.empty or _ajustes_turno_local.empty:
-        pass
-    else:
+    _turnos_autorizados_local = set()
+    if not (resumen.empty or _ajustes_turno_local.empty):
         _ajuste_por_fecha_turno = (
             _ajustes_turno_local.groupby(["fecha", "turno"])["monto"].sum().to_dict()
         )
@@ -124,26 +123,31 @@ with tab_cuadre:
         def _con_ajuste_turno_local(fila):
             ajuste_total = float(_ajuste_por_fecha_turno.get((fila["fecha"], fila["turno"]), 0.0))
             diferencia = fila["diferencia"]
-            if ajuste_total == 0 or pd.isna(diferencia) or str(fila["estado"]).startswith("⚠️ Revisar secuencia"):
-                return fila["estado"]
-            restante = diferencia - ajuste_total
-            if abs(restante) <= sh.UMBRAL_VERDE:
-                return "🔷 Autorizado"
-            return "🔴 Diferencia"
+            if ajuste_total == 0 or pd.isna(diferencia):
+                return pd.Series({"estado": fila["estado"], "_explicado": False})
+            explicado = abs(diferencia - ajuste_total) <= sh.UMBRAL_VERDE
+            if str(fila["estado"]).startswith("⚠️ Revisar secuencia"):
+                # El problema de secuencia se sigue mostrando, pero el MONTO
+                # ya autorizado no se le cuenta a nadie (ver Dashboard).
+                nuevo = fila["estado"]
+            elif explicado:
+                nuevo = "🔷 Autorizado"
+            else:
+                nuevo = "🔴 Diferencia"
+            return pd.Series({"estado": nuevo, "_explicado": explicado})
 
-        resumen["estado"] = resumen.apply(_con_ajuste_turno_local, axis=1)
+        _ajustado_local = resumen.apply(_con_ajuste_turno_local, axis=1)
+        resumen["estado"] = _ajustado_local["estado"]
+        _turnos_autorizados_local = set(
+            resumen.loc[_ajustado_local["_explicado"].astype(bool), ["fecha", "turno"]]
+            .itertuples(index=False, name=None)
+        )
 
-    # Turnos ya "🔷 Autorizado": se pisa el Estado de los cortes de ese
-    # turno que YA estaban en "🔴 Diferencia" (en "cortes" mismo, asi que
-    # se ve igual en "Ver corte por corte" y se reusa mas abajo en
-    # Acumulado). Un corte que ya estaba "✅ Cuadrado" por si solo NO se
-    # toca -- el ajuste se calcula sobre la SUMA del turno, y si el turno
-    # tiene varios cortes, marcar el que ya estaba bien como "Autorizado"
-    # daria a entender que tenia algo que explicar cuando no era asi.
-    _turnos_autorizados_local = set(
-        resumen.loc[resumen["estado"] == "🔷 Autorizado", ["fecha", "turno"]]
-        .itertuples(index=False, name=None)
-    )
+    # Turnos con el monto ya autorizado: se pisa el Estado de los cortes de
+    # ese turno que YA estaban en "🔴 Diferencia" (o "Cerró otro nombre" con
+    # diferencia real), en "cortes" mismo, asi que se ve igual en "Ver corte
+    # por corte" y se reusa mas abajo en Acumulado. Un corte que ya estaba
+    # "✅ Cuadrado" por si solo NO se toca.
     if _turnos_autorizados_local:
         cortes.loc[
             [

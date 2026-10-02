@@ -828,20 +828,33 @@ with tab_cuadre:
             ajuste_turno_por_clave.get((fila["local"], fila["fecha"], fila["turno"]), 0.0)
         )
         diferencia = fila["diferencia"]
-        if ajuste_total == 0 or pd.isna(diferencia) or str(fila["estado"]).startswith("⚠️ Revisar secuencia"):
-            return pd.Series({"estado": fila["estado"], "_ajuste_total": ajuste_total, "_restante": diferencia})
+        if ajuste_total == 0 or pd.isna(diferencia):
+            return pd.Series(
+                {"estado": fila["estado"], "_ajuste_total": ajuste_total,
+                 "_restante": diferencia, "_explicado": False}
+            )
         restante = diferencia - ajuste_total
-        if abs(restante) <= sh.UMBRAL_VERDE:
+        explicado = abs(restante) <= sh.UMBRAL_VERDE
+        if str(fila["estado"]).startswith("⚠️ Revisar secuencia"):
+            # El problema de secuencia (corte abierto / Cierre suelto) sigue
+            # ahi y se sigue mostrando, pero el MONTO si puede quedar
+            # autorizado (_explicado) para que no se le cargue a nadie.
+            nuevo_estado = fila["estado"]
+        elif explicado:
             nuevo_estado = "🔷 Autorizado"
         else:
             nuevo_estado = "🔴 Diferencia"
-        return pd.Series({"estado": nuevo_estado, "_ajuste_total": ajuste_total, "_restante": restante})
+        return pd.Series(
+            {"estado": nuevo_estado, "_ajuste_total": ajuste_total,
+             "_restante": restante, "_explicado": explicado}
+        )
 
 
     _ajustado_turno = resumen.apply(_con_ajuste_turno, axis=1)
     resumen["estado"] = _ajustado_turno["estado"]
     resumen["_ajuste_total"] = _ajustado_turno["_ajuste_total"]
     resumen["_restante"] = _ajustado_turno["_restante"]
+    resumen["_explicado"] = _ajustado_turno["_explicado"].astype(bool)
 
     # Turnos ya "🔷 Autorizado": se pisa el Estado de los cortes de ese
     # turno que YA estaban en "🔴 Diferencia" (en "cortes" mismo, asi que
@@ -854,7 +867,7 @@ with tab_cuadre:
     # (> S/1): ese aviso solo dice que cerro otra persona, pero la plata
     # que falta/sobra igual necesita (y ahora puede tener) su ajuste.
     _turnos_autorizados = set(
-        resumen.loc[resumen["estado"] == "🔷 Autorizado", ["local", "fecha", "turno"]]
+        resumen.loc[resumen["_explicado"], ["local", "fecha", "turno"]]
         .itertuples(index=False, name=None)
     )
     if _turnos_autorizados:
@@ -886,7 +899,7 @@ with tab_cuadre:
                     "estado": "Estado",
                     "observaciones": "Observaciones",
                 }
-            ).drop(columns=["diferencia", "_ajuste_total", "_restante"])
+            ).drop(columns=["diferencia", "_ajuste_total", "_restante", "_explicado"])
         ),
         width="stretch",
         hide_index=True,
@@ -930,20 +943,13 @@ with tab_cuadre:
 
     # Registrar/ver ajustes de un turno especifico (distinto de los de
     # Continuidad, que apuntan a un salto por id_cierre). Solo para los que
-    # aun no cuadran ni estan ya autorizados, y que no son un problema de secuencia (esos se
-    # arreglan registrando bien, no con un ajuste de monto).
-    # "⚠️ Cerró otro nombre" SI entra cuando tiene una diferencia real: antes
-    # quedaba fuera (todo "⚠️" se excluia) y esa plata no se podia autorizar.
-    _estado_txt = resumen["estado"].astype(str)
+    # aun no cuadran ni estan ya autorizados.
+    # Entra TODO turno con una diferencia real sin explicar (> S/1), tenga el
+    # estado que tenga (⚠️ Cerró otro nombre, ⚠️ Revisar secuencia, 🔴):
+    # antes los ⚠️ quedaban fuera y esa plata no se podia autorizar.
     _sospechosos_turno = resumen[
         ~resumen["estado"].isin(["✅ Cuadrado", "🔷 Autorizado"])
-        & (
-            ~_estado_txt.str.startswith("⚠️")
-            | (
-                _estado_txt.str.startswith("⚠️ Cerró otro nombre")
-                & (resumen["_restante"].fillna(0).abs() > sh.UMBRAL_VERDE)
-            )
-        )
+        & (resumen["_restante"].fillna(0).abs() > sh.UMBRAL_VERDE)
     ]
     if not _sospechosos_turno.empty:
         st.markdown("**Registrar retiro/ingreso autorizado de un turno**")
