@@ -81,8 +81,14 @@ df_filtrado = df[
     & df["fecha"].between(desde, hasta)
 ].sort_values("timestamp", ascending=False)
 
-# Personal que ha registrado algo (para elegir quien "repuso" en un ajuste).
-nombres_personal = sorted(n for n in df["nombre"].unique() if str(n).strip())
+# Personal que registro algo en cada local en los ultimos 60 dias (para
+# elegir quien "repuso" en un ajuste): solo gente de ESE local y reciente,
+# no todo el historial de todos los locales.
+_recientes = df[df["fecha"] >= sh.hoy_local() - timedelta(days=60)]
+nombres_por_local = {
+    loc: sorted(n for n in g["nombre"].unique() if str(n).strip())
+    for loc, g in _recientes.groupby("local")
+}
 
 # Registro por id (para el "campo por campo" de abajo).
 _registros_por_id = df.drop_duplicates("id").set_index("id")
@@ -766,9 +772,18 @@ with tab_cuadre:
                         autorizo = col_quien.text_input(
                             "Quién autoriza", key=f"ajuste_quien_{clave_ajuste}"
                         )
+                        _candidatos = list(nombres_por_local.get(fila["_local"], []))
+                        _quien_abrio = (
+                            str(_registros_por_id.loc[fila["_id_apertura"], "nombre"])
+                            if fila["_id_apertura"] in _registros_por_id.index
+                            else ""
+                        )
+                        if _quien_abrio in _candidatos:
+                            _candidatos.remove(_quien_abrio)
+                            _candidatos.insert(0, _quien_abrio)
                         repuso_sel = col_repuso.selectbox(
                             "Repuso (quién puso la plata)",
-                            ["— Nadie —"] + nombres_personal,
+                            ["— Nadie —"] + _candidatos,
                             key=f"ajuste_repuso_{clave_ajuste}",
                             help="Opcional. Si alguien puso plata de su bolsillo para cubrir la diferencia, "
                             "queda a su favor en la Liquidación.",
