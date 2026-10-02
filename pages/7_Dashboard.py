@@ -151,8 +151,8 @@ def _comparar_par(row_izq, row_der, label_izq="Apertura", label_der="Cierre"):
 # secciones reusan variables calculadas por la de arriba, por ejemplo
 # "Cuadre por turno" calcula `cortes` y "Acumulado por persona" lo usa).
 # ---------------------------------------------------------------------
-tab_resumen, tab_cuadre, tab_operaciones, tab_comisiones, tab_incentivos, tab_registros = st.tabs(
-    ["🏠 Resumen", "🔍 Cuadre", "📈 Operaciones", "💰 Comisiones", "⭐ Incentivos", "🗂️ Registros"]
+tab_resumen, tab_cuadre, tab_liquidacion, tab_operaciones, tab_comisiones, tab_incentivos, tab_registros = st.tabs(
+    ["🏠 Resumen", "🔍 Cuadre", "🧾 Liquidación", "📈 Operaciones", "💰 Comisiones", "⭐ Incentivos", "🗂️ Registros"]
 )
 
 with tab_resumen:
@@ -1213,6 +1213,95 @@ with tab_cuadre:
                             )
                         else:
                             st.caption("No se encontraron los dos registros para comparar.")
+
+with tab_liquidacion:
+    # -------------------------------------------------------------
+    # Liquidacion por trabajador ("ticket"). Solo lectura: junta las
+    # diferencias reales (> S/1) de cada persona para REVISAR si
+    # corresponde algun descuento. Reusa cortes_acumulado y
+    # saltos_para_acumulado (calculados en la pestaña Cuadre), que ya
+    # excluyen lo "🔷 Autorizado" y respetan los filtros del sidebar.
+    # -------------------------------------------------------------
+    st.subheader("🧾 Liquidación por trabajador")
+    st.caption(
+        "Usa los filtros de la izquierda (locales, turno y rango de fechas). "
+        "Excluye lo '🔷 Autorizado' y las diferencias de hasta S/ 1. Es una "
+        "ayuda para revisar, no un descuento automático: antes de descontar, "
+        "revisa cada ítem (puede ser un error al registrar)."
+    )
+    col_liq1, col_liq2 = st.columns(2)
+    compensar_liq = col_liq1.checkbox(
+        "Compensar faltantes con sobrantes", value=False,
+        help="Si está activo, el monto a revisar es solo lo que quede faltando después de restar los sobrantes.",
+    )
+    incluir_entregas_liq = col_liq2.checkbox(
+        "Incluir diferencias en entregas de caja", value=True,
+        help="Lo que no coincidió entre el Cierre de la persona y la Apertura siguiente.",
+    )
+
+    items_liq = sh.items_ticket(cortes_acumulado, saltos_para_acumulado, incluir_entregas_liq)
+
+    if items_liq.empty:
+        st.success("Sin diferencias para revisar en el rango seleccionado.")
+    else:
+        filas_resumen_liq = []
+        for _persona, _grupo in items_liq.groupby("persona"):
+            _t = sh.totales_ticket(_grupo, compensar_liq)
+            filas_resumen_liq.append(
+                {
+                    "Persona": _persona,
+                    "Ítems": len(_grupo),
+                    "Faltantes (S/)": _t["faltantes"],
+                    "Sobrantes (S/)": _t["sobrantes"],
+                    "Neto (S/)": _t["neto"],
+                    "A revisar (S/)": _t["a_revisar"],
+                }
+            )
+        resumen_liq = pd.DataFrame(filas_resumen_liq).sort_values("A revisar (S/)", ascending=False)
+        st.dataframe(
+            sh.arrow_safe(resumen_liq),
+            width="stretch",
+            hide_index=True,
+            column_config={
+                c: st.column_config.NumberColumn(format="%.2f")
+                for c in ["Faltantes (S/)", "Sobrantes (S/)", "Neto (S/)", "A revisar (S/)"]
+            },
+        )
+
+        persona_liq = st.selectbox("Ticket de", resumen_liq["Persona"].tolist())
+        items_persona = items_liq[items_liq["persona"] == persona_liq]
+        tot = sh.totales_ticket(items_persona, compensar_liq)
+
+        with st.container(border=True):
+            st.markdown(f"### 🧾 {persona_liq}")
+            st.caption(
+                f"Periodo: {desde} al {hasta} · Locales: {', '.join(locales_sel)}"
+            )
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Faltantes", f"S/ {tot['faltantes']:,.2f}")
+            m2.metric("Sobrantes", f"S/ {tot['sobrantes']:,.2f}")
+            m3.metric("Neto", f"S/ {tot['neto']:+,.2f}")
+            m4.metric("A revisar", f"S/ {tot['a_revisar']:,.2f}")
+
+            tabla_ticket = items_persona.drop(columns=["persona"]).rename(
+                columns={
+                    "tipo": "Tipo", "fecha": "Fecha", "local": "Local",
+                    "detalle": "Detalle", "diferencia": "Diferencia (S/)",
+                    "observaciones": "Observaciones",
+                }
+            )
+            st.dataframe(
+                sh.arrow_safe(tabla_ticket),
+                width="stretch",
+                hide_index=True,
+                column_config={"Diferencia (S/)": st.column_config.NumberColumn(format="%+.2f")},
+            )
+            st.download_button(
+                "Descargar ticket (CSV)",
+                data=sh.arrow_safe(tabla_ticket).to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"ticket_{persona_liq}_{desde}_{hasta}.csv".replace(" ", "_"),
+                mime="text/csv",
+            )
 
 with tab_comisiones:
     # -------------------------------------------------------------

@@ -477,3 +477,76 @@ def calcular_saltos(df: pd.DataFrame) -> pd.DataFrame:
             continue
         salida[col] = salida[col].fillna("").astype(str).replace({"nan": "", "None": ""})
     return salida
+
+
+# ---------------------------------------------------------------------
+# Liquidacion por trabajador ("ticket"): junta, por persona, las
+# diferencias reales (mas de UMBRAL_VERDE) de sus cortes (atribuidas a
+# quien abrio) y de sus entregas de caja (atribuidas a quien cerro).
+# Quien llame debe pasar cortes/saltos YA sin lo "Autorizado".
+# ---------------------------------------------------------------------
+COLUMNAS_TICKET = ["persona", "tipo", "fecha", "local", "detalle", "diferencia", "observaciones"]
+
+
+def items_ticket(cortes: pd.DataFrame, saltos: pd.DataFrame, incluir_entregas: bool = True) -> pd.DataFrame:
+    filas: list[dict] = []
+
+    if cortes is not None and not cortes.empty:
+        reales = cortes[
+            cortes["diferencia"].notna()
+            & (cortes["diferencia"].abs() > UMBRAL_VERDE)
+            & (cortes["nombre"].astype(str) != "")
+        ]
+        for _, r in reales.iterrows():
+            filas.append(
+                {
+                    "persona": r["nombre"],
+                    "tipo": "Corte",
+                    "fecha": r["fecha"],
+                    "local": r["local"],
+                    "detalle": f"{r['turno']} · corte {r['corte']} ({r['hora_apertura']}–{r['hora_cierre']})",
+                    "diferencia": float(r["diferencia"]),
+                    "observaciones": r.get("observaciones", ""),
+                }
+            )
+
+    if incluir_entregas and saltos is not None and not saltos.empty:
+        reales = saltos[
+            saltos["diferencia"].notna()
+            & (saltos["diferencia"].abs() > UMBRAL_VERDE)
+            & (saltos["nombre_cierre"].astype(str) != "")
+        ]
+        for _, r in reales.iterrows():
+            filas.append(
+                {
+                    "persona": r["nombre_cierre"],
+                    "tipo": "Entrega de caja",
+                    "fecha": r["fecha_cierre"],
+                    "local": r["local"],
+                    "detalle": (
+                        f"{r['tipo_salto']}: cierre {r['turno_cierre']} {r['hora_cierre']} → "
+                        f"apertura {r['fecha_apertura']} {r['hora_apertura']} ({r['nombre_apertura']})"
+                    ),
+                    "diferencia": float(r["diferencia"]),
+                    "observaciones": "",
+                }
+            )
+
+    salida = pd.DataFrame(filas, columns=COLUMNAS_TICKET)
+    if salida.empty:
+        return salida
+    return salida.sort_values(["persona", "fecha"], kind="stable").reset_index(drop=True)
+
+
+def totales_ticket(items: pd.DataFrame, compensar: bool = False) -> dict:
+    """Faltantes (suma de lo negativo, en positivo), sobrantes, neto y el
+    monto 'a revisar': los faltantes tal cual, o -- si compensar -- solo
+    lo que quede faltando despues de restar los sobrantes."""
+    if items is None or items.empty:
+        return {"faltantes": 0.0, "sobrantes": 0.0, "neto": 0.0, "a_revisar": 0.0}
+    dif = items["diferencia"]
+    faltantes = float(-dif[dif < 0].sum())
+    sobrantes = float(dif[dif > 0].sum())
+    neto = sobrantes - faltantes
+    a_revisar = max(0.0, -neto) if compensar else faltantes
+    return {"faltantes": faltantes, "sobrantes": sobrantes, "neto": neto, "a_revisar": a_revisar}

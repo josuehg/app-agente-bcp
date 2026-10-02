@@ -41,7 +41,9 @@ from cuadre import (  # noqa: F401  (re-export para el resto de la app)
     acumulado_saltos_por_persona,
     calcular_cortes,
     calcular_saltos,
+    items_ticket,
     resumen_turnos,
+    totales_ticket,
 )
 
 # Los "scopes" son los permisos que le pedimos a Google. Sin el permiso

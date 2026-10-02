@@ -12,6 +12,8 @@ import pandas as pd
 import pytest
 
 from cuadre import (
+    items_ticket,
+    totales_ticket,
     ESTADO_ABIERTO,
     ESTADO_CIERRE_SUELTO,
     ESTADO_CUADRADO,
@@ -302,3 +304,32 @@ def test_acumulado_saltos_se_atribuye_a_quien_cierra():
 
 def test_acumulado_saltos_vacio():
     assert acumulado_saltos_por_persona(pd.DataFrame()).empty
+
+
+def test_ticket_ignora_redondeo_y_separa_cortes_de_entregas():
+    cortes = pd.DataFrame(
+        [
+            {"nombre": "Ana", "fecha": "2026-09-10", "local": "L1", "turno": "Mañana", "corte": 1,
+             "hora_apertura": "08:00", "hora_cierre": "14:00", "diferencia": -20.0, "observaciones": "x"},
+            {"nombre": "Ana", "fecha": "2026-09-11", "local": "L1", "turno": "Mañana", "corte": 1,
+             "hora_apertura": "08:00", "hora_cierre": "14:00", "diferencia": -0.5, "observaciones": ""},
+        ]
+    )
+    saltos = pd.DataFrame(
+        [
+            {"nombre_cierre": "Ana", "fecha_cierre": "2026-09-10", "local": "L1", "tipo_salto": "Entre días",
+             "turno_cierre": "Tarde", "hora_cierre": "20:00", "fecha_apertura": "2026-09-11",
+             "hora_apertura": "07:50", "nombre_apertura": "Beto", "diferencia": 5.0},
+        ]
+    )
+    items = items_ticket(cortes, saltos)
+    assert list(items["tipo"]) == ["Corte", "Entrega de caja"]
+    assert totales_ticket(items) == {"faltantes": 20.0, "sobrantes": 5.0, "neto": -15.0, "a_revisar": 20.0}
+    assert totales_ticket(items, compensar=True)["a_revisar"] == 15.0
+    assert len(items_ticket(cortes, saltos, incluir_entregas=False)) == 1
+
+
+def test_ticket_vacio():
+    items = items_ticket(None, None)
+    assert items.empty
+    assert totales_ticket(items)["a_revisar"] == 0.0
