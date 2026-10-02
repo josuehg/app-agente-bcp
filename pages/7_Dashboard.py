@@ -729,6 +729,15 @@ with tab_cuadre:
                     # (nuevo esquema por id_cierre, mas el viejo por local+fecha
                     # si este salto es "Entre días").
                     clave_ajuste = f"salto|{fila['_id_cierre']}"
+                    _candidatos = list(nombres_por_local.get(fila["_local"], []))
+                    _quien_abrio = (
+                        str(_registros_por_id.loc[fila["_id_apertura"], "nombre"])
+                        if fila["_id_apertura"] in _registros_por_id.index
+                        else ""
+                    )
+                    if _quien_abrio in _candidatos:
+                        _candidatos.remove(_quien_abrio)
+                        _candidatos.insert(0, _quien_abrio)
                     previos = pd.DataFrame()
                     if not ajustes_continuidad.empty:
                         previos = ajustes_continuidad[
@@ -750,6 +759,27 @@ with tab_cuadre:
                                 f"S/ {aj['monto']:+,.2f} — {aj['motivo']} "
                                 f"(autorizó: {aj['autorizado_por'] or '—'}){_repuso_txt}"
                             )
+                            # Permite marcar/corregir quien repuso en un ajuste YA
+                            # guardado (p. ej. uno hecho antes de que existiera el
+                            # campo, o con la persona equivocada).
+                            if aj["monto"] > 0 and aj.get("id"):
+                                _opc = ["— Nadie —"] + _candidatos
+                                if aj.get("repuso") and aj["repuso"] not in _opc:
+                                    _opc.append(aj["repuso"])
+                                _c1, _c2 = st.columns([3, 1])
+                                _nuevo = _c1.selectbox(
+                                    "Repuso (quién puso la plata)",
+                                    _opc,
+                                    index=_opc.index(aj["repuso"]) if aj.get("repuso") in _opc else 0,
+                                    key=f"repuso_prev_{aj['id']}",
+                                )
+                                _c2.write("")
+                                if _c2.button("Guardar repuso", key=f"repuso_prev_btn_{aj['id']}"):
+                                    sh.actualizar_repuso_ajuste(
+                                        aj["id"], "" if _nuevo == "— Nadie —" else _nuevo
+                                    )
+                                    st.success("Listo.")
+                                    st.rerun()
 
                     # Si ya quedó "Autorizado" (el/los ajuste(s) ya registrados
                     # explican toda la diferencia), no tiene sentido seguir
@@ -772,15 +802,6 @@ with tab_cuadre:
                         autorizo = col_quien.text_input(
                             "Quién autoriza", key=f"ajuste_quien_{clave_ajuste}"
                         )
-                        _candidatos = list(nombres_por_local.get(fila["_local"], []))
-                        _quien_abrio = (
-                            str(_registros_por_id.loc[fila["_id_apertura"], "nombre"])
-                            if fila["_id_apertura"] in _registros_por_id.index
-                            else ""
-                        )
-                        if _quien_abrio in _candidatos:
-                            _candidatos.remove(_quien_abrio)
-                            _candidatos.insert(0, _quien_abrio)
                         repuso_sel = col_repuso.selectbox(
                             "Repuso (quién puso la plata)",
                             ["— Nadie —"] + _candidatos,

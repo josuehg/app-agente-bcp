@@ -920,6 +920,16 @@ def guardar_ajuste(datos: dict) -> None:
     get_ajustes_df.clear()
 
 
+def actualizar_repuso_ajuste(id_ajuste: str, repuso: str) -> None:
+    """Pone (o cambia) quien repuso la plata en un ajuste ya guardado."""
+    ws = _get_or_create_worksheet(NOMBRE_HOJA_AJUSTES, COLUMNAS_AJUSTES)
+    celda = ws.find(str(id_ajuste), in_column=COLUMNAS_AJUSTES.index("id") + 1)
+    if celda is None:
+        raise ValueError("No se encontró ese ajuste en la hoja.")
+    ws.update_cell(celda.row, COLUMNAS_AJUSTES.index("repuso") + 1, repuso)
+    get_ajustes_df.clear()
+
+
 @st.cache_data(ttl=30, show_spinner=False)
 def get_ajustes_df() -> pd.DataFrame:
     ws = _get_or_create_worksheet(NOMBRE_HOJA_AJUSTES, COLUMNAS_AJUSTES)
