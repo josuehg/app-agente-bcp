@@ -828,7 +828,7 @@ with tab_cuadre:
             ajuste_turno_por_clave.get((fila["local"], fila["fecha"], fila["turno"]), 0.0)
         )
         diferencia = fila["diferencia"]
-        if ajuste_total == 0 or pd.isna(diferencia) or str(fila["estado"]).startswith("⚠️"):
+        if ajuste_total == 0 or pd.isna(diferencia) or str(fila["estado"]).startswith("⚠️ Revisar secuencia"):
             return pd.Series({"estado": fila["estado"], "_ajuste_total": ajuste_total, "_restante": diferencia})
         restante = diferencia - ajuste_total
         if abs(restante) <= sh.UMBRAL_VERDE:
@@ -850,6 +850,9 @@ with tab_cuadre:
     # toca -- el ajuste se calcula sobre la SUMA del turno, y si el turno
     # tiene varios cortes, marcar el que ya estaba bien como "Autorizado"
     # daria a entender que tenia algo que explicar cuando no era asi.
+    # Tambien los de "⚠️ Cerró otro nombre" que tengan una diferencia real
+    # (> S/1): ese aviso solo dice que cerro otra persona, pero la plata
+    # que falta/sobra igual necesita (y ahora puede tener) su ajuste.
     _turnos_autorizados = set(
         resumen.loc[resumen["estado"] == "🔷 Autorizado", ["local", "fecha", "turno"]]
         .itertuples(index=False, name=None)
@@ -857,9 +860,14 @@ with tab_cuadre:
     if _turnos_autorizados:
         cortes.loc[
             [
-                (l, f, t) in _turnos_autorizados and est == "🔴 Diferencia"
-                for l, f, t, est in zip(
-                    cortes["local"], cortes["fecha"], cortes["turno"], cortes["estado"]
+                (l, f, t) in _turnos_autorizados
+                and (
+                    est == "🔴 Diferencia"
+                    or (est.startswith("⚠️ Cerró otro nombre") and abs(dif) > sh.UMBRAL_VERDE)
+                )
+                for l, f, t, est, dif in zip(
+                    cortes["local"], cortes["fecha"], cortes["turno"],
+                    cortes["estado"], cortes["diferencia"].fillna(0),
                 )
             ],
             "estado",
@@ -924,9 +932,18 @@ with tab_cuadre:
     # Continuidad, que apuntan a un salto por id_cierre). Solo para los que
     # aun no cuadran ni estan ya autorizados, y que no son un problema de secuencia (esos se
     # arreglan registrando bien, no con un ajuste de monto).
+    # "⚠️ Cerró otro nombre" SI entra cuando tiene una diferencia real: antes
+    # quedaba fuera (todo "⚠️" se excluia) y esa plata no se podia autorizar.
+    _estado_txt = resumen["estado"].astype(str)
     _sospechosos_turno = resumen[
         ~resumen["estado"].isin(["✅ Cuadrado", "🔷 Autorizado"])
-        & ~resumen["estado"].astype(str).str.startswith("⚠️")
+        & (
+            ~_estado_txt.str.startswith("⚠️")
+            | (
+                _estado_txt.str.startswith("⚠️ Cerró otro nombre")
+                & (resumen["_restante"].fillna(0).abs() > sh.UMBRAL_VERDE)
+            )
+        )
     ]
     if not _sospechosos_turno.empty:
         st.markdown("**Registrar retiro/ingreso autorizado de un turno**")

@@ -124,7 +124,7 @@ with tab_cuadre:
         def _con_ajuste_turno_local(fila):
             ajuste_total = float(_ajuste_por_fecha_turno.get((fila["fecha"], fila["turno"]), 0.0))
             diferencia = fila["diferencia"]
-            if ajuste_total == 0 or pd.isna(diferencia) or str(fila["estado"]).startswith("⚠️"):
+            if ajuste_total == 0 or pd.isna(diferencia) or str(fila["estado"]).startswith("⚠️ Revisar secuencia"):
                 return fila["estado"]
             restante = diferencia - ajuste_total
             if abs(restante) <= sh.UMBRAL_VERDE:
@@ -147,8 +147,14 @@ with tab_cuadre:
     if _turnos_autorizados_local:
         cortes.loc[
             [
-                (f, t) in _turnos_autorizados_local and est == "🔴 Diferencia"
-                for f, t, est in zip(cortes["fecha"], cortes["turno"], cortes["estado"])
+                (f, t) in _turnos_autorizados_local
+                and (
+                    est == "🔴 Diferencia"
+                    or (est.startswith("⚠️ Cerró otro nombre") and abs(dif) > sh.UMBRAL_VERDE)
+                )
+                for f, t, est, dif in zip(
+                    cortes["fecha"], cortes["turno"], cortes["estado"], cortes["diferencia"].fillna(0)
+                )
             ],
             "estado",
         ] = "🔷 Autorizado"
