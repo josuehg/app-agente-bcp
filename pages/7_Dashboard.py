@@ -1772,3 +1772,39 @@ with tab_personal:
                 )
                 st.success("Persona agregada.")
                 st.rerun()
+
+    if not personal_df.empty:
+        st.markdown("**Editar persona**")
+        etiquetas_personal = [f"{r['nombre']} · {r['local']}" for _, r in personal_df.iterrows()]
+        idx_edit = st.selectbox(
+            "Persona a editar", range(len(etiquetas_personal)),
+            format_func=lambda i: etiquetas_personal[i], key="persona_a_editar",
+        )
+        actual = personal_df.iloc[idx_edit]
+        alias_actuales = [a for a in actual["alias"].split("|") if a.strip()]
+        opciones_alias = sorted(set(df["nombre_original"].unique()) | set(alias_actuales))
+        locales_cfg = config_df["local"].tolist()
+        with st.form(f"form_editar_persona_{idx_edit}"):
+            e1, e2 = st.columns(2)
+            nuevo_nombre = e1.text_input("Nombre oficial", value=actual["nombre"])
+            nuevo_local = e2.selectbox(
+                "Local habitual", locales_cfg,
+                index=locales_cfg.index(actual["local"]) if actual["local"] in locales_cfg else 0,
+            )
+            nuevos_alias = st.multiselect("Alias", opciones_alias, default=alias_actuales)
+            sigue = st.checkbox("Sigue trabajando", value=actual["activo"].lower() not in {"no", "false", "0"})
+            if st.form_submit_button("Guardar cambios"):
+                if not nuevo_nombre.strip():
+                    st.error("Escribe el nombre oficial.")
+                else:
+                    sh.actualizar_persona(
+                        actual["nombre"], actual["local"],
+                        {
+                            "nombre": nuevo_nombre.strip(),
+                            "local": nuevo_local,
+                            "alias": "|".join(nuevos_alias),
+                            "activo": "Sí" if sigue else "No",
+                        },
+                    )
+                    st.success("Cambios guardados.")
+                    st.rerun()

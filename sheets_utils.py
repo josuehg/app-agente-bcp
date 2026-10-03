@@ -729,6 +729,23 @@ def guardar_persona(datos: dict) -> None:
     get_ajustes_df.clear()
 
 
+def actualizar_persona(nombre_orig: str, local_orig: str, datos: dict) -> None:
+    """Cambia la fila de Personal que coincide con (nombre, local) originales."""
+    ws = _get_or_create_worksheet(NOMBRE_HOJA_PERSONAL, COLUMNAS_PERSONAL)
+    filas = ws.get_all_values()
+    for numero, fila in enumerate(filas[1:], start=2):
+        if (fila + ["", ""])[0].strip() == nombre_orig and (fila + ["", ""])[1].strip() == local_orig:
+            ws.update(
+                values=[[datos.get(col, "") for col in COLUMNAS_PERSONAL]],
+                range_name=f"A{numero}:D{numero}",
+            )
+            get_personal_df.clear()
+            get_registros_df.clear()
+            get_ajustes_df.clear()
+            return
+    raise ValueError("No se encontró a esa persona en la hoja Personal.")
+
+
 @st.cache_data(ttl=30, show_spinner=False)
 def get_personal_df() -> pd.DataFrame:
     ws = _get_or_create_worksheet(NOMBRE_HOJA_PERSONAL, COLUMNAS_PERSONAL)
