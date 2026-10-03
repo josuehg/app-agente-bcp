@@ -43,6 +43,8 @@ from cuadre import (  # noqa: F401  (re-export para el resto de la app)
     calcular_saltos,
     creditos_repuso,
     items_ticket,
+    mapa_alias,
+    resolver_nombre,
     resumen_turnos,
     totales_ticket,
 )
@@ -710,6 +712,41 @@ def guardar_registro(datos: dict) -> None:
     estado_turno_cache.clear()
 
 
+# ---------------------------------------------------------------------
+# Personal: una fila por trabajador (nombre oficial, local habitual, alias
+# con los que firmo antes separados por "|", y si sigue activo). Sirve para
+# unir variantes del mismo nombre y desambiguar "Ana" segun el local.
+# ---------------------------------------------------------------------
+NOMBRE_HOJA_PERSONAL = "Personal"
+COLUMNAS_PERSONAL = ["nombre", "local", "alias", "activo"]
+
+
+def guardar_persona(datos: dict) -> None:
+    ws = _get_or_create_worksheet(NOMBRE_HOJA_PERSONAL, COLUMNAS_PERSONAL)
+    ws.append_row([datos.get(col, "") for col in COLUMNAS_PERSONAL])
+    get_personal_df.clear()
+    get_registros_df.clear()
+    get_ajustes_df.clear()
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def get_personal_df() -> pd.DataFrame:
+    ws = _get_or_create_worksheet(NOMBRE_HOJA_PERSONAL, COLUMNAS_PERSONAL)
+    df = pd.DataFrame(ws.get_all_records(), columns=COLUMNAS_PERSONAL)
+    for col in COLUMNAS_PERSONAL:
+        df[col] = df[col].fillna("").astype(str).str.strip()
+    return df
+
+
+def unificar_nombres(nombres: pd.Series, locales: pd.Series) -> pd.Series:
+    """Aplica los alias de la hoja Personal (si no hay, deja todo igual)."""
+    mapa = mapa_alias(get_personal_df())
+    if not mapa:
+        return nombres
+    unidos = [resolver_nombre(n, loc, mapa) for n, loc in zip(nombres, locales)]
+    return _normalizar_nombre(pd.Series(unidos, index=nombres.index))
+
+
 @st.cache_data(ttl=30, show_spinner=False)
 def get_registros_df() -> pd.DataFrame:
     ws = _get_or_create_worksheet(NOMBRE_HOJA_REGISTROS, COLUMNAS_REGISTROS)
@@ -737,6 +774,8 @@ def get_registros_df() -> pd.DataFrame:
     df["total"] = df["efectivo"] + df["tarjeta"].fillna(0)
 
     df["nombre"] = _normalizar_nombre(df["nombre"])
+    df["nombre_original"] = df["nombre"]
+    df["nombre"] = unificar_nombres(df["nombre"], df["local"])
     return df
 
 
@@ -942,5 +981,5 @@ def get_ajustes_df() -> pd.DataFrame:
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df["monto"] = pd.to_numeric(df["monto"], errors="coerce").fillna(0)
     df["autorizado_por"] = _normalizar_nombre(df["autorizado_por"])
-    df["repuso"] = _normalizar_nombre(df["repuso"])
+    df["repuso"] = unificar_nombres(_normalizar_nombre(df["repuso"]), df["local"])
     return df

@@ -12,6 +12,8 @@ import pandas as pd
 import pytest
 
 from cuadre import (
+    mapa_alias,
+    resolver_nombre,
     creditos_repuso,
     items_ticket,
     totales_ticket,
@@ -351,3 +353,20 @@ def test_creditos_repuso_solo_ingresos_con_repuso_en_rango():
     c = creditos_repuso(aj, date(2026, 9, 1), date(2026, 10, 2), ["L1"])
     assert list(c["persona"]) == ["María"] and list(c["monto"]) == [10.0]
     assert creditos_repuso(None, date(2026, 9, 1), date(2026, 10, 2)).empty
+
+
+def test_alias_une_variantes_y_desambigua_por_local():
+    personal = pd.DataFrame(
+        [
+            {"nombre": "Ana León", "local": "Colon", "alias": "Ana"},
+            {"nombre": "Ana Machaca", "local": "Fer213", "alias": "Ana|Ana Maritza Machaca Vilca"},
+        ]
+    )
+    m = mapa_alias(personal)
+    assert resolver_nombre("Ana Maritza Machaca Vilca", "Colon", m) == "Ana Machaca"
+    assert resolver_nombre("ana machaca", "Colon", m) == "Ana Machaca"
+    assert resolver_nombre("Ana", "Colon", m) == "Ana León"
+    assert resolver_nombre("Ana", "Fer213", m) == "Ana Machaca"
+    assert resolver_nombre("Ana", "OtroLocal", m) == "Ana"
+    assert resolver_nombre("Pedro", "Colon", m) == "Pedro"
+    assert resolver_nombre("Ana", "Colon", mapa_alias(None)) == "Ana"

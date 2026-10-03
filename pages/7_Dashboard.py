@@ -160,8 +160,14 @@ def _comparar_par(row_izq, row_der, label_izq="Apertura", label_der="Cierre"):
 # secciones reusan variables calculadas por la de arriba, por ejemplo
 # "Cuadre por turno" calcula `cortes` y "Acumulado por persona" lo usa).
 # ---------------------------------------------------------------------
-tab_resumen, tab_cuadre, tab_liquidacion, tab_operaciones, tab_comisiones, tab_incentivos, tab_registros = st.tabs(
-    ["🏠 Resumen", "🔍 Cuadre", "🧾 Liquidación", "📈 Operaciones", "💰 Comisiones", "⭐ Incentivos", "🗂️ Registros"]
+(
+    tab_resumen, tab_cuadre, tab_liquidacion, tab_operaciones, tab_comisiones,
+    tab_incentivos, tab_registros, tab_personal,
+) = st.tabs(
+    [
+        "🏠 Resumen", "🔍 Cuadre", "🧾 Liquidación", "📈 Operaciones",
+        "💰 Comisiones", "⭐ Incentivos", "🗂️ Registros", "👥 Personal",
+    ]
 )
 
 with tab_resumen:
@@ -1692,3 +1698,77 @@ with tab_incentivos:
                 if nuevo_estado != estado_actual:
                     sh.actualizar_estado_pago(fila_encuesta["id"], nuevo_estado)
                     st.rerun()
+
+
+with tab_personal:
+    # -------------------------------------------------------------
+    # Personal: une las distintas formas en que alguien firmo su nombre y
+    # desambigua nombres repetidos por local (p. ej. "Ana" en Colon es una
+    # persona y en Fer213 otra). Lo que se cargue aca se aplica a TODOS los
+    # reportes (Cuadre, Liquidacion, Historial...).
+    # -------------------------------------------------------------
+    st.subheader("👥 Personal")
+    st.caption(
+        "Cada persona tiene un nombre oficial, su local habitual y los nombres con los que "
+        "firmó antes (alias). Los registros se unifican por alias; si un alias lo comparten "
+        "dos personas (p. ej. «Ana»), se usa el local del registro para decidir cuál es."
+    )
+
+    personal_df = sh.get_personal_df()
+    if personal_df.empty:
+        st.info("Todavía no hay personal cargado. Agrega a la primera persona abajo.")
+    else:
+        st.dataframe(
+            sh.arrow_safe(
+                personal_df.rename(
+                    columns={"nombre": "Nombre oficial", "local": "Local habitual",
+                             "alias": "Alias (separados por |)", "activo": "Activo"}
+                )
+            ),
+            width="stretch",
+            hide_index=True,
+        )
+        st.caption("Para editar o desactivar a alguien, cambia su fila directo en la hoja «Personal» del Google Sheet.")
+
+    st.markdown("**Nombres tal como se registraron**")
+    detectados = (
+        df.groupby(["nombre_original", "local"])
+        .agg(Registros=("id", "count"), Ultimo=("fecha", "max"), Se_muestra_como=("nombre", "first"))
+        .reset_index()
+        .rename(columns={"nombre_original": "Nombre registrado", "local": "Local",
+                         "Ultimo": "Último registro", "Se_muestra_como": "Se muestra como"})
+        .sort_values(["Nombre registrado", "Local"])
+    )
+    st.dataframe(sh.arrow_safe(detectados), width="stretch", hide_index=True)
+
+    st.markdown("**Agregar persona**")
+    with st.form("form_persona", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        nombre_oficial = c1.text_input("Nombre oficial", placeholder="Ej: Ana León")
+        local_habitual = c2.selectbox("Local habitual", config_df["local"].tolist())
+        alias_sel = st.multiselect(
+            "Alias (nombres con los que ha firmado)",
+            sorted(df["nombre_original"].unique()),
+            help="Elige todas las formas en que aparece su nombre en los registros.",
+        )
+        activa = st.checkbox("Sigue trabajando", value=True)
+        if st.form_submit_button("Agregar persona"):
+            if not nombre_oficial.strip():
+                st.error("Escribe el nombre oficial.")
+            elif (
+                not personal_df.empty
+                and ((personal_df["nombre"].str.lower() == nombre_oficial.strip().lower())
+                     & (personal_df["local"] == local_habitual)).any()
+            ):
+                st.error("Esa persona ya está cargada en ese local.")
+            else:
+                sh.guardar_persona(
+                    {
+                        "nombre": nombre_oficial.strip(),
+                        "local": local_habitual,
+                        "alias": "|".join(alias_sel),
+                        "activo": "Sí" if activa else "No",
+                    }
+                )
+                st.success("Persona agregada.")
+                st.rerun()

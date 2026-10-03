@@ -573,3 +573,43 @@ def creditos_repuso(ajustes: pd.DataFrame, desde, hasta, locales=None) -> pd.Dat
         return pd.DataFrame(columns=COLUMNAS_CREDITO)
     salida = sel.rename(columns={"repuso": "persona"})[COLUMNAS_CREDITO]
     return salida.sort_values(["persona", "fecha"], kind="stable").reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------
+# Personal: unifica las distintas formas en que alguien firmo su nombre
+# ("Ana Machaca", "Ana Maritza Machaca Vilca") y desambigua nombres
+# repetidos ("Ana") usando el local donde se hizo el registro.
+# ---------------------------------------------------------------------
+def _clave_alias(texto) -> str:
+    return " ".join(str(texto).split()).lower()
+
+
+def mapa_alias(personal: pd.DataFrame) -> dict:
+    """alias (en minusculas) -> lista de (nombre oficial, local). El alias
+    de la hoja Personal va separado por '|'; el nombre oficial tambien
+    cuenta como alias de si mismo."""
+    mapa: dict = {}
+    if personal is None or personal.empty:
+        return mapa
+    for _, r in personal.iterrows():
+        oficial = str(r.get("nombre", "")).strip()
+        if not oficial:
+            continue
+        local = str(r.get("local", "")).strip()
+        alias = [a for a in str(r.get("alias", "")).split("|") if a.strip()]
+        for a in alias + [oficial]:
+            mapa.setdefault(_clave_alias(a), []).append((oficial, local))
+    return mapa
+
+
+def resolver_nombre(nombre, local, mapa: dict) -> str:
+    candidatos = mapa.get(_clave_alias(nombre))
+    if not candidatos:
+        return nombre
+    oficiales = list(dict.fromkeys(c[0] for c in candidatos))
+    if len(oficiales) == 1:
+        return oficiales[0]
+    for oficial, loc in candidatos:
+        if loc and loc == str(local).strip():
+            return oficial
+    return nombre
