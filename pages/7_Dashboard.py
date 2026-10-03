@@ -1317,6 +1317,17 @@ with tab_liquidacion:
 
     personas_liq = sorted(set(items_liq["persona"]) | set(creditos_liq["persona"]))
 
+    # Operaciones de cada persona en el rango: las del Cierre de cada corte
+    # que ABRIO (misma atribucion que la diferencia). Sirve para calibrar un
+    # margen de error proporcional al trabajo.
+    ops_por_persona = (
+        cortes.assign(_ops=cortes["id_cierre"].map(_registros_por_id["num_operaciones"]).fillna(0))
+        .groupby("nombre")["_ops"]
+        .sum()
+        if not cortes.empty
+        else pd.Series(dtype=float)
+    )
+
     if not personas_liq:
         st.success("Sin diferencias para revisar en el rango seleccionado.")
     else:
@@ -1337,6 +1348,11 @@ with tab_liquidacion:
             filas_resumen_liq[-1]["Saldo (S/)"] = (
                 filas_resumen_liq[-1]["A revisar (S/)"] - filas_resumen_liq[-1]["A favor (S/)"]
             )
+            _ops = int(ops_por_persona.get(_persona, 0))
+            filas_resumen_liq[-1]["Operaciones"] = _ops
+            filas_resumen_liq[-1]["A revisar por 100 ops (S/)"] = (
+                filas_resumen_liq[-1]["A revisar (S/)"] / _ops * 100 if _ops else float("nan")
+            )
         resumen_liq = pd.DataFrame(filas_resumen_liq).sort_values(
             ["A revisar (S/)", "A favor (S/)"], ascending=False
         )
@@ -1346,13 +1362,16 @@ with tab_liquidacion:
             hide_index=True,
             column_config={
                 c: st.column_config.NumberColumn(format="%.2f")
-                for c in ["Faltantes (S/)", "Sobrantes (S/)", "Neto (S/)", "A revisar (S/)", "A favor (S/)", "Saldo (S/)"]
+                for c in ["Faltantes (S/)", "Sobrantes (S/)", "Neto (S/)", "A revisar (S/)", "A favor (S/)",
+                          "Saldo (S/)", "A revisar por 100 ops (S/)"]
             },
         )
         st.caption(
             "A favor = plata que la persona repuso de su bolsillo para cubrir una diferencia "
             "(se registra en el ajuste, campo «Repuso»). Saldo = A revisar − A favor: lo que "
-            "queda por revisar después de contar lo que ya repuso (negativo = se le debe)."
+            "queda por revisar después de contar lo que ya repuso (negativo = se le debe). "
+            "Operaciones = las de los cortes que abrió la persona; 'por 100 ops' sirve para "
+            "comparar a todos con la misma vara antes de fijar un margen de error."
         )
 
         persona_liq = st.selectbox("Ticket de", resumen_liq["Persona"].tolist())
