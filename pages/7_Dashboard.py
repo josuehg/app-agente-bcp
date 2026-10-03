@@ -1334,6 +1334,9 @@ with tab_liquidacion:
                     "A favor (S/)": float(creditos_liq.loc[creditos_liq["persona"] == _persona, "monto"].sum()),
                 }
             )
+            filas_resumen_liq[-1]["Saldo (S/)"] = (
+                filas_resumen_liq[-1]["A revisar (S/)"] - filas_resumen_liq[-1]["A favor (S/)"]
+            )
         resumen_liq = pd.DataFrame(filas_resumen_liq).sort_values(
             ["A revisar (S/)", "A favor (S/)"], ascending=False
         )
@@ -1343,12 +1346,13 @@ with tab_liquidacion:
             hide_index=True,
             column_config={
                 c: st.column_config.NumberColumn(format="%.2f")
-                for c in ["Faltantes (S/)", "Sobrantes (S/)", "Neto (S/)", "A revisar (S/)", "A favor (S/)"]
+                for c in ["Faltantes (S/)", "Sobrantes (S/)", "Neto (S/)", "A revisar (S/)", "A favor (S/)", "Saldo (S/)"]
             },
         )
         st.caption(
             "A favor = plata que la persona repuso de su bolsillo para cubrir una diferencia "
-            "(se registra en el ajuste, campo «Repuso»). No compensa los faltantes propios."
+            "(se registra en el ajuste, campo «Repuso»). Saldo = A revisar − A favor: lo que "
+            "queda por revisar después de contar lo que ya repuso (negativo = se le debe)."
         )
 
         persona_liq = st.selectbox("Ticket de", resumen_liq["Persona"].tolist())
@@ -1362,12 +1366,18 @@ with tab_liquidacion:
             st.caption(
                 f"Periodo: {desde} al {hasta} · Locales: {', '.join(locales_sel)}"
             )
-            m1, m2, m3, m4, m5 = st.columns(5)
+            m1, m2, m3 = st.columns(3)
             m1.metric("Faltantes", f"S/ {tot['faltantes']:,.2f}")
             m2.metric("Sobrantes", f"S/ {tot['sobrantes']:,.2f}")
             m3.metric("Neto", f"S/ {tot['neto']:+,.2f}")
+            m4, m5, m6 = st.columns(3)
             m4.metric("A revisar", f"S/ {tot['a_revisar']:,.2f}")
-            m5.metric("A favor", f"S/ {a_favor:,.2f}")
+            m5.metric("A favor (repuso)", f"S/ {a_favor:,.2f}")
+            m6.metric(
+                "Saldo",
+                f"S/ {tot['a_revisar'] - a_favor:,.2f}",
+                help="A revisar − A favor. Negativo = se le debe a la persona.",
+            )
 
             tabla_ticket = items_persona.drop(columns=["persona"]).rename(
                 columns={
