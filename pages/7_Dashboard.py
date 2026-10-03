@@ -1318,6 +1318,20 @@ with tab_liquidacion:
         help="Lo que no coincidió entre el Cierre de la persona y la Apertura siguiente.",
     )
 
+    with st.expander("Margen de error (franquicia)"):
+        st.caption(
+            "Margen = piso + tasa × operaciones, con un tope. Solo se descuenta lo que PASE "
+            "del margen. Se usan los valores de abajo mientras tengas abierta esta página: "
+            "avísame los que elijas para dejarlos fijos."
+        )
+        aplicar_margen = st.checkbox("Aplicar margen de error", value=True)
+        mg1, mg2, mg3 = st.columns(3)
+        margen_piso = mg1.number_input("Piso (S/)", min_value=0.0, value=5.0, step=1.0)
+        margen_tasa = mg2.number_input(
+            "Tasa por operación (S/)", min_value=0.0, value=0.01, step=0.005, format="%.3f"
+        )
+        margen_tope = mg3.number_input("Tope (S/)", min_value=0.0, value=30.0, step=5.0)
+
     items_liq = sh.items_ticket(cortes_acumulado, saltos_para_acumulado, incluir_entregas_liq)
     creditos_liq = sh.creditos_repuso(ajustes_df, desde, hasta, locales_sel)
 
@@ -1355,12 +1369,19 @@ with tab_liquidacion:
                 filas_resumen_liq[-1]["A revisar (S/)"] - filas_resumen_liq[-1]["A favor (S/)"]
             )
             _ops = int(ops_por_persona.get(_persona, 0))
+            _margen = (
+                sh.margen_error(_ops, margen_piso, margen_tasa, margen_tope) if aplicar_margen else 0.0
+            )
+            filas_resumen_liq[-1]["Margen (S/)"] = _margen
+            filas_resumen_liq[-1]["A descontar (S/)"] = sh.a_descontar(
+                filas_resumen_liq[-1]["Saldo (S/)"], _margen
+            )
             filas_resumen_liq[-1]["Operaciones"] = _ops
             filas_resumen_liq[-1]["A revisar por 100 ops (S/)"] = (
                 filas_resumen_liq[-1]["A revisar (S/)"] / _ops * 100 if _ops else float("nan")
             )
         resumen_liq = pd.DataFrame(filas_resumen_liq).sort_values(
-            ["A revisar (S/)", "A favor (S/)"], ascending=False
+            ["A descontar (S/)", "A revisar (S/)"], ascending=False
         )
         st.dataframe(
             sh.arrow_safe(resumen_liq),
@@ -1369,13 +1390,14 @@ with tab_liquidacion:
             column_config={
                 c: st.column_config.NumberColumn(format="%.2f")
                 for c in ["Faltantes (S/)", "Sobrantes (S/)", "Neto (S/)", "A revisar (S/)", "A favor (S/)",
-                          "Saldo (S/)", "A revisar por 100 ops (S/)"]
+                          "Saldo (S/)", "Margen (S/)", "A descontar (S/)", "A revisar por 100 ops (S/)"]
             },
         )
         st.caption(
             "A favor = plata que la persona repuso de su bolsillo para cubrir una diferencia "
             "(se registra en el ajuste, campo «Repuso»). Saldo = A revisar − A favor: lo que "
             "queda por revisar después de contar lo que ya repuso (negativo = se le debe). "
+            "A descontar = Saldo − Margen (solo lo que pasa del margen de error). "
             "Operaciones = las de los cortes que abrió la persona; 'por 100 ops' sirve para "
             "comparar a todos con la misma vara antes de fijar un margen de error."
         )
@@ -1398,10 +1420,29 @@ with tab_liquidacion:
             m4, m5, m6 = st.columns(3)
             m4.metric("A revisar", f"S/ {tot['a_revisar']:,.2f}")
             m5.metric("A favor (repuso)", f"S/ {a_favor:,.2f}")
+            saldo_persona = tot["a_revisar"] - a_favor
             m6.metric(
                 "Saldo",
-                f"S/ {tot['a_revisar'] - a_favor:,.2f}",
+                f"S/ {saldo_persona:,.2f}",
                 help="A revisar − A favor. Negativo = se le debe a la persona.",
+            )
+            ops_persona = int(ops_por_persona.get(persona_liq, 0))
+            margen_persona = (
+                sh.margen_error(ops_persona, margen_piso, margen_tasa, margen_tope)
+                if aplicar_margen
+                else 0.0
+            )
+            m7, m8, m9 = st.columns(3)
+            m7.metric("Operaciones", f"{ops_persona:,}")
+            m8.metric(
+                "Margen de error",
+                f"S/ {margen_persona:,.2f}",
+                help=f"Piso S/ {margen_piso:,.2f} + S/ {margen_tasa:,.3f} por operación, tope S/ {margen_tope:,.2f}.",
+            )
+            m9.metric(
+                "A descontar",
+                f"S/ {sh.a_descontar(saldo_persona, margen_persona):,.2f}",
+                help="Saldo − Margen. Solo lo que pasa del margen de error; 0 si queda dentro.",
             )
 
             tabla_ticket = items_persona.drop(columns=["persona"]).rename(

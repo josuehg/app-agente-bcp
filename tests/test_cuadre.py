@@ -12,6 +12,8 @@ import pandas as pd
 import pytest
 
 from cuadre import (
+    a_descontar,
+    margen_error,
     mapa_alias,
     resolver_nombre,
     creditos_repuso,
@@ -370,3 +372,12 @@ def test_alias_une_variantes_y_desambigua_por_local():
     assert resolver_nombre("Ana", "OtroLocal", m) == "Ana"
     assert resolver_nombre("Pedro", "Colon", m) == "Pedro"
     assert resolver_nombre("Ana", "Colon", mapa_alias(None)) == "Ana"
+
+
+def test_margen_y_franquicia():
+    assert margen_error(0, 5, 0.01, 30) == 5
+    assert margen_error(700, 5, 0.01, 30) == 12
+    assert margen_error(5000, 5, 0.01, 30) == 30
+    assert a_descontar(21.5, 30) == 0
+    assert a_descontar(48.01, 9.32) == pytest.approx(38.69)
+    assert a_descontar(-5, 10) == 0

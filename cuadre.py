@@ -613,3 +613,15 @@ def resolver_nombre(nombre, local, mapa: dict) -> str:
         if loc and loc == str(local).strip():
             return oficial
     return nombre
+
+
+def margen_error(operaciones: float, piso: float, tasa: float, tope: float) -> float:
+    """Margen de error tolerado: un piso fijo + una tasa por operacion,
+    con un tope. Crece con el trabajo (mas operaciones, mas margen)."""
+    return float(min(tope, piso + tasa * max(0.0, float(operaciones))))
+
+
+def a_descontar(saldo: float, margen: float) -> float:
+    """Franquicia: solo se descuenta lo que PASE del margen. Un saldo
+    negativo (se le debe a la persona) no se descuenta."""
+    return float(max(0.0, saldo - margen))
