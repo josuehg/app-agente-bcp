@@ -35,6 +35,9 @@ from googleapiclient.http import MediaIoBaseUpload
 # Se re-exporta para que el resto de la app la use como sh.calcular_cortes, etc.
 from cuadre import (  # noqa: F401  (re-export para el resto de la app)
     a_descontar,
+    con_estado_nota,
+    estado_nota,
+    UMBRAL_NOTA_LOCAL,
     ESTADO_SALTO_COINCIDE,
     ESTADO_SALTO_DIFERENCIA,
     UMBRAL_VERDE,
@@ -879,7 +882,42 @@ def get_encuestas_df() -> pd.DataFrame:
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df["nota"] = pd.to_numeric(df["nota"], errors="coerce")
     df["incentivo"] = pd.to_numeric(df["incentivo"], errors="coerce").fillna(0)
-    df["nombre"] = _normalizar_nombre(df["nombre"])
+    df["nombre"] = unificar_nombres(_normalizar_nombre(df["nombre"]), df["local"])
+    return df
+
+
+# ---------------------------------------------------------------------
+# Notas mensuales de cada local (las manda el ejecutivo de BCP al cerrar el
+# mes). El incentivo por encuestas solo se paga si la nota del local en ese
+# mes es mayor a UMBRAL_NOTA_LOCAL (ver cuadre.con_estado_nota).
+# ---------------------------------------------------------------------
+NOMBRE_HOJA_NOTAS = "Notas"
+COLUMNAS_NOTAS = ["mes", "local", "nota", "cargado_por", "timestamp"]
+
+
+def guardar_nota(datos: dict) -> None:
+    """Guarda la nota de un local en un mes; si ya existia, la reemplaza."""
+    ws = _get_or_create_worksheet(NOMBRE_HOJA_NOTAS, COLUMNAS_NOTAS)
+    fila = [datos.get(col, "") for col in COLUMNAS_NOTAS]
+    for numero, existente in enumerate(ws.get_all_values()[1:], start=2):
+        existente = existente + [""] * 2
+        if existente[0].strip() == str(datos["mes"]) and existente[1].strip() == str(datos["local"]):
+            ws.update(values=[fila], range_name=f"A{numero}:E{numero}")
+            break
+    else:
+        ws.append_row(fila)
+    get_notas_df.clear()
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def get_notas_df() -> pd.DataFrame:
+    ws = _get_or_create_worksheet(NOMBRE_HOJA_NOTAS, COLUMNAS_NOTAS)
+    df = pd.DataFrame(ws.get_all_records(), columns=COLUMNAS_NOTAS)
+    if df.empty:
+        return df
+    df["mes"] = df["mes"].astype(str).str.strip()
+    df["local"] = df["local"].astype(str).str.strip()
+    df["nota"] = pd.to_numeric(df["nota"], errors="coerce")
     return df
 
 

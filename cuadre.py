@@ -625,3 +625,38 @@ def a_descontar(saldo: float, margen: float) -> float:
     """Franquicia: solo se descuenta lo que PASE del margen. Un saldo
     negativo (se le debe a la persona) no se descuenta."""
     return float(max(0.0, saldo - margen))
+
+
+# ---------------------------------------------------------------------
+# Incentivo por encuestas condicionado a la nota del LOCAL en el mes (la
+# manda el ejecutivo de BCP al cerrar el mes): si la nota es mayor a
+# UMBRAL_NOTA_LOCAL se paga, si no, no. Mientras no haya nota, queda
+# condicionado.
+# ---------------------------------------------------------------------
+UMBRAL_NOTA_LOCAL = 60
+
+
+def estado_nota(nota) -> str:
+    try:
+        n = float(nota)
+    except (TypeError, ValueError):
+        return "Condicionado"
+    if n != n:
+        return "Condicionado"
+    return "Aprobado" if n > UMBRAL_NOTA_LOCAL else "No aprobado"
+
+
+def con_estado_nota(encuestas: pd.DataFrame, notas: pd.DataFrame) -> pd.DataFrame:
+    """Agrega 'mes' (YYYY-MM de la encuesta), 'nota_local' y 'estado_nota'
+    (Aprobado / No aprobado / Condicionado) a cada encuesta, segun la nota
+    cargada para SU local en SU mes."""
+    if encuestas is None or encuestas.empty:
+        return encuestas
+    salida = encuestas.copy()
+    salida["mes"] = pd.to_datetime(salida["fecha"], errors="coerce").dt.strftime("%Y-%m")
+    mapa = {}
+    if notas is not None and not notas.empty:
+        mapa = {(r["mes"], r["local"]): r["nota"] for _, r in notas.iterrows()}
+    salida["nota_local"] = [mapa.get((m, loc)) for m, loc in zip(salida["mes"], salida["local"])]
+    salida["estado_nota"] = salida["nota_local"].map(estado_nota)
+    return salida

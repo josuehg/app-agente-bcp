@@ -12,6 +12,8 @@ import pandas as pd
 import pytest
 
 from cuadre import (
+    con_estado_nota,
+    estado_nota,
     a_descontar,
     margen_error,
     mapa_alias,
@@ -381,3 +383,25 @@ def test_margen_y_franquicia():
     assert a_descontar(21.5, 30) == 0
     assert a_descontar(48.01, 9.32) == pytest.approx(38.69)
     assert a_descontar(-5, 10) == 0
+
+
+def test_incentivo_condicionado_a_nota_del_local():
+    from datetime import date
+
+    assert estado_nota(61) == "Aprobado"
+    assert estado_nota(60) == "No aprobado"
+    assert estado_nota(45.5) == "No aprobado"
+    assert estado_nota(None) == "Condicionado"
+    assert estado_nota(float("nan")) == "Condicionado"
+
+    enc = pd.DataFrame(
+        [
+            {"fecha": date(2026, 9, 5), "local": "L1", "nombre": "Ana", "incentivo": 10.0},
+            {"fecha": date(2026, 9, 6), "local": "L2", "nombre": "Ana", "incentivo": 10.0},
+            {"fecha": date(2026, 10, 1), "local": "L1", "nombre": "Ana", "incentivo": 10.0},
+        ]
+    )
+    notas = pd.DataFrame([{"mes": "2026-09", "local": "L1", "nota": 75.0}, {"mes": "2026-09", "local": "L2", "nota": 55.0}])
+    r = con_estado_nota(enc, notas)
+    assert list(r["estado_nota"]) == ["Aprobado", "No aprobado", "Condicionado"]
+    assert con_estado_nota(None, notas) is None

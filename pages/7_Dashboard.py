@@ -1335,7 +1335,33 @@ with tab_liquidacion:
     items_liq = sh.items_ticket(cortes_acumulado, saltos_para_acumulado, incluir_entregas_liq)
     creditos_liq = sh.creditos_repuso(ajustes_df, desde, hasta, locales_sel)
 
-    personas_liq = sorted(set(items_liq["persona"]) | set(creditos_liq["persona"]))
+    # Incentivos por encuestas del periodo, segun la nota de su local en su mes.
+    encuestas_liq = sh.get_encuestas_df()
+    if not encuestas_liq.empty:
+        encuestas_liq = sh.con_estado_nota(encuestas_liq, sh.get_notas_df())
+        encuestas_liq = encuestas_liq[
+            encuestas_liq["fecha"].between(desde, hasta)
+            & encuestas_liq["local"].isin(locales_sel)
+            & (encuestas_liq["estado_pago"] != "No válido")
+        ]
+
+    def _incentivos_de(persona):
+        if encuestas_liq.empty:
+            return {"pagar": 0.0, "condicionado": 0.0, "no_aprobado": 0.0}
+        e = encuestas_liq[
+            (encuestas_liq["nombre"] == persona) & (encuestas_liq["estado_pago"] == "Pendiente")
+        ]
+        return {
+            "pagar": float(e.loc[e["estado_nota"] == "Aprobado", "incentivo"].sum()),
+            "condicionado": float(e.loc[e["estado_nota"] == "Condicionado", "incentivo"].sum()),
+            "no_aprobado": float(e.loc[e["estado_nota"] == "No aprobado", "incentivo"].sum()),
+        }
+
+    personas_liq = sorted(
+        set(items_liq["persona"])
+        | set(creditos_liq["persona"])
+        | (set(encuestas_liq["nombre"]) if not encuestas_liq.empty else set())
+    )
 
     # Operaciones de cada persona en el rango: las del Cierre de cada corte
     # que ABRIO (misma atribucion que la diferencia). Sirve para calibrar un
@@ -1376,6 +1402,7 @@ with tab_liquidacion:
             filas_resumen_liq[-1]["A descontar (S/)"] = sh.a_descontar(
                 filas_resumen_liq[-1]["Saldo (S/)"], _margen
             )
+            filas_resumen_liq[-1]["Incentivo a pagar (S/)"] = _incentivos_de(_persona)["pagar"]
             filas_resumen_liq[-1]["Operaciones"] = _ops
             filas_resumen_liq[-1]["A revisar por 100 ops (S/)"] = (
                 filas_resumen_liq[-1]["A revisar (S/)"] / _ops * 100 if _ops else float("nan")
@@ -1390,7 +1417,8 @@ with tab_liquidacion:
             column_config={
                 c: st.column_config.NumberColumn(format="%.2f")
                 for c in ["Faltantes (S/)", "Sobrantes (S/)", "Neto (S/)", "A revisar (S/)", "A favor (S/)",
-                          "Saldo (S/)", "Margen (S/)", "A descontar (S/)", "A revisar por 100 ops (S/)"]
+                          "Saldo (S/)", "Margen (S/)", "A descontar (S/)",
+                          "Incentivo a pagar (S/)", "A revisar por 100 ops (S/)"]
             },
         )
         st.caption(
@@ -1444,6 +1472,23 @@ with tab_liquidacion:
                 f"S/ {sh.a_descontar(saldo_persona, margen_persona):,.2f}",
                 help="Saldo − Margen. Solo lo que pasa del margen de error; 0 si queda dentro.",
             )
+
+            inc = _incentivos_de(persona_liq)
+            if any(inc.values()):
+                st.markdown(
+                    "**Incentivos por encuestas** (se pagan solo si la nota del local en el mes es mayor a "
+                    f"{sh.UMBRAL_NOTA_LOCAL}; los ya pagados no aparecen aquí)"
+                )
+                i1, i2, i3 = st.columns(3)
+                i1.metric("A pagar (local aprobado)", f"S/ {inc['pagar']:,.2f}")
+                i2.metric("Condicionado (falta la nota)", f"S/ {inc['condicionado']:,.2f}")
+                i3.metric("No se paga (nota no aprobada)", f"S/ {inc['no_aprobado']:,.2f}")
+                descuento_persona = sh.a_descontar(saldo_persona, margen_persona)
+                st.caption(
+                    f"Referencia (no es un movimiento): incentivos a pagar S/ {inc['pagar']:,.2f} − "
+                    f"a descontar S/ {descuento_persona:,.2f} = S/ {inc['pagar'] - descuento_persona:,.2f}. "
+                    "Cada concepto se paga o se descuenta por separado."
+                )
 
             tabla_ticket = items_persona.drop(columns=["persona"]).rename(
                 columns={
@@ -1661,18 +1706,69 @@ with tab_incentivos:
     ESTADOS_PAGO_ENCUESTA = ["Pendiente", "Pagada", "No válido"]
 
     encuestas_df = sh.get_encuestas_df()
+    notas_df = sh.get_notas_df()
+    encuestas_df = sh.con_estado_nota(encuestas_df, notas_df)
+
+    # El incentivo solo se paga si la nota del LOCAL en ese mes (la manda el
+    # ejecutivo de BCP al cerrar el mes) es mayor a UMBRAL_NOTA_LOCAL.
+    st.markdown(
+        f"**Nota mensual de cada local (BCP)** — el incentivo se paga solo si es mayor a {sh.UMBRAL_NOTA_LOCAL}"
+    )
+    _mes_actual = sh.hoy_local().strftime("%Y-%m")
+    meses_nota = sorted(
+        ({_mes_actual} | set(encuestas_df["mes"].dropna())) if not encuestas_df.empty else {_mes_actual},
+        reverse=True,
+    )
+    with st.form("form_nota_local", clear_on_submit=True):
+        n1, n2, n3, n4 = st.columns(4)
+        mes_nota = n1.selectbox("Mes", meses_nota)
+        local_nota = n2.selectbox("Local", config_df["local"].tolist())
+        valor_nota = n3.number_input("Nota", min_value=0.0, max_value=100.0, value=0.0, step=1.0)
+        quien_nota = n4.text_input("Cargado por")
+        if st.form_submit_button("Guardar nota"):
+            if not quien_nota.strip():
+                st.error("Escribe quién carga la nota.")
+            else:
+                sh.guardar_nota(
+                    {
+                        "mes": mes_nota,
+                        "local": local_nota,
+                        "nota": valor_nota,
+                        "cargado_por": quien_nota.strip(),
+                        "timestamp": sh.ahora_local().replace(tzinfo=None).isoformat(timespec="seconds"),
+                    }
+                )
+                st.success("Nota guardada.")
+                st.rerun()
+    if notas_df.empty:
+        st.caption("Todavía no hay notas cargadas: los incentivos quedan «Condicionados».")
+    else:
+        notas_vista = notas_df.sort_values(["mes", "local"], ascending=[False, True]).copy()
+        notas_vista["Estado"] = notas_vista["nota"].map(sh.estado_nota)
+        st.dataframe(
+            sh.arrow_safe(
+                notas_vista[["mes", "local", "nota", "Estado", "cargado_por"]].rename(
+                    columns={"mes": "Mes", "local": "Local", "nota": "Nota", "cargado_por": "Cargado por"}
+                )
+            ),
+            width="stretch",
+            hide_index=True,
+        )
 
     if encuestas_df.empty:
         st.caption("Todavia no se ha registrado ninguna encuesta NPS.")
     else:
-        pendientes_df = encuestas_df[encuestas_df["estado_pago"] == "Pendiente"]
+        pendientes_todas_df = encuestas_df[encuestas_df["estado_pago"] == "Pendiente"]
+        pendientes_df = pendientes_todas_df[pendientes_todas_df["estado_nota"] == "Aprobado"]
+        condicionadas_df = pendientes_todas_df[pendientes_todas_df["estado_nota"] == "Condicionado"]
+        no_aprobadas_df = pendientes_todas_df[pendientes_todas_df["estado_nota"] == "No aprobado"]
         pagadas_df = encuestas_df[encuestas_df["estado_pago"] == "Pagada"]
         no_validas_df = encuestas_df[encuestas_df["estado_pago"] == "No válido"]
 
         colA, colB, colC, colD = st.columns(4)
         colA.metric("Encuestas totales", len(encuestas_df))
         colB.metric(
-            "Pendientes de pago",
+            "Por pagar (local aprobado)",
             f"{len(pendientes_df)} (S/ {pendientes_df['incentivo'].sum():,.2f})",
         )
         colC.metric(
@@ -1680,10 +1776,19 @@ with tab_incentivos:
             f"{len(pagadas_df)} (S/ {pagadas_df['incentivo'].sum():,.2f})",
         )
         colD.metric("No validas", len(no_validas_df))
+        colE, colF = st.columns(2)
+        colE.metric(
+            "Condicionadas (falta la nota del local)",
+            f"{len(condicionadas_df)} (S/ {condicionadas_df['incentivo'].sum():,.2f})",
+        )
+        colF.metric(
+            "No se pagan (nota del local no aprobada)",
+            f"{len(no_aprobadas_df)} (S/ {no_aprobadas_df['incentivo'].sum():,.2f})",
+        )
 
-        st.caption("Cuanto se le debe a cada trabajador (solo lo pendiente):")
+        st.caption("Cuanto se le debe a cada trabajador (solo lo pendiente y con local aprobado):")
         if pendientes_df.empty:
-            st.success("No hay incentivos pendientes de pago. 👍")
+            st.success("No hay incentivos por pagar ahora. 👍")
         else:
             resumen_por_nombre = (
                 pendientes_df.groupby(["local", "nombre"])["incentivo"]
@@ -1705,7 +1810,8 @@ with tab_incentivos:
         for _, fila_encuesta in encuestas_df.sort_values("timestamp", ascending=False).iterrows():
             titulo_encuesta = (
                 f"{fila_encuesta['fecha']} · {fila_encuesta['local']} · {fila_encuesta['nombre']} "
-                f"· Nota {fila_encuesta['nota']} · {fila_encuesta['estado_pago']}"
+                f"· Nota {fila_encuesta['nota']} · {fila_encuesta['estado_pago']} "
+                f"· Local: {fila_encuesta['estado_nota']}"
             )
             with st.expander(titulo_encuesta):
                 # Chicas por defecto; con el check se ven a ancho completo. Las
@@ -1737,8 +1843,15 @@ with tab_incentivos:
                     key=f"estado_{fila_encuesta['id']}",
                 )
                 if nuevo_estado != estado_actual:
-                    sh.actualizar_estado_pago(fila_encuesta["id"], nuevo_estado)
-                    st.rerun()
+                    if nuevo_estado == "Pagada" and fila_encuesta["estado_nota"] != "Aprobado":
+                        st.error(
+                            "No se puede marcar como pagada: la nota del local en "
+                            f"{fila_encuesta['mes']} está «{fila_encuesta['estado_nota']}» "
+                            f"(se paga solo si es mayor a {sh.UMBRAL_NOTA_LOCAL})."
+                        )
+                    else:
+                        sh.actualizar_estado_pago(fila_encuesta["id"], nuevo_estado)
+                        st.rerun()
 
 
 with tab_personal:
