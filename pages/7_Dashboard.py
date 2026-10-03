@@ -1310,7 +1310,7 @@ with tab_liquidacion:
     )
     col_liq1, col_liq2 = st.columns(2)
     compensar_liq = col_liq1.checkbox(
-        "Compensar faltantes con sobrantes", value=False,
+        "Compensar faltantes con sobrantes", value=True,
         help="Si está activo, el monto a revisar es solo lo que quede faltando después de restar los sobrantes.",
     )
     incluir_entregas_liq = col_liq2.checkbox(
@@ -1321,12 +1321,12 @@ with tab_liquidacion:
     with st.expander("Margen de error (franquicia)"):
         st.caption(
             "Margen = piso + tasa × operaciones, con un tope. Solo se descuenta lo que PASE "
-            "del margen. Se usan los valores de abajo mientras tengas abierta esta página: "
-            "avísame los que elijas para dejarlos fijos."
+            "del margen. Valores acordados: piso S/ 6, S/ 0.01 por operación, tope S/ 30. "
+            "Puedes probar otros aquí; al recargar la página vuelven a estos."
         )
         aplicar_margen = st.checkbox("Aplicar margen de error", value=True)
         mg1, mg2, mg3 = st.columns(3)
-        margen_piso = mg1.number_input("Piso (S/)", min_value=0.0, value=5.0, step=1.0)
+        margen_piso = mg1.number_input("Piso (S/)", min_value=0.0, value=6.0, step=1.0)
         margen_tasa = mg2.number_input(
             "Tasa por operación (S/)", min_value=0.0, value=0.01, step=0.005, format="%.3f"
         )
