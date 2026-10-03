@@ -657,7 +657,7 @@ def estado_turno(local: str, fecha: str, turno: str) -> dict:
         return {
             "abierto": True,
             "apertura_abierta": {
-                "nombre": str(ultimo.get("nombre", "")).strip(),
+                "nombre": nombre_oficial(str(ultimo.get("nombre", "")).strip(), local),
                 "hora": hora,
             },
             "ultimo_tipo": "Apertura",
@@ -753,6 +753,33 @@ def get_personal_df() -> pd.DataFrame:
     for col in COLUMNAS_PERSONAL:
         df[col] = df[col].fillna("").astype(str).str.strip()
     return df
+
+
+def nombre_oficial(nombre, local) -> str:
+    """Un nombre suelto (como lo escribieron) -> el nombre oficial segun la
+    hoja Personal (o solo normalizado si no esta cargado)."""
+    limpio = " ".join(str(nombre).split()).title()
+    if not limpio:
+        return limpio
+    return resolver_nombre(limpio, local, mapa_alias(get_personal_df()))
+
+
+_INACTIVO = {"no", "false", "0"}
+
+
+def personal_activo(local: str) -> tuple[list[str], list[tuple[str, str]]]:
+    """Personal en actividad: (los de ESTE local, [(nombre, local habitual)]
+    de los demas locales, por si rotan)."""
+    personal = get_personal_df()
+    activos = personal[
+        (personal["nombre"] != "") & ~personal["activo"].str.lower().isin(_INACTIVO)
+    ]
+    propios = sorted(activos.loc[activos["local"] == local, "nombre"].unique())
+    otros = sorted(
+        {(r["nombre"], r["local"]) for _, r in activos[activos["local"] != local].iterrows()
+         if r["nombre"] not in propios}
+    )
+    return propios, otros
 
 
 def unificar_nombres(nombres: pd.Series, locales: pd.Series) -> pd.Series:

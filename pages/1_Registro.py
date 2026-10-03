@@ -88,7 +88,30 @@ with col2:
 with col3:
     tipo = st.radio("Tipo de registro", ["Apertura", "Cierre"], horizontal=True, key="tipo_sel")
 
-nombre = st.text_input("Nombre de quien registra", key=f"nombre_{v}")
+# El nombre se ELIGE de la lista del Personal (los de este local primero, y
+# los de otros locales por si rotan), en vez de escribirlo: asi no aparecen
+# variantes ("Ana", "Ana Maritza...") ni se confunden dos personas. Si la
+# hoja Personal aun esta vacia, queda el campo de texto de siempre.
+OTRA_PERSONA = "Otra persona (escribir el nombre)"
+_propios, _otros = sh.personal_activo(local)
+usa_lista = bool(_propios or _otros)
+_opciones_nombre = list(_propios) + [n for n, _ in _otros] + [OTRA_PERSONA]
+_etiquetas_nombre = {n: f"{n} ({loc})" for n, loc in _otros}
+if usa_lista:
+    _sel_nombre = st.selectbox(
+        "Nombre de quien registra",
+        _opciones_nombre,
+        index=None,
+        placeholder="Elige tu nombre",
+        format_func=lambda x: _etiquetas_nombre.get(x, x),
+        key=f"nombre_sel_{v}",
+    )
+    if _sel_nombre == OTRA_PERSONA:
+        nombre = st.text_input("Escribe tu nombre completo", key=f"nombre_otro_{v}")
+    else:
+        nombre = _sel_nombre or ""
+else:
+    nombre = st.text_input("Nombre de quien registra", key=f"nombre_{v}")
 
 # ---------------------------------------------------------------------
 # Pista del estado del turno + control de "cierra otra persona"
@@ -182,7 +205,13 @@ if tipo == "Cierre":
             )
 
             def _usar_nombre_apertura():
-                st.session_state[f"nombre_{v}"] = nombre_apertura
+                if not usa_lista:
+                    st.session_state[f"nombre_{v}"] = nombre_apertura
+                elif nombre_apertura in _opciones_nombre:
+                    st.session_state[f"nombre_sel_{v}"] = nombre_apertura
+                else:
+                    st.session_state[f"nombre_sel_{v}"] = OTRA_PERSONA
+                    st.session_state[f"nombre_otro_{v}"] = nombre_apertura
 
             st.button(f"Usar «{nombre_apertura}»", on_click=_usar_nombre_apertura)
             motivo_cierre_otro_nombre = st.text_area(

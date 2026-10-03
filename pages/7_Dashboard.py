@@ -1741,6 +1741,30 @@ with tab_personal:
     )
     st.dataframe(sh.arrow_safe(detectados), width="stretch", hide_index=True)
 
+    st.markdown("**Días fuera de su local habitual (rotaciones)**")
+    habituales = (
+        personal_df[personal_df["nombre"] != ""]
+        .drop_duplicates("nombre")[["nombre", "local"]]
+        .rename(columns={"local": "Local habitual"})
+    )
+    rotaciones = df[df["fecha"].between(desde, hasta)].merge(habituales, on="nombre", how="inner")
+    rotaciones = rotaciones[rotaciones["local"] != rotaciones["Local habitual"]]
+    if rotaciones.empty:
+        st.caption("Sin rotaciones en el rango de fechas seleccionado (o falta cargar el Personal).")
+    else:
+        st.dataframe(
+            sh.arrow_safe(
+                rotaciones.groupby(["fecha", "nombre", "local", "Local habitual", "turno"])
+                .agg(Registros=("id", "count"))
+                .reset_index()
+                .sort_values(["fecha", "nombre"], ascending=[False, True])
+                .rename(columns={"fecha": "Fecha", "nombre": "Persona",
+                                 "local": "Registró en", "turno": "Turno"})
+            ),
+            width="stretch",
+            hide_index=True,
+        )
+
     st.markdown("**Agregar persona**")
     with st.form("form_persona", clear_on_submit=True):
         c1, c2 = st.columns(2)
