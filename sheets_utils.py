@@ -53,6 +53,7 @@ from cuadre import (  # noqa: F401  (re-export para el resto de la app)
     creditos_repuso,
     items_ticket,
     clave_alias,
+    conflictos_alias,
     mapa_alias,
     sugerir_oficial,
     politica_sucursal,
@@ -740,6 +741,7 @@ def guardar_persona(datos: dict) -> None:
     get_personal_df.clear()
     get_registros_df.clear()
     get_ajustes_df.clear()
+    get_encuestas_df.clear()
 
 
 def eliminar_persona(nombre_orig: str, local_orig: str) -> None:
@@ -753,6 +755,7 @@ def eliminar_persona(nombre_orig: str, local_orig: str) -> None:
             get_personal_df.clear()
             get_registros_df.clear()
             get_ajustes_df.clear()
+            get_encuestas_df.clear()
             return
     raise ValueError("No se encontró a esa persona en la hoja Personal.")
 
@@ -770,6 +773,7 @@ def actualizar_persona(nombre_orig: str, local_orig: str, datos: dict) -> None:
             get_personal_df.clear()
             get_registros_df.clear()
             get_ajustes_df.clear()
+            get_encuestas_df.clear()
             return
     raise ValueError("No se encontró a esa persona en la hoja Personal.")
 

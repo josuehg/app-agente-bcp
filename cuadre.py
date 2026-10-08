@@ -625,8 +625,9 @@ def mapa_alias(personal: pd.DataFrame) -> dict:
             continue
         local = str(r.get("local", "")).strip()
         alias = [a for a in str(r.get("alias", "")).split("|") if a.strip()]
-        for a in alias + [oficial]:
-            mapa.setdefault(_clave_alias(a), []).append((oficial, local))
+        for a in alias:
+            mapa.setdefault(_clave_alias(a), []).append((oficial, local, True))
+        mapa.setdefault(_clave_alias(oficial), []).append((oficial, local, False))
     return mapa
 
 
@@ -634,13 +635,36 @@ def resolver_nombre(nombre, local, mapa: dict) -> str:
     candidatos = mapa.get(_clave_alias(nombre))
     if not candidatos:
         return nombre
+    # Un alias asignado A PROPOSITO gana sobre una persona que solo coincide
+    # por tener ese mismo nombre oficial (p. ej. una fila duplicada).
+    explicitos = [c for c in candidatos if c[2]]
+    if explicitos:
+        candidatos = explicitos
     oficiales = list(dict.fromkeys(c[0] for c in candidatos))
     if len(oficiales) == 1:
         return oficiales[0]
-    for oficial, loc in candidatos:
+    for oficial, loc, _ in candidatos:
         if loc and loc == str(local).strip():
             return oficial
     return nombre
+
+
+def conflictos_alias(personal: pd.DataFrame) -> list:
+    """Nombres que apuntan a dos o mas personas que NO se pueden distinguir
+    por local (mismo local, o sin local): hay que fusionar o limpiar. Un
+    nombre compartido entre locales distintos ("Ana" en Colon y en Fer213) es
+    legitimo y no cuenta como conflicto."""
+    conflictos = []
+    for clave, cands in mapa_alias(personal).items():
+        por_persona = {}
+        for oficial, local, _ in cands:
+            por_persona.setdefault(oficial, set()).add(local)
+        if len(por_persona) < 2:
+            continue
+        locales = [loc for locs in por_persona.values() for loc in (locs or {""})]
+        if len(locales) != len(set(locales)) or "" in locales:
+            conflictos.append({"nombre": clave, "personas": sorted(por_persona)})
+    return conflictos
 
 
 def margen_error(operaciones: float, piso: float, tasa: float, tope: float) -> float:

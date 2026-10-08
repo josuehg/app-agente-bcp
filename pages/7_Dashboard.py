@@ -2076,6 +2076,16 @@ with tab_personal:
         )
         st.caption("Para editar o desactivar a alguien, cambia su fila directo en la hoja «Personal» del Google Sheet.")
 
+    _conflictos = sh.conflictos_alias(personal_df)
+    if _conflictos:
+        st.error(
+            "Hay nombres que apuntan a más de una persona y la app no puede decidir cuál es "
+            "(por eso a veces salen separados en Liquidación). Usa «Fusionar personas duplicadas» "
+            "o «Reasignar un nombre registrado» para dejar una sola:"
+        )
+        for c in _conflictos:
+            st.markdown(f"- **{c['nombre']}** → " + " · ".join(c["personas"]))
+
     # Nombres que NO coinciden con ninguna persona/alias de la hoja Personal:
     # son los que hacen aparecer "mas nombres" en Liquidacion y los reportes.
     _mapa_pers = sh.mapa_alias(personal_df)

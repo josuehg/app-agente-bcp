@@ -483,3 +483,26 @@ def test_alias_ignora_tildes_y_sugiere_oficial():
     assert sugerir_oficial("Maria", oficiales) == "María Pérez"
     assert sugerir_oficial("Priscilla Paniura", oficiales) == "Priscila Paniura"
     assert sugerir_oficial("Zoila", oficiales) == ""
+
+
+def test_alias_explicito_gana_y_se_detectan_conflictos():
+    from cuadre import conflictos_alias
+
+    personal = pd.DataFrame(
+        [
+            {"nombre": "Yovana Sumiri", "local": "Colon", "alias": "Yovana Sumiri Adco"},
+            {"nombre": "Yovana Sumiri Adco", "local": "Colon", "alias": ""},
+        ]
+    )
+    m = mapa_alias(personal)
+    assert resolver_nombre("Yovana Sumiri Adco", "Colon", m) == "Yovana Sumiri"
+    c = conflictos_alias(personal)
+    assert len(c) == 1 and c[0]["personas"] == ["Yovana Sumiri", "Yovana Sumiri Adco"]
+
+    dos_anas = pd.DataFrame(
+        [
+            {"nombre": "Ana León", "local": "Colon", "alias": "Ana"},
+            {"nombre": "Ana Machaca", "local": "Fer213", "alias": "Ana"},
+        ]
+    )
+    assert conflictos_alias(dos_anas) == []
