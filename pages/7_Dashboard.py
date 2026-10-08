@@ -1922,8 +1922,7 @@ with tab_incentivos:
         for _, fila_encuesta in encuestas_df.sort_values("timestamp", ascending=False).iterrows():
             titulo_encuesta = (
                 f"{fila_encuesta['fecha']} · {fila_encuesta['local']} · {fila_encuesta['nombre']} "
-                f"· Nota {fila_encuesta['nota']} · {fila_encuesta['estado_pago']} "
-                f"· Local: {fila_encuesta['estado_nota']}"
+                f"· Nota {fila_encuesta['nota']} · {fila_encuesta['estado_visible']}"
             )
             with st.expander(titulo_encuesta):
                 # Chicas por defecto; con el check se ven a ancho completo. Las

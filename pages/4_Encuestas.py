@@ -204,9 +204,11 @@ df_local = df[df["local"] == local] if not df.empty else df
 if df_local.empty:
     st.info("Todavia no hay encuestas registradas para este local.")
 else:
-    df_local = df_local.sort_values("timestamp", ascending=False)
-    pendientes = df_local[df_local["estado_pago"] == "Pendiente"]
-    pagadas = df_local[df_local["estado_pago"] == "Pagada"]
+    df_local = sh.con_estado_nota(df_local.sort_values("timestamp", ascending=False), sh.get_notas_df())
+    pendientes = df_local[df_local["estado_visible"] == sh.ESTADO_PENDIENTE_PAGO]
+    pagadas = df_local[df_local["estado_visible"] == "Pagada"]
+    en_espera = df_local[df_local["estado_visible"] == sh.ESTADO_ESPERA_NOTA]
+    no_abonadas = df_local[df_local["estado_visible"] == sh.ESTADO_NO_SE_ABONA]
 
     col1, col2, col3 = st.columns(3)
     col1.metric("Encuestas registradas", len(df_local))
@@ -219,15 +221,27 @@ else:
         f"{len(pagadas)} (S/ {pagadas['incentivo'].sum():,.2f})",
     )
 
+    if len(en_espera):
+        st.info(
+            f"{len(en_espera)} encuesta(s) en espera de la nota NPS del banco "
+            f"(S/ {en_espera['incentivo'].sum():,.2f}): se definirá su pago cuando se confirme."
+        )
+    if len(no_abonadas):
+        st.warning(
+            f"{len(no_abonadas)} encuesta(s) no se abonarán por calificación baja del local "
+            f"(S/ {no_abonadas['incentivo'].sum():,.2f}): la nota NPS del mes fue menor a "
+            f"{sh.UMBRAL_NOTA_LOCAL} y el banco aplica un descuento."
+        )
+
     st.dataframe(
         sh.arrow_safe(
-            df_local[["fecha", "nombre", "nota", "incentivo", "estado_pago"]].rename(
+            df_local[["fecha", "nombre", "nota", "incentivo", "estado_visible"]].rename(
                 columns={
                     "fecha": "Fecha",
                     "nombre": "Nombre",
                     "nota": "Nota",
                     "incentivo": "Incentivo (S/)",
-                    "estado_pago": "Estado",
+                    "estado_visible": "Estado",
                 }
             )
         ),

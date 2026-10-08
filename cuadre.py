@@ -646,6 +646,22 @@ def estado_nota(nota) -> str:
     return "Aprobado" if n >= UMBRAL_NOTA_LOCAL else "No aprobado"
 
 
+ESTADO_PENDIENTE_PAGO = "Pendiente de pago"
+ESTADO_ESPERA_NOTA = "En espera de la nota del banco"
+ESTADO_NO_SE_ABONA = "No se abona (calificación baja)"
+
+
+def estado_visible(estado_pago, estado_nota_local) -> str:
+    """El estado que se le muestra a la gente por encuesta: junta el estado de
+    pago (que marca el dueno) con lo que dice la nota NPS final de su local."""
+    if str(estado_pago).strip() == "Pendiente":
+        return {
+            "Aprobado": ESTADO_PENDIENTE_PAGO,
+            "No aprobado": ESTADO_NO_SE_ABONA,
+        }.get(estado_nota_local, ESTADO_ESPERA_NOTA)
+    return str(estado_pago).strip()
+
+
 def _es_parcial(tipo) -> bool:
     return str(tipo).strip().lower() == "parcial"
 
@@ -693,4 +709,6 @@ def con_estado_nota(encuestas: pd.DataFrame, notas: pd.DataFrame) -> pd.DataFram
         mapa = {(r["mes"], r["local"]): r["nota"] for _, r in notas.iterrows()}
     salida["nota_local"] = [mapa.get((m, loc)) for m, loc in zip(salida["mes"], salida["local"])]
     salida["estado_nota"] = salida["nota_local"].map(estado_nota)
+    pagos = salida["estado_pago"] if "estado_pago" in salida.columns else ["Pendiente"] * len(salida)
+    salida["estado_visible"] = [estado_visible(p, n) for p, n in zip(pagos, salida["estado_nota"])]
     return salida

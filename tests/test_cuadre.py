@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 from cuadre import (
+    estado_visible,
     estado_parcial,
     nota_vigente,
     con_estado_nota,
@@ -434,3 +435,11 @@ def test_nota_parcial_informa_pero_no_habilita_pagos():
     assert list(con_estado_nota(enc, con_final)["estado_nota"]) == ["No aprobado"]
     assert nota_vigente(notas, "otro") == (None, None)
     assert estado_parcial(55) == "En camino" and estado_parcial(54) == "En riesgo"
+
+
+def test_estado_visible_de_la_encuesta():
+    assert estado_visible("Pendiente", "Aprobado") == "Pendiente de pago"
+    assert estado_visible("Pendiente", "Condicionado") == "En espera de la nota del banco"
+    assert estado_visible("Pendiente", "No aprobado") == "No se abona (calificación baja)"
+    assert estado_visible("Pagada", "No aprobado") == "Pagada"
+    assert estado_visible("No válido", "Aprobado") == "No válido"

@@ -36,6 +36,9 @@ from googleapiclient.http import MediaIoBaseUpload
 from cuadre import (  # noqa: F401  (re-export para el resto de la app)
     a_descontar,
     con_estado_nota,
+    ESTADO_ESPERA_NOTA,
+    ESTADO_NO_SE_ABONA,
+    ESTADO_PENDIENTE_PAGO,
     estado_nota,
     estado_parcial,
     nota_vigente,
