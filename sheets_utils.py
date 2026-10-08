@@ -909,7 +909,8 @@ def get_encuestas_df() -> pd.DataFrame:
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df["nota"] = pd.to_numeric(df["nota"], errors="coerce")
     df["incentivo"] = pd.to_numeric(df["incentivo"], errors="coerce").fillna(0)
-    df["nombre"] = unificar_nombres(_normalizar_nombre(df["nombre"]), df["local"])
+    df["nombre_original"] = _normalizar_nombre(df["nombre"])
+    df["nombre"] = unificar_nombres(df["nombre_original"], df["local"])
     return df
 
 
@@ -1188,5 +1189,6 @@ def get_ajustes_df() -> pd.DataFrame:
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df["monto"] = pd.to_numeric(df["monto"], errors="coerce").fillna(0)
     df["autorizado_por"] = _normalizar_nombre(df["autorizado_por"])
-    df["repuso"] = unificar_nombres(_normalizar_nombre(df["repuso"]), df["local"])
+    df["repuso_original"] = _normalizar_nombre(df["repuso"])
+    df["repuso"] = unificar_nombres(df["repuso_original"], df["local"])
     return df

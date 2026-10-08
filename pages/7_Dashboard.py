@@ -2086,12 +2086,34 @@ with tab_personal:
         for c in _conflictos:
             st.markdown(f"- **{c['nombre']}** → " + " · ".join(c["personas"]))
 
+    # Todos los nombres que aparecen en la app, de DONDE vengan: registros de
+    # caja, encuestas y reposiciones (campo "Repuso" de los ajustes). Una
+    # persona puede estar solo en las encuestas, y de ahi sale "otra persona"
+    # en Liquidacion aunque no tenga registros de caja.
+    _fuentes_nombres = [
+        df[["nombre_original", "local", "nombre", "fecha"]].assign(Origen="Registros")
+    ]
+    _enc_nombres = sh.get_encuestas_df()
+    if not _enc_nombres.empty:
+        _fuentes_nombres.append(
+            _enc_nombres[["nombre_original", "local", "nombre", "fecha"]].assign(Origen="Encuestas")
+        )
+    _aj_nombres = sh.get_ajustes_df()
+    if not _aj_nombres.empty and (_aj_nombres["repuso_original"] != "").any():
+        _aj_rep = _aj_nombres[_aj_nombres["repuso_original"] != ""]
+        _fuentes_nombres.append(
+            _aj_rep[["repuso_original", "local", "repuso", "fecha"]]
+            .rename(columns={"repuso_original": "nombre_original", "repuso": "nombre"})
+            .assign(Origen="Reposiciones")
+        )
+    todos_nombres = pd.concat(_fuentes_nombres, ignore_index=True)
+
     # Nombres que NO coinciden con ninguna persona/alias de la hoja Personal:
     # son los que hacen aparecer "mas nombres" en Liquidacion y los reportes.
     _mapa_pers = sh.mapa_alias(personal_df)
     sin_asignar = (
-        df.groupby(["nombre_original", "local"])
-        .agg(Registros=("id", "count"))
+        todos_nombres.groupby(["nombre_original", "local"])
+        .agg(Apariciones=("nombre", "size"), Origen=("Origen", lambda s: ", ".join(sorted(set(s)))))
         .reset_index()
     )
     sin_asignar = sin_asignar[
@@ -2142,11 +2164,11 @@ with tab_personal:
     if not personal_df.empty:
         st.markdown("**Reasignar un nombre registrado**")
         st.caption(
-            "Para cualquier nombre de los registros, esté ya asignado o no: se muestra a quién "
+            "Para cualquier nombre (de registros de caja, encuestas o reposiciones), esté ya asignado o no: se muestra a quién "
             "se cuenta hoy y puedes cambiarlo. Sirve cuando un nombre quedó unido a la persona "
             "equivocada."
         )
-        cuenta_hoy = df.drop_duplicates("nombre_original").set_index("nombre_original")["nombre"].to_dict()
+        cuenta_hoy = todos_nombres.drop_duplicates("nombre_original").set_index("nombre_original")["nombre"].to_dict()
         etiquetas_reas = [f"{r['nombre']} · {r['local']}" for _, r in personal_df.iterrows()]
         ra, rb, rc = st.columns([2, 2, 1])
         nombre_reas = ra.selectbox(
@@ -2187,11 +2209,12 @@ with tab_personal:
 
     st.markdown("**Nombres tal como se registraron**")
     detectados = (
-        df.groupby(["nombre_original", "local"])
-        .agg(Registros=("id", "count"), Ultimo=("fecha", "max"), Se_muestra_como=("nombre", "first"))
+        todos_nombres.groupby(["nombre_original", "local"])
+        .agg(Apariciones=("nombre", "size"), Ultimo=("fecha", "max"), Se_muestra_como=("nombre", "first"),
+             Origen=("Origen", lambda s: ", ".join(sorted(set(s)))))
         .reset_index()
         .rename(columns={"nombre_original": "Nombre registrado", "local": "Local",
-                         "Ultimo": "Último registro", "Se_muestra_como": "Se muestra como"})
+                         "Ultimo": "Última vez", "Se_muestra_como": "Se muestra como"})
         .sort_values(["Nombre registrado", "Local"])
     )
     st.dataframe(sh.arrow_safe(detectados), width="stretch", hide_index=True)
@@ -2281,7 +2304,7 @@ with tab_personal:
         local_habitual = c2.selectbox("Local habitual", config_df["local"].tolist())
         alias_sel = st.multiselect(
             "Alias (nombres con los que ha firmado)",
-            sorted(df["nombre_original"].unique()),
+            sorted(todos_nombres["nombre_original"].unique()),
             help="Elige todas las formas en que aparece su nombre en los registros.",
         )
         activa = st.checkbox("Sigue trabajando", value=True)
@@ -2315,7 +2338,7 @@ with tab_personal:
         )
         actual = personal_df.iloc[idx_edit]
         alias_actuales = [a for a in actual["alias"].split("|") if a.strip()]
-        opciones_alias = sorted(set(df["nombre_original"].unique()) | set(alias_actuales))
+        opciones_alias = sorted(set(todos_nombres["nombre_original"].unique()) | set(alias_actuales))
         locales_cfg = config_df["local"].tolist()
         with st.form(f"form_editar_persona_{idx_edit}"):
             e1, e2 = st.columns(2)
