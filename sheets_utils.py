@@ -742,6 +742,21 @@ def guardar_persona(datos: dict) -> None:
     get_ajustes_df.clear()
 
 
+def eliminar_persona(nombre_orig: str, local_orig: str) -> None:
+    """Quita de la hoja Personal la fila que coincide con (nombre, local). No
+    toca los registros de caja: solo deja de existir esa persona como tal."""
+    ws = _get_or_create_worksheet(NOMBRE_HOJA_PERSONAL, COLUMNAS_PERSONAL)
+    for numero, fila in enumerate(ws.get_all_values()[1:], start=2):
+        fila = fila + ["", ""]
+        if fila[0].strip() == nombre_orig and fila[1].strip() == local_orig:
+            ws.delete_rows(numero)
+            get_personal_df.clear()
+            get_registros_df.clear()
+            get_ajustes_df.clear()
+            return
+    raise ValueError("No se encontró a esa persona en la hoja Personal.")
+
+
 def actualizar_persona(nombre_orig: str, local_orig: str, datos: dict) -> None:
     """Cambia la fila de Personal que coincide con (nombre, local) originales."""
     ws = _get_or_create_worksheet(NOMBRE_HOJA_PERSONAL, COLUMNAS_PERSONAL)

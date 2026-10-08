@@ -2164,6 +2164,50 @@ with tab_personal:
             hide_index=True,
         )
 
+    if len(personal_df) >= 2:
+        st.markdown("**Fusionar personas duplicadas**")
+        st.caption(
+            "Si una misma persona quedó cargada dos o más veces (por ejemplo «Yovana», «Yovana Sumir» "
+            "y «Yovana Sumiri»), elige cuál se queda y cuáles se unen a ella. Los nombres de las "
+            "unidas pasan a ser alias de la que se queda, así que sus registros se cuentan juntos."
+        )
+        etiquetas_fus = [f"{r['nombre']} · {r['local']}" for _, r in personal_df.iterrows()]
+        quedan = st.selectbox(
+            "Persona que se queda (nombre oficial correcto)", range(len(etiquetas_fus)),
+            format_func=lambda i: etiquetas_fus[i], key="fusion_destino",
+        )
+        a_unir = st.multiselect(
+            "Personas que se unen a ella (se quitan de la lista)",
+            [i for i in range(len(etiquetas_fus)) if i != quedan],
+            format_func=lambda i: etiquetas_fus[i], key=f"fusion_origen_{quedan}",
+        )
+        confirma_fusion = st.checkbox(
+            "Confirmo que son la misma persona", key=f"fusion_confirma_{quedan}"
+        )
+        if st.button("Fusionar", key="fusion_btn"):
+            if not a_unir:
+                st.error("Elige al menos una persona para unir.")
+            elif not confirma_fusion:
+                st.error("Marca la casilla de confirmación.")
+            else:
+                destino_f = personal_df.iloc[quedan]
+                alias_f = [a for a in destino_f["alias"].split("|") if a.strip()]
+                for i in a_unir:
+                    origen = personal_df.iloc[i]
+                    for a in [origen["nombre"]] + [x for x in origen["alias"].split("|") if x.strip()]:
+                        if a != destino_f["nombre"] and a not in alias_f:
+                            alias_f.append(a)
+                sh.actualizar_persona(
+                    destino_f["nombre"], destino_f["local"],
+                    {"nombre": destino_f["nombre"], "local": destino_f["local"],
+                     "alias": "|".join(alias_f), "activo": destino_f["activo"] or "Sí"},
+                )
+                for i in a_unir:
+                    origen = personal_df.iloc[i]
+                    sh.eliminar_persona(origen["nombre"], origen["local"])
+                st.success(f"Listo: ahora se cuentan juntos como {destino_f['nombre']}.")
+                st.rerun()
+
     st.markdown("**Agregar persona**")
     with st.form("form_persona", clear_on_submit=True):
         c1, c2 = st.columns(2)
