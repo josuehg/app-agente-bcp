@@ -2167,7 +2167,17 @@ with tab_personal:
     st.markdown("**Agregar persona**")
     with st.form("form_persona", clear_on_submit=True):
         c1, c2 = st.columns(2)
-        nombre_oficial = c1.text_input("Nombre oficial", placeholder="Ej: Ana León")
+        oficiales_existentes = sorted(set(personal_df["nombre"])) if not personal_df.empty else []
+        nombre_existente = c1.selectbox(
+            "Nombre oficial (elige uno ya cargado)", ["— Nueva persona —"] + oficiales_existentes,
+            help="Útil si la misma persona trabaja en otro local o quieres evitar errores al escribirlo.",
+        )
+        nombre_nuevo = c1.text_input(
+            "…o escribe el nombre oficial de una persona nueva", placeholder="Ej: Ana León"
+        )
+        nombre_oficial = nombre_nuevo.strip() or (
+            "" if nombre_existente == "— Nueva persona —" else nombre_existente
+        )
         local_habitual = c2.selectbox("Local habitual", config_df["local"].tolist())
         alias_sel = st.multiselect(
             "Alias (nombres con los que ha firmado)",
@@ -2177,7 +2187,7 @@ with tab_personal:
         activa = st.checkbox("Sigue trabajando", value=True)
         if st.form_submit_button("Agregar persona"):
             if not nombre_oficial.strip():
-                st.error("Escribe el nombre oficial.")
+                st.error("Elige un nombre oficial de la lista o escribe el de una persona nueva.")
             elif (
                 not personal_df.empty
                 and ((personal_df["nombre"].str.lower() == nombre_oficial.strip().lower())
