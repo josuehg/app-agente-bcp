@@ -38,8 +38,8 @@ with st.container(border=True):
         f"**{sh.UMBRAL_NOTA_LOCAL} puntos o más**.\n"
         f"3. Si la nota NPS del mes es **menor a {sh.UMBRAL_NOTA_LOCAL}**, no se efectuará el pago "
         "de los incentivos de ese mes, dado que el banco aplica un descuento al local por dicho resultado.\n"
-        "4. La nota oficial es comunicada por el banco al cierre de cada mes; el pago se programa "
-        "una vez confirmada."
+        "4. La nota oficial es comunicada por el banco al cierre de cada mes. Una vez confirmada, "
+        "el pago se realiza de forma estimada **entre el 8 y el 9 del mes siguiente**."
     )
 
 if "mensaje_guardado_encuesta" in st.session_state:
