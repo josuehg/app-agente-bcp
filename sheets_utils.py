@@ -904,50 +904,53 @@ _MESES_ES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
 
 
 def mostrar_nota_nps(local: str | None = None) -> None:
-    """Recuadro de color con la ULTIMA nota NPS cargada para el local:
-    verde si aprobo (se pagan los incentivos de encuestas), rojo si no, y
-    amarillo si aun no hay ninguna. Sin local (nadie puso su PIN todavia)
-    no muestra nada. Llamarla justo despues del titulo de cada pagina."""
+    """Recuadros de color con la nota NPS del local: arriba el ULTIMO CIERRE
+    (nota final: verde si aprobo y se pagan los incentivos de encuestas, rojo
+    si no) y, debajo, el AVANCE del mes en curso si hay una nota parcial
+    (verde "vas bien" / naranja "vas por debajo"). Sin ninguna nota: aviso
+    amarillo. Sin local (nadie puso su PIN todavia) no muestra nada. Llamarla
+    justo despues del titulo de cada pagina."""
     local = local or st.session_state.get("local_autenticado")
     if not local:
         return
-    ultima, ultimo_final = nota_vigente(get_notas_df(), local)
-    if ultima is None:
+    vigente, ultimo_final = nota_vigente(get_notas_df(), local)
+    if vigente is None:
         st.warning(
             "⭐ Nota NPS: todavía no hay nota cargada para tu local. Mientras tanto, "
             "los incentivos por encuestas quedan condicionados."
         )
         return
-    anio, mes = str(ultima["mes"]).split("-")[:2]
-    nombre_mes = f"{_MESES_ES[int(mes) - 1]} {anio}"
-    nota = float(ultima["nota"])
-    if str(ultima.get("tipo", "")).strip().lower() == "parcial":
-        al = f" al {ultima['fecha_corte']}" if str(ultima.get("fecha_corte", "")).strip() else ""
-        previo = ""
-        if ultimo_final is not None:
-            a2, m2 = str(ultimo_final["mes"]).split("-")[:2]
-            previo = f" Último cierre: {_MESES_ES[int(m2) - 1]} {a2}, {float(ultimo_final['nota']):g}."
+
+    def _mes_txt(fila) -> str:
+        anio, mes = str(fila["mes"]).split("-")[:2]
+        return f"{_MESES_ES[int(mes) - 1]} {anio}"
+
+    if ultimo_final is not None:
+        nota = float(ultimo_final["nota"])
+        if estado_nota(nota) == "Aprobado":
+            st.success(
+                f"⭐ Nota NPS de {_mes_txt(ultimo_final)}: **{nota:g}**. ¡Aprobada! "
+                f"Se pagan los incentivos por encuestas (la nota mínima es {UMBRAL_NOTA_LOCAL})."
+            )
+        else:
+            st.error(
+                f"⭐ Nota NPS de {_mes_txt(ultimo_final)}: **{nota:g}**. No aprobada: la nota mínima es "
+                f"{UMBRAL_NOTA_LOCAL} y ese mes no se pagan los incentivos por encuestas."
+            )
+
+    if str(vigente.get("tipo", "")).strip().lower() == "parcial":
+        nota = float(vigente["nota"])
+        al = f" al {vigente['fecha_corte']}" if str(vigente.get("fecha_corte", "")).strip() else ""
         if estado_parcial(nota) == "En camino":
             st.success(
-                f"⭐ Nota NPS parcial de {nombre_mes}{al}: **{nota:g}**. ¡Vas bien! "
-                f"Para cobrar los incentivos hay que cerrar el mes con {UMBRAL_NOTA_LOCAL} o más.{previo}"
+                f"📈 Avance de {_mes_txt(vigente)}{al}: **{nota:g}**. ¡Vas bien! Para cobrar los "
+                f"incentivos de este mes hay que cerrar con {UMBRAL_NOTA_LOCAL} o más (nota parcial)."
             )
         else:
             st.warning(
-                f"⭐ Nota NPS parcial de {nombre_mes}{al}: **{nota:g}**. ¡Ojo, vas por debajo! "
-                f"Para cobrar los incentivos hay que cerrar el mes con {UMBRAL_NOTA_LOCAL} o más.{previo}"
+                f"📈 Avance de {_mes_txt(vigente)}{al}: **{nota:g}**. ¡Ojo, vas por debajo! Para cobrar "
+                f"los incentivos de este mes hay que cerrar con {UMBRAL_NOTA_LOCAL} o más (nota parcial)."
             )
-        return
-    if estado_nota(nota) == "Aprobado":
-        st.success(
-            f"⭐ Nota NPS de {nombre_mes}: **{nota:g}**. ¡Aprobada! "
-            f"Se pagan los incentivos por encuestas (la nota mínima es {UMBRAL_NOTA_LOCAL})."
-        )
-    else:
-        st.error(
-            f"⭐ Nota NPS de {nombre_mes}: **{nota:g}**. No aprobada: la nota mínima es "
-            f"{UMBRAL_NOTA_LOCAL} y ese mes no se pagan los incentivos por encuestas."
-        )
 
 
 def guardar_nota(datos: dict) -> None:
