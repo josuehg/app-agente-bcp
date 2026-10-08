@@ -26,9 +26,21 @@ sh.aplicar_estilo()
 st.title("⭐ Encuestas NPS (incentivo S/ 10)")
 st.caption(
     "Registra aqui cada encuesta de satisfaccion del Agente BCP que un "
-    "cliente haya calificado con 9 o 10, para que se te reconozca el "
-    "incentivo de S/ 10."
+    "cliente haya calificado con 9 o 10. El incentivo de S/ 10 por encuesta "
+    "esta sujeto a las condiciones que se detallan a continuacion."
 )
+
+with st.container(border=True):
+    st.markdown("**Condiciones del incentivo por encuesta**")
+    st.markdown(
+        "1. Cada encuesta calificada con 9 o 10 genera un incentivo de S/ 10.\n"
+        f"2. El incentivo se abona únicamente si la nota NPS mensual del local es de "
+        f"**{sh.UMBRAL_NOTA_LOCAL} puntos o más**.\n"
+        f"3. Si la nota NPS del mes es **menor a {sh.UMBRAL_NOTA_LOCAL}**, no se efectuará el pago "
+        "de los incentivos de ese mes, dado que el banco aplica un descuento al local por dicho resultado.\n"
+        "4. La nota oficial es comunicada por el banco al cierre de cada mes; el pago se programa "
+        "una vez confirmada."
+    )
 
 if "mensaje_guardado_encuesta" in st.session_state:
     st.toast(st.session_state.pop("mensaje_guardado_encuesta"), icon="✅")
