@@ -2129,6 +2129,52 @@ with tab_personal:
                 st.rerun()
         st.caption("Si es una persona nueva, agrégala más abajo en «Agregar persona».")
 
+    if not personal_df.empty:
+        st.markdown("**Reasignar un nombre registrado**")
+        st.caption(
+            "Para cualquier nombre de los registros, esté ya asignado o no: se muestra a quién "
+            "se cuenta hoy y puedes cambiarlo. Sirve cuando un nombre quedó unido a la persona "
+            "equivocada."
+        )
+        cuenta_hoy = df.drop_duplicates("nombre_original").set_index("nombre_original")["nombre"].to_dict()
+        etiquetas_reas = [f"{r['nombre']} · {r['local']}" for _, r in personal_df.iterrows()]
+        ra, rb, rc = st.columns([2, 2, 1])
+        nombre_reas = ra.selectbox(
+            "Nombre registrado",
+            sorted(cuenta_hoy),
+            format_func=lambda n: f"{n}  →  hoy cuenta como {cuenta_hoy.get(n, n)}",
+            key="reasignar_nombre",
+        )
+        destino_reas = rb.selectbox(
+            "Contarlo como…", range(len(etiquetas_reas)),
+            format_func=lambda i: etiquetas_reas[i], key=f"reasignar_destino_{nombre_reas}",
+        )
+        rc.write("")
+        if rc.button("Reasignar", key="reasignar_btn"):
+            clave_reas = sh.clave_alias(nombre_reas)
+            oficial_de = [p["nombre"] for _, p in personal_df.iterrows() if sh.clave_alias(p["nombre"]) == clave_reas]
+            if oficial_de and sh.clave_alias(personal_df.iloc[destino_reas]["nombre"]) != clave_reas:
+                st.error(
+                    f"«{nombre_reas}» es el nombre oficial de una persona cargada: para unirla con "
+                    "otra usa «Fusionar personas duplicadas»."
+                )
+            else:
+                nuevos_alias = {}
+                for pos, (_, p) in enumerate(personal_df.iterrows()):
+                    lista = [a for a in p["alias"].split("|") if a.strip() and sh.clave_alias(a) != clave_reas]
+                    nuevos_alias[pos] = lista
+                if sh.clave_alias(personal_df.iloc[destino_reas]["nombre"]) != clave_reas:
+                    nuevos_alias[destino_reas].append(nombre_reas)
+                for pos, (_, p) in enumerate(personal_df.iterrows()):
+                    if "|".join(nuevos_alias[pos]) != p["alias"]:
+                        sh.actualizar_persona(
+                            p["nombre"], p["local"],
+                            {"nombre": p["nombre"], "local": p["local"],
+                             "alias": "|".join(nuevos_alias[pos]), "activo": p["activo"] or "Sí"},
+                        )
+                st.success(f"«{nombre_reas}» ahora se cuenta como {personal_df.iloc[destino_reas]['nombre']}.")
+                st.rerun()
+
     st.markdown("**Nombres tal como se registraron**")
     detectados = (
         df.groupby(["nombre_original", "local"])
