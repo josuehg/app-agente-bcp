@@ -1817,12 +1817,20 @@ with tab_incentivos:
         ({_mes_actual} | set(encuestas_df["mes"].dropna())) if not encuestas_df.empty else {_mes_actual},
         reverse=True,
     )
+    st.caption(
+        "Una nota **Parcial** (avance del mes que te da BCP) solo informa al personal: no habilita "
+        "pagos. La **Final** (al cerrar el mes) es la que decide el incentivo. Cargar de nuevo el "
+        "mismo mes y local reemplaza la anterior del mismo tipo."
+    )
     with st.form("form_nota_local", clear_on_submit=True):
-        n1, n2, n3, n4 = st.columns(4)
-        mes_nota = n1.selectbox("Mes", meses_nota)
-        local_nota = n2.selectbox("Local", config_df["local"].tolist())
-        valor_nota = n3.number_input("Nota", min_value=0.0, max_value=100.0, value=0.0, step=1.0)
-        quien_nota = n4.text_input("Cargado por")
+        n1, n2, n3 = st.columns(3)
+        tipo_nota = n1.selectbox("Tipo", ["Final", "Parcial"])
+        mes_nota = n2.selectbox("Mes", meses_nota)
+        local_nota = n3.selectbox("Local", config_df["local"].tolist())
+        n4, n5, n6 = st.columns(3)
+        valor_nota = n4.number_input("Nota", min_value=0.0, max_value=100.0, value=0.0, step=1.0)
+        fecha_corte_nota = n5.date_input("Al (solo para Parcial)", value=sh.hoy_local())
+        quien_nota = n6.text_input("Cargado por")
         if st.form_submit_button("Guardar nota"):
             if not quien_nota.strip():
                 st.error("Escribe quién carga la nota.")
@@ -1834,6 +1842,8 @@ with tab_incentivos:
                         "nota": valor_nota,
                         "cargado_por": quien_nota.strip(),
                         "timestamp": sh.ahora_local().replace(tzinfo=None).isoformat(timespec="seconds"),
+                        "tipo": tipo_nota,
+                        "fecha_corte": fecha_corte_nota.strftime("%d/%m") if tipo_nota == "Parcial" else "",
                     }
                 )
                 st.success("Nota guardada.")
@@ -1842,11 +1852,15 @@ with tab_incentivos:
         st.caption("Todavía no hay notas cargadas: los incentivos quedan «Condicionados».")
     else:
         notas_vista = notas_df.sort_values(["mes", "local"], ascending=[False, True]).copy()
-        notas_vista["Estado"] = notas_vista["nota"].map(sh.estado_nota)
+        notas_vista["Estado"] = [
+            sh.estado_parcial(n) if t == "Parcial" else sh.estado_nota(n)
+            for n, t in zip(notas_vista["nota"], notas_vista["tipo"])
+        ]
         st.dataframe(
             sh.arrow_safe(
-                notas_vista[["mes", "local", "nota", "Estado", "cargado_por"]].rename(
-                    columns={"mes": "Mes", "local": "Local", "nota": "Nota", "cargado_por": "Cargado por"}
+                notas_vista[["mes", "local", "tipo", "nota", "Estado", "fecha_corte", "cargado_por"]].rename(
+                    columns={"mes": "Mes", "local": "Local", "tipo": "Tipo", "nota": "Nota",
+                             "fecha_corte": "Al", "cargado_por": "Cargado por"}
                 )
             ),
             width="stretch",

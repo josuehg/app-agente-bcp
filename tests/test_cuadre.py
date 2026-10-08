@@ -12,6 +12,8 @@ import pandas as pd
 import pytest
 
 from cuadre import (
+    estado_parcial,
+    nota_vigente,
     con_estado_nota,
     estado_nota,
     a_descontar,
@@ -406,3 +408,29 @@ def test_incentivo_condicionado_a_nota_del_local():
     r = con_estado_nota(enc, notas)
     assert list(r["estado_nota"]) == ["Aprobado", "No aprobado", "Condicionado"]
     assert con_estado_nota(None, notas) is None
+
+
+def test_nota_parcial_informa_pero_no_habilita_pagos():
+    from datetime import date
+
+    enc = pd.DataFrame([{"fecha": date(2026, 10, 5), "local": "L1", "nombre": "Ana", "incentivo": 10.0}])
+    notas = pd.DataFrame(
+        [
+            {"mes": "2026-09", "local": "L1", "nota": 72.0, "tipo": "Final", "fecha_corte": ""},
+            {"mes": "2026-10", "local": "L1", "nota": 80.0, "tipo": "Parcial", "fecha_corte": "15/10"},
+        ]
+    )
+    # la parcial de octubre NO aprueba el pago de octubre
+    assert list(con_estado_nota(enc, notas)["estado_nota"]) == ["Condicionado"]
+
+    vigente, ultimo_final = nota_vigente(notas, "L1")
+    assert vigente["tipo"] == "Parcial" and vigente["mes"] == "2026-10"
+    assert ultimo_final["mes"] == "2026-09"
+
+    con_final = pd.concat(
+        [notas, pd.DataFrame([{"mes": "2026-10", "local": "L1", "nota": 50.0, "tipo": "Final", "fecha_corte": ""}])]
+    )
+    assert nota_vigente(con_final, "L1")[0]["tipo"] == "Final"
+    assert list(con_estado_nota(enc, con_final)["estado_nota"]) == ["No aprobado"]
+    assert nota_vigente(notas, "otro") == (None, None)
+    assert estado_parcial(55) == "En camino" and estado_parcial(54) == "En riesgo"

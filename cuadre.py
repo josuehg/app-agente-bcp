@@ -646,6 +646,39 @@ def estado_nota(nota) -> str:
     return "Aprobado" if n >= UMBRAL_NOTA_LOCAL else "No aprobado"
 
 
+def _es_parcial(tipo) -> bool:
+    return str(tipo).strip().lower() == "parcial"
+
+
+def estado_parcial(nota) -> str:
+    """Una nota PARCIAL (avance del mes) solo orienta: no habilita pagos."""
+    try:
+        n = float(nota)
+    except (TypeError, ValueError):
+        return "Sin nota"
+    return "En camino" if n >= UMBRAL_NOTA_LOCAL else "En riesgo"
+
+
+def notas_finales(notas: pd.DataFrame) -> pd.DataFrame:
+    if notas is None or notas.empty or "tipo" not in notas.columns:
+        return notas
+    return notas[~notas["tipo"].map(_es_parcial)]
+
+
+def nota_vigente(notas: pd.DataFrame, local: str):
+    """(nota a mostrar, ultimo cierre FINAL) de un local. La nota a mostrar es
+    la del mes mas reciente; si ese mes tiene final y parcial, gana la final."""
+    if notas is None or notas.empty:
+        return None, None
+    propias = notas[notas["local"] == local].copy()
+    if propias.empty:
+        return None, None
+    propias["_p"] = propias["tipo"].map(_es_parcial) if "tipo" in propias.columns else False
+    propias = propias.sort_values(["mes", "_p"], ascending=[True, False], kind="stable")
+    finales = propias[~propias["_p"]]
+    return propias.iloc[-1].to_dict(), (finales.iloc[-1].to_dict() if not finales.empty else None)
+
+
 def con_estado_nota(encuestas: pd.DataFrame, notas: pd.DataFrame) -> pd.DataFrame:
     """Agrega 'mes' (YYYY-MM de la encuesta), 'nota_local' y 'estado_nota'
     (Aprobado / No aprobado / Condicionado) a cada encuesta, segun la nota
@@ -655,6 +688,7 @@ def con_estado_nota(encuestas: pd.DataFrame, notas: pd.DataFrame) -> pd.DataFram
     salida = encuestas.copy()
     salida["mes"] = pd.to_datetime(salida["fecha"], errors="coerce").dt.strftime("%Y-%m")
     mapa = {}
+    notas = notas_finales(notas)
     if notas is not None and not notas.empty:
         mapa = {(r["mes"], r["local"]): r["nota"] for _, r in notas.iterrows()}
     salida["nota_local"] = [mapa.get((m, loc)) for m, loc in zip(salida["mes"], salida["local"])]

@@ -37,6 +37,8 @@ from cuadre import (  # noqa: F401  (re-export para el resto de la app)
     a_descontar,
     con_estado_nota,
     estado_nota,
+    estado_parcial,
+    nota_vigente,
     UMBRAL_NOTA_LOCAL,
     ESTADO_SALTO_COINCIDE,
     ESTADO_SALTO_DIFERENCIA,
@@ -892,7 +894,9 @@ def get_encuestas_df() -> pd.DataFrame:
 # mes es mayor a UMBRAL_NOTA_LOCAL (ver cuadre.con_estado_nota).
 # ---------------------------------------------------------------------
 NOMBRE_HOJA_NOTAS = "Notas"
-COLUMNAS_NOTAS = ["mes", "local", "nota", "cargado_por", "timestamp"]
+# "tipo" y "fecha_corte" se agregaron al final: una nota "Parcial" es el avance
+# del mes (solo informa); la "Final" (la que manda BCP al cerrar) decide el pago.
+COLUMNAS_NOTAS = ["mes", "local", "nota", "cargado_por", "timestamp", "tipo", "fecha_corte"]
 
 
 _MESES_ES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
@@ -907,18 +911,33 @@ def mostrar_nota_nps(local: str | None = None) -> None:
     local = local or st.session_state.get("local_autenticado")
     if not local:
         return
-    notas = get_notas_df()
-    propias = notas[notas["local"] == local] if not notas.empty else notas
-    if propias.empty:
+    ultima, ultimo_final = nota_vigente(get_notas_df(), local)
+    if ultima is None:
         st.warning(
             "⭐ Nota NPS: todavía no hay nota cargada para tu local. Mientras tanto, "
             "los incentivos por encuestas quedan condicionados."
         )
         return
-    ultima = propias.sort_values("mes").iloc[-1]
     anio, mes = str(ultima["mes"]).split("-")[:2]
     nombre_mes = f"{_MESES_ES[int(mes) - 1]} {anio}"
     nota = float(ultima["nota"])
+    if str(ultima.get("tipo", "")).strip().lower() == "parcial":
+        al = f" al {ultima['fecha_corte']}" if str(ultima.get("fecha_corte", "")).strip() else ""
+        previo = ""
+        if ultimo_final is not None:
+            a2, m2 = str(ultimo_final["mes"]).split("-")[:2]
+            previo = f" Último cierre: {_MESES_ES[int(m2) - 1]} {a2}, {float(ultimo_final['nota']):g}."
+        if estado_parcial(nota) == "En camino":
+            st.success(
+                f"⭐ Nota NPS parcial de {nombre_mes}{al}: **{nota:g}**. ¡Vas bien! "
+                f"Para cobrar los incentivos hay que cerrar el mes con {UMBRAL_NOTA_LOCAL} o más.{previo}"
+            )
+        else:
+            st.warning(
+                f"⭐ Nota NPS parcial de {nombre_mes}{al}: **{nota:g}**. ¡Ojo, vas por debajo! "
+                f"Para cobrar los incentivos hay que cerrar el mes con {UMBRAL_NOTA_LOCAL} o más.{previo}"
+            )
+        return
     if estado_nota(nota) == "Aprobado":
         st.success(
             f"⭐ Nota NPS de {nombre_mes}: **{nota:g}**. ¡Aprobada! "
@@ -932,13 +951,20 @@ def mostrar_nota_nps(local: str | None = None) -> None:
 
 
 def guardar_nota(datos: dict) -> None:
-    """Guarda la nota de un local en un mes; si ya existia, la reemplaza."""
+    """Guarda la nota de un local en un mes; si ya existia del mismo tipo
+    (Final o Parcial), la reemplaza."""
     ws = _get_or_create_worksheet(NOMBRE_HOJA_NOTAS, COLUMNAS_NOTAS)
     fila = [datos.get(col, "") for col in COLUMNAS_NOTAS]
+    tipo_nuevo = str(datos.get("tipo") or "Final").strip().lower()
     for numero, existente in enumerate(ws.get_all_values()[1:], start=2):
-        existente = existente + [""] * 2
-        if existente[0].strip() == str(datos["mes"]) and existente[1].strip() == str(datos["local"]):
-            ws.update(values=[fila], range_name=f"A{numero}:E{numero}")
+        existente = existente + [""] * len(COLUMNAS_NOTAS)
+        tipo_existente = (existente[5].strip() or "Final").lower()
+        if (
+            existente[0].strip() == str(datos["mes"])
+            and existente[1].strip() == str(datos["local"])
+            and tipo_existente == tipo_nuevo
+        ):
+            ws.update(values=[fila], range_name=f"A{numero}:G{numero}")
             break
     else:
         ws.append_row(fila)
@@ -954,6 +980,8 @@ def get_notas_df() -> pd.DataFrame:
     df["mes"] = df["mes"].astype(str).str.strip()
     df["local"] = df["local"].astype(str).str.strip()
     df["nota"] = pd.to_numeric(df["nota"], errors="coerce")
+    df["tipo"] = df["tipo"].fillna("").astype(str).str.strip().replace("", "Final").str.capitalize()
+    df["fecha_corte"] = df["fecha_corte"].fillna("").astype(str).str.strip()
     return df
 
 
