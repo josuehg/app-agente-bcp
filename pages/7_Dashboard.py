@@ -161,11 +161,11 @@ def _comparar_par(row_izq, row_der, label_izq="Apertura", label_der="Cierre"):
 # "Cuadre por turno" calcula `cortes` y "Acumulado por persona" lo usa).
 # ---------------------------------------------------------------------
 (
-    tab_resumen, tab_cuadre, tab_liquidacion, tab_operaciones, tab_comisiones,
-    tab_incentivos, tab_registros, tab_personal,
+    tab_resumen, tab_cuadre, tab_liquidacion, tab_sucursales, tab_operaciones,
+    tab_comisiones, tab_incentivos, tab_registros, tab_personal,
 ) = st.tabs(
     [
-        "🏠 Resumen", "🔍 Cuadre", "🧾 Liquidación", "📈 Operaciones",
+        "🏠 Resumen", "🔍 Cuadre", "🧾 Liquidación", "🏪 Sucursales", "📈 Operaciones",
         "💰 Comisiones", "⭐ Incentivos", "🗂️ Registros", "👥 Personal",
     ]
 )
@@ -1537,6 +1537,104 @@ with tab_liquidacion:
                 file_name=f"ticket_{persona_liq}_{desde}_{hasta}.csv".replace(" ", "_"),
                 mime="text/csv",
             )
+
+with tab_sucursales:
+    # -------------------------------------------------------------
+    # Balance de diferencias por sucursal: lo que falto y lo que sobro en
+    # cada local (cortes y entregas de caja), sin lo ya autorizado, mas lo
+    # autorizado por ajustes y lo que alguien repuso. Reusa cortes_acumulado
+    # y saltos_para_acumulado (pestaña Cuadre): mismos filtros del sidebar.
+    # -------------------------------------------------------------
+    st.subheader("🏪 Balance de diferencias por sucursal")
+    st.caption(
+        "En el rango de fechas y locales filtrados. Faltantes y sobrantes son las diferencias "
+        "de más de S/ 1 que siguen sin explicar (no incluyen lo '🔷 Autorizado'). "
+        "Autorizado = retiros/ingresos registrados por administración en el periodo (con signo)."
+    )
+    incluir_entregas_suc = st.checkbox(
+        "Incluir diferencias en entregas de caja", value=True, key="suc_incluir_entregas"
+    )
+    items_suc = sh.items_ticket(cortes_acumulado, saltos_para_acumulado, incluir_entregas_suc)
+    if ajustes_df.empty:
+        ajustes_suc = ajustes_df
+    else:
+        ajustes_suc = ajustes_df[
+            (ajustes_df["fecha"] >= desde)
+            & (ajustes_df["fecha"] <= hasta)
+            & ajustes_df["local"].isin(locales_sel)
+        ]
+
+    filas_suc = []
+    for _loc in locales_sel:
+        _it = items_suc[items_suc["local"] == _loc] if not items_suc.empty else items_suc
+        _dif = _it["diferencia"] if not _it.empty else pd.Series(dtype=float)
+        _aj = ajustes_suc[ajustes_suc["local"] == _loc] if not ajustes_suc.empty else ajustes_suc
+        _faltantes = float(abs(_dif[_dif < 0].sum()))
+        _sobrantes = float(_dif[_dif > 0].sum())
+        filas_suc.append(
+            {
+                "Local": _loc,
+                "Cortes": int((cortes["local"] == _loc).sum()) if not cortes.empty else 0,
+                "Ítems por revisar": int(len(_it)),
+                "Faltantes (S/)": _faltantes,
+                "Sobrantes (S/)": _sobrantes,
+                "Neto sin explicar (S/)": _sobrantes - _faltantes,
+                "Autorizado (S/)": float(_aj["monto"].sum()) if not _aj.empty else 0.0,
+                "Repuesto (S/)": float(
+                    _aj.loc[(_aj["monto"] > 0) & (_aj["repuso"] != ""), "monto"].sum()
+                )
+                if not _aj.empty
+                else 0.0,
+            }
+        )
+
+    if not filas_suc:
+        st.caption("Selecciona al menos un local.")
+    else:
+        balance_suc = pd.DataFrame(filas_suc).sort_values("Neto sin explicar (S/)")
+        total_suc = {
+            "Local": "TOTAL",
+            **{c: balance_suc[c].sum() for c in balance_suc.columns if c != "Local"},
+        }
+        st.dataframe(
+            sh.arrow_safe(pd.concat([balance_suc, pd.DataFrame([total_suc])], ignore_index=True)),
+            width="stretch",
+            hide_index=True,
+            column_config={
+                c: st.column_config.NumberColumn(format="%.2f")
+                for c in ["Faltantes (S/)", "Sobrantes (S/)", "Neto sin explicar (S/)",
+                          "Autorizado (S/)", "Repuesto (S/)"]
+            },
+        )
+        fig_suc = px.bar(
+            balance_suc,
+            x="Local",
+            y="Neto sin explicar (S/)",
+            color=balance_suc["Neto sin explicar (S/)"] < 0,
+            color_discrete_map={True: "#E24B4A", False: "#639922"},
+            labels={"color": "Faltó"},
+        )
+        fig_suc.update_layout(showlegend=False)
+        st.plotly_chart(fig_suc, width="stretch")
+
+        local_det = st.selectbox("Ver el detalle de una sucursal", ["—"] + balance_suc["Local"].tolist())
+        if local_det != "—":
+            det = items_suc[items_suc["local"] == local_det] if not items_suc.empty else items_suc
+            if det.empty:
+                st.success("Sin diferencias por revisar en esta sucursal.")
+            else:
+                st.dataframe(
+                    sh.arrow_safe(
+                        det.drop(columns=["local"]).rename(
+                            columns={"persona": "Persona", "tipo": "Tipo", "fecha": "Fecha",
+                                     "detalle": "Detalle", "diferencia": "Diferencia (S/)",
+                                     "observaciones": "Observaciones"}
+                        ).sort_values("Fecha", ascending=False)
+                    ),
+                    width="stretch",
+                    hide_index=True,
+                    column_config={"Diferencia (S/)": st.column_config.NumberColumn(format="%+.2f")},
+                )
 
 with tab_comisiones:
     # -------------------------------------------------------------
