@@ -58,7 +58,29 @@ if col_salir.button("Cambiar de PIN"):
     st.session_state["local_autenticado"] = None
     st.rerun()
 
-nombre = st.text_input("Ingrese su nombre", key=f"encuesta_nombre_{v}")
+# El nombre se ELIGE de la lista del Personal (los de este local primero y los
+# de otros locales por si rotan), igual que en Registro: asi no hay variantes
+# escritas a mano y la encuesta cuenta a la persona correcta. Si la hoja
+# Personal aun esta vacia, queda el campo de texto de siempre.
+OTRA_PERSONA = "Otra persona (escribir el nombre)"
+_propios, _otros = sh.personal_activo(local)
+_opciones_nombre = list(_propios) + [n for n, _ in _otros] + [OTRA_PERSONA]
+_etiquetas_nombre = {n: f"{n} ({loc})" for n, loc in _otros}
+if _propios or _otros:
+    _sel_nombre = st.selectbox(
+        "Ingrese su nombre",
+        _opciones_nombre,
+        index=None,
+        placeholder="Elige tu nombre",
+        format_func=lambda x: _etiquetas_nombre.get(x, x),
+        key=f"encuesta_nombre_sel_{v}",
+    )
+    if _sel_nombre == OTRA_PERSONA:
+        nombre = st.text_input("Escribe tu nombre completo", key=f"encuesta_nombre_otro_{v}")
+    else:
+        nombre = _sel_nombre or ""
+else:
+    nombre = st.text_input("Ingrese su nombre", key=f"encuesta_nombre_{v}")
 nota = st.radio("Nota que puso el cliente", ["9", "10"], horizontal=True, key=f"encuesta_nota_{v}")
 
 captura_correo = st.file_uploader(
@@ -85,7 +107,7 @@ enviado = st.button(
 if enviado:
     errores = []
     if not nombre.strip():
-        errores.append("Falta ingresar su nombre.")
+        errores.append("Falta elegir su nombre.")
     if captura_correo is None:
         errores.append("Falta la captura del correo con la calificacion.")
     if captura_mensaje_exito is None:
