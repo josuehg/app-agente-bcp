@@ -903,21 +903,45 @@ _MESES_ES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
              "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
 
 
+_TONOS_NPS = {
+    "verde": ("#EAF3DE", "#27500A", "#97C459"),
+    "rojo": ("#FCEBEB", "#791F1F", "#F09595"),
+    "naranja": ("#FAEEDA", "#633806", "#EF9F27"),
+}
+
+
+def _caja_nps(html: str, tono: str) -> None:
+    """Recuadro de color con letra GRANDE (el st.success/st.error de siempre
+    usa letra chica y el personal no lo notaba)."""
+    fondo, texto, borde = _TONOS_NPS[tono]
+    st.markdown(
+        f'<div style="background:{fondo};color:{texto};border:1.5px solid {borde};'
+        f'border-radius:12px;padding:16px 20px;margin:10px 0;font-size:1.35rem;'
+        f'line-height:1.5;">{html}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _nota_grande(nota: float) -> str:
+    return f'<span style="font-size:2.1rem;font-weight:700;">{nota:g}</span>'
+
+
 def mostrar_nota_nps(local: str | None = None) -> None:
-    """Recuadros de color con la nota NPS del local: arriba el ULTIMO CIERRE
-    (nota final: verde si aprobo y se pagan los incentivos de encuestas, rojo
-    si no) y, debajo, el AVANCE del mes en curso si hay una nota parcial
-    (verde "vas bien" / naranja "vas por debajo"). Sin ninguna nota: aviso
-    amarillo. Sin local (nadie puso su PIN todavia) no muestra nada. Llamarla
-    justo despues del titulo de cada pagina."""
+    """Recuadros de color (letra grande) con la nota NPS del local: arriba el
+    ULTIMO CIERRE (nota final: verde si aprobo y se pagan los incentivos de
+    encuestas, rojo si no) y, debajo, el AVANCE del mes en curso si hay una
+    nota parcial (verde "vas bien" / naranja "vas por debajo"). Sin ninguna
+    nota: aviso naranja. Sin local (nadie puso su PIN todavia) no muestra
+    nada. Llamarla justo despues del titulo de cada pagina."""
     local = local or st.session_state.get("local_autenticado")
     if not local:
         return
     vigente, ultimo_final = nota_vigente(get_notas_df(), local)
     if vigente is None:
-        st.warning(
-            "⭐ Nota NPS: todavía no hay nota cargada para tu local. Mientras tanto, "
-            "los incentivos por encuestas quedan condicionados."
+        _caja_nps(
+            "⭐ <b>Nota NPS:</b> todavía no hay nota cargada para tu local. Mientras tanto, "
+            "los incentivos por encuestas quedan condicionados.",
+            "naranja",
         )
         return
 
@@ -928,28 +952,35 @@ def mostrar_nota_nps(local: str | None = None) -> None:
     if ultimo_final is not None:
         nota = float(ultimo_final["nota"])
         if estado_nota(nota) == "Aprobado":
-            st.success(
-                f"⭐ Nota NPS de {_mes_txt(ultimo_final)}: **{nota:g}**. ¡Aprobada! "
-                f"Se pagan los incentivos por encuestas (la nota mínima es {UMBRAL_NOTA_LOCAL})."
+            _caja_nps(
+                f"⭐ <b>Nota NPS de {_mes_txt(ultimo_final)}:</b> {_nota_grande(nota)}<br>"
+                f"¡Aprobada! Se pagan los incentivos por encuestas (la nota mínima es {UMBRAL_NOTA_LOCAL}).",
+                "verde",
             )
         else:
-            st.error(
-                f"⭐ Nota NPS de {_mes_txt(ultimo_final)}: **{nota:g}**. No aprobada: la nota mínima es "
-                f"{UMBRAL_NOTA_LOCAL} y ese mes no se pagan los incentivos por encuestas."
+            _caja_nps(
+                f"⭐ <b>Nota NPS de {_mes_txt(ultimo_final)}:</b> {_nota_grande(nota)}<br>"
+                f"No aprobada: la nota mínima es {UMBRAL_NOTA_LOCAL} y ese mes no se pagan los "
+                "incentivos por encuestas.",
+                "rojo",
             )
 
     if str(vigente.get("tipo", "")).strip().lower() == "parcial":
         nota = float(vigente["nota"])
         al = f" al {vigente['fecha_corte']}" if str(vigente.get("fecha_corte", "")).strip() else ""
         if estado_parcial(nota) == "En camino":
-            st.success(
-                f"📈 Avance de {_mes_txt(vigente)}{al}: **{nota:g}**. ¡Vas bien! Para cobrar los "
-                f"incentivos de este mes hay que cerrar con {UMBRAL_NOTA_LOCAL} o más (nota parcial)."
+            _caja_nps(
+                f"📈 <b>Avance de {_mes_txt(vigente)}{al}:</b> {_nota_grande(nota)}<br>"
+                f"¡Vas bien! Para cobrar los incentivos de este mes hay que cerrar con "
+                f"{UMBRAL_NOTA_LOCAL} o más (nota parcial).",
+                "verde",
             )
         else:
-            st.warning(
-                f"📈 Avance de {_mes_txt(vigente)}{al}: **{nota:g}**. ¡Ojo, vas por debajo! Para cobrar "
-                f"los incentivos de este mes hay que cerrar con {UMBRAL_NOTA_LOCAL} o más (nota parcial)."
+            _caja_nps(
+                f"📈 <b>Avance de {_mes_txt(vigente)}{al}:</b> {_nota_grande(nota)}<br>"
+                f"¡Ojo, vas por debajo! Para cobrar los incentivos de este mes hay que cerrar con "
+                f"{UMBRAL_NOTA_LOCAL} o más (nota parcial).",
+                "naranja",
             )
 
 
