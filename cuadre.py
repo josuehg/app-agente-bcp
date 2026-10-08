@@ -629,11 +629,11 @@ def a_descontar(saldo: float, margen: float) -> float:
 
 # ---------------------------------------------------------------------
 # Incentivo por encuestas condicionado a la nota del LOCAL en el mes (la
-# manda el ejecutivo de BCP al cerrar el mes): si la nota es mayor a
-# UMBRAL_NOTA_LOCAL se paga, si no, no. Mientras no haya nota, queda
+# manda el ejecutivo de BCP al cerrar el mes): si la nota es de
+# UMBRAL_NOTA_LOCAL o mas (es el minimo) se paga, si no, no. Mientras no haya nota, queda
 # condicionado.
 # ---------------------------------------------------------------------
-UMBRAL_NOTA_LOCAL = 60
+UMBRAL_NOTA_LOCAL = 55
 
 
 def estado_nota(nota) -> str:
@@ -643,7 +643,7 @@ def estado_nota(nota) -> str:
         return "Condicionado"
     if n != n:
         return "Condicionado"
-    return "Aprobado" if n > UMBRAL_NOTA_LOCAL else "No aprobado"
+    return "Aprobado" if n >= UMBRAL_NOTA_LOCAL else "No aprobado"
 
 
 def con_estado_nota(encuestas: pd.DataFrame, notas: pd.DataFrame) -> pd.DataFrame:

@@ -389,7 +389,8 @@ def test_incentivo_condicionado_a_nota_del_local():
     from datetime import date
 
     assert estado_nota(61) == "Aprobado"
-    assert estado_nota(60) == "No aprobado"
+    assert estado_nota(55) == "Aprobado"
+    assert estado_nota(54.9) == "No aprobado"
     assert estado_nota(45.5) == "No aprobado"
     assert estado_nota(None) == "Condicionado"
     assert estado_nota(float("nan")) == "Condicionado"
@@ -401,7 +402,7 @@ def test_incentivo_condicionado_a_nota_del_local():
             {"fecha": date(2026, 10, 1), "local": "L1", "nombre": "Ana", "incentivo": 10.0},
         ]
     )
-    notas = pd.DataFrame([{"mes": "2026-09", "local": "L1", "nota": 75.0}, {"mes": "2026-09", "local": "L2", "nota": 55.0}])
+    notas = pd.DataFrame([{"mes": "2026-09", "local": "L1", "nota": 75.0}, {"mes": "2026-09", "local": "L2", "nota": 54.0}])
     r = con_estado_nota(enc, notas)
     assert list(r["estado_nota"]) == ["Aprobado", "No aprobado", "Condicionado"]
     assert con_estado_nota(None, notas) is None

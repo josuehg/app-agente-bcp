@@ -922,11 +922,11 @@ def mostrar_nota_nps(local: str | None = None) -> None:
     if estado_nota(nota) == "Aprobado":
         st.success(
             f"⭐ Nota NPS de {nombre_mes}: **{nota:g}**. ¡Aprobada! "
-            f"Se pagan los incentivos por encuestas (hay que pasar de {UMBRAL_NOTA_LOCAL})."
+            f"Se pagan los incentivos por encuestas (la nota mínima es {UMBRAL_NOTA_LOCAL})."
         )
     else:
         st.error(
-            f"⭐ Nota NPS de {nombre_mes}: **{nota:g}**. No aprobada: hay que pasar de "
+            f"⭐ Nota NPS de {nombre_mes}: **{nota:g}**. No aprobada: la nota mínima es "
             f"{UMBRAL_NOTA_LOCAL} y ese mes no se pagan los incentivos por encuestas."
         )
 

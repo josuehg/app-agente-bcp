@@ -1476,8 +1476,8 @@ with tab_liquidacion:
             inc = _incentivos_de(persona_liq)
             if any(inc.values()):
                 st.markdown(
-                    "**Incentivos por encuestas** (se pagan solo si la nota del local en el mes es mayor a "
-                    f"{sh.UMBRAL_NOTA_LOCAL}; los ya pagados no aparecen aquí)"
+                    "**Incentivos por encuestas** (se pagan solo si la nota del local en el mes es de "
+                    f"{sh.UMBRAL_NOTA_LOCAL} o más; los ya pagados no aparecen aquí)"
                 )
                 i1, i2, i3 = st.columns(3)
                 i1.metric("A pagar (local aprobado)", f"S/ {inc['pagar']:,.2f}")
@@ -1808,9 +1808,9 @@ with tab_incentivos:
     encuestas_df = sh.con_estado_nota(encuestas_df, notas_df)
 
     # El incentivo solo se paga si la nota del LOCAL en ese mes (la manda el
-    # ejecutivo de BCP al cerrar el mes) es mayor a UMBRAL_NOTA_LOCAL.
+    # ejecutivo de BCP al cerrar el mes) es de UMBRAL_NOTA_LOCAL o mas.
     st.markdown(
-        f"**Nota mensual de cada local (BCP)** — el incentivo se paga solo si es mayor a {sh.UMBRAL_NOTA_LOCAL}"
+        f"**Nota mensual de cada local (BCP)** — el incentivo se paga solo si es de {sh.UMBRAL_NOTA_LOCAL} o más (nota mínima)"
     )
     _mes_actual = sh.hoy_local().strftime("%Y-%m")
     meses_nota = sorted(
@@ -1945,7 +1945,7 @@ with tab_incentivos:
                         st.error(
                             "No se puede marcar como pagada: la nota del local en "
                             f"{fila_encuesta['mes']} está «{fila_encuesta['estado_nota']}» "
-                            f"(se paga solo si es mayor a {sh.UMBRAL_NOTA_LOCAL})."
+                            f"(la nota mínima para pagar es {sh.UMBRAL_NOTA_LOCAL})."
                         )
                     else:
                         sh.actualizar_estado_pago(fila_encuesta["id"], nuevo_estado)
