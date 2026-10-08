@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 from cuadre import (
+    politica_sucursal,
     estado_visible,
     estado_parcial,
     nota_vigente,
@@ -443,3 +444,29 @@ def test_estado_visible_de_la_encuesta():
     assert estado_visible("Pendiente", "No aprobado") == "No se abona (calificación baja)"
     assert estado_visible("Pagada", "No aprobado") == "Pagada"
     assert estado_visible("No válido", "Aprobado") == "No válido"
+
+
+def test_politica_sucursal_pool_franquicia_tope_y_reparto():
+    items = pd.DataFrame(
+        [
+            {"persona": "A", "tipo": "Corte", "fecha": "d", "local": "L1", "detalle": "", "diferencia": -30.0, "observaciones": ""},
+            {"persona": "B", "tipo": "Corte", "fecha": "d", "local": "L1", "detalle": "", "diferencia": -20.0, "observaciones": ""},
+            {"persona": "C", "tipo": "Corte", "fecha": "d", "local": "L1", "detalle": "", "diferencia": 10.0, "observaciones": ""},
+            {"persona": "A", "tipo": "Corte", "fecha": "d", "local": "L1", "detalle": "", "diferencia": -100.0, "observaciones": ""},
+        ]
+    )
+    suc, rep, grandes = politica_sucursal(items, {"L1": 2000, "L2": 500}, tasa=0.01, piso=0, tope=30, grande=40)
+    l1 = suc[suc["local"] == "L1"].iloc[0]
+    assert (l1["faltantes"], l1["sobrantes"], l1["perdida_neta"]) == (50.0, 10.0, 40.0)
+    assert l1["franquicia"] == 20.0 and l1["descuento"] == 20.0
+    assert l1["items_grandes"] == 1 and l1["monto_grandes"] == -100.0
+    a = rep[(rep["local"] == "L1") & (rep["persona"] == "A")].iloc[0]
+    b = rep[(rep["local"] == "L1") & (rep["persona"] == "B")].iloc[0]
+    assert round(a["asignado"], 2) == 12.0 and round(b["asignado"], 2) == 8.0
+    assert "C" not in set(rep["persona"])  # el sobrante no paga
+    assert suc[suc["local"] == "L2"].iloc[0]["descuento"] == 0.0
+    # el tope manda
+    suc2, _, _ = politica_sucursal(items, {"L1": 0}, tasa=0, piso=0, tope=15, grande=40)
+    assert suc2.iloc[0]["descuento"] == 15.0
+    vacio = politica_sucursal(None, {}, 0.01, 0, 30, 40)
+    assert vacio[0].empty and vacio[1].empty

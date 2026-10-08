@@ -1293,6 +1293,32 @@ with tab_cuadre:
                         else:
                             st.caption("No se encontraron los dos registros para comparar.")
 
+# -------------------------------------------------------------
+# Politica de descuento por sucursal (ver cuadre.politica_sucursal): se
+# calcula UNA vez aca para usarla en Sucursales y en Liquidacion. Los
+# parametros se editan en la pestaña Sucursales (widgets con estas keys).
+# -------------------------------------------------------------
+POL_TASA_DEF, POL_PISO_DEF, POL_TOPE_DEF, POL_GRANDE_DEF = 0.01, 0.0, 30.0, 40.0
+items_pol = sh.items_ticket(
+    cortes_acumulado, saltos_para_acumulado, st.session_state.get("suc_incluir_entregas", True)
+)
+ops_por_local = (
+    cortes.assign(_ops=cortes["id_cierre"].map(_registros_por_id["num_operaciones"]).fillna(0))
+    .groupby("local")["_ops"]
+    .sum()
+    .to_dict()
+    if not cortes.empty
+    else {}
+)
+pol_suc, pol_rep, pol_grandes = sh.politica_sucursal(
+    items_pol,
+    ops_por_local,
+    st.session_state.get("pol_tasa", POL_TASA_DEF),
+    st.session_state.get("pol_piso", POL_PISO_DEF),
+    st.session_state.get("pol_tope", POL_TOPE_DEF),
+    st.session_state.get("pol_grande", POL_GRANDE_DEF),
+)
+
 with tab_liquidacion:
     # -------------------------------------------------------------
     # Liquidacion por trabajador ("ticket"). Solo lectura: junta las
@@ -1317,20 +1343,6 @@ with tab_liquidacion:
         "Incluir diferencias en entregas de caja", value=True,
         help="Lo que no coincidió entre el Cierre de la persona y la Apertura siguiente.",
     )
-
-    with st.expander("Margen de error (franquicia)"):
-        st.caption(
-            "Margen = piso + tasa × operaciones, con un tope. Solo se descuenta lo que PASE "
-            "del margen. Valores acordados: piso S/ 6, S/ 0.01 por operación, tope S/ 30. "
-            "Puedes probar otros aquí; al recargar la página vuelven a estos."
-        )
-        aplicar_margen = st.checkbox("Aplicar margen de error", value=True)
-        mg1, mg2, mg3 = st.columns(3)
-        margen_piso = mg1.number_input("Piso (S/)", min_value=0.0, value=6.0, step=1.0)
-        margen_tasa = mg2.number_input(
-            "Tasa por operación (S/)", min_value=0.0, value=0.01, step=0.005, format="%.3f"
-        )
-        margen_tope = mg3.number_input("Tope (S/)", min_value=0.0, value=30.0, step=5.0)
 
     items_liq = sh.items_ticket(cortes_acumulado, saltos_para_acumulado, incluir_entregas_liq)
     creditos_liq = sh.creditos_repuso(ajustes_df, desde, hasta, locales_sel)
@@ -1391,22 +1403,14 @@ with tab_liquidacion:
                     "A favor (S/)": float(creditos_liq.loc[creditos_liq["persona"] == _persona, "monto"].sum()),
                 }
             )
-            filas_resumen_liq[-1]["Saldo (S/)"] = (
-                filas_resumen_liq[-1]["A revisar (S/)"] - filas_resumen_liq[-1]["A favor (S/)"]
-            )
             _ops = int(ops_por_persona.get(_persona, 0))
-            _margen = (
-                sh.margen_error(_ops, margen_piso, margen_tasa, margen_tope) if aplicar_margen else 0.0
-            )
-            filas_resumen_liq[-1]["Margen (S/)"] = _margen
-            filas_resumen_liq[-1]["A descontar (S/)"] = sh.a_descontar(
-                filas_resumen_liq[-1]["Saldo (S/)"], _margen
+            _asignado = float(pol_rep.loc[pol_rep["persona"] == _persona, "asignado"].sum())
+            filas_resumen_liq[-1]["Descuento asignado (S/)"] = _asignado
+            filas_resumen_liq[-1]["A descontar (S/)"] = max(
+                0.0, _asignado - filas_resumen_liq[-1]["A favor (S/)"]
             )
             filas_resumen_liq[-1]["Incentivo a pagar (S/)"] = _incentivos_de(_persona)["pagar"]
             filas_resumen_liq[-1]["Operaciones"] = _ops
-            filas_resumen_liq[-1]["A revisar por 100 ops (S/)"] = (
-                filas_resumen_liq[-1]["A revisar (S/)"] / _ops * 100 if _ops else float("nan")
-            )
         resumen_liq = pd.DataFrame(filas_resumen_liq).sort_values(
             ["A descontar (S/)", "A revisar (S/)"], ascending=False
         )
@@ -1417,17 +1421,15 @@ with tab_liquidacion:
             column_config={
                 c: st.column_config.NumberColumn(format="%.2f")
                 for c in ["Faltantes (S/)", "Sobrantes (S/)", "Neto (S/)", "A revisar (S/)", "A favor (S/)",
-                          "Saldo (S/)", "Margen (S/)", "A descontar (S/)",
-                          "Incentivo a pagar (S/)", "A revisar por 100 ops (S/)"]
+                          "Descuento asignado (S/)", "A descontar (S/)", "Incentivo a pagar (S/)"]
             },
         )
         st.caption(
-            "A favor = plata que la persona repuso de su bolsillo para cubrir una diferencia "
-            "(se registra en el ajuste, campo «Repuso»). Saldo = A revisar − A favor: lo que "
-            "queda por revisar después de contar lo que ya repuso (negativo = se le debe). "
-            "A descontar = Saldo − Margen (solo lo que pasa del margen de error). "
-            "Operaciones = las de los cortes que abrió la persona; 'por 100 ops' sirve para "
-            "comparar a todos con la misma vara antes de fijar un margen de error."
+            "El descuento se define primero por SUCURSAL (pestaña Sucursales: pérdida neta, "
+            "franquicia y techo) y luego se reparte entre los operadores en proporción a lo que "
+            "le faltó a cada uno. Descuento asignado = su parte; A favor = plata que repuso de "
+            "su bolsillo (campo «Repuso» del ajuste); A descontar = Descuento asignado − A favor. "
+            "Faltantes, Sobrantes, Neto y A revisar son su vista individual, para seguimiento."
         )
 
         persona_liq = st.selectbox("Ticket de", resumen_liq["Persona"].tolist())
@@ -1448,29 +1450,27 @@ with tab_liquidacion:
             m4, m5, m6 = st.columns(3)
             m4.metric("A revisar", f"S/ {tot['a_revisar']:,.2f}")
             m5.metric("A favor (repuso)", f"S/ {a_favor:,.2f}")
-            saldo_persona = tot["a_revisar"] - a_favor
+            asignado_persona = float(pol_rep.loc[pol_rep["persona"] == persona_liq, "asignado"].sum())
             m6.metric(
-                "Saldo",
-                f"S/ {saldo_persona:,.2f}",
-                help="A revisar − A favor. Negativo = se le debe a la persona.",
+                "Descuento asignado",
+                f"S/ {asignado_persona:,.2f}",
+                help="Su parte del descuento de la sucursal (pestaña Sucursales): proporcional a lo "
+                "que le faltó, después de la franquicia y con el techo de la sucursal.",
             )
             ops_persona = int(ops_por_persona.get(persona_liq, 0))
-            margen_persona = (
-                sh.margen_error(ops_persona, margen_piso, margen_tasa, margen_tope)
-                if aplicar_margen
-                else 0.0
-            )
+            descuento_persona = max(0.0, asignado_persona - a_favor)
+            grandes_persona = pol_grandes[pol_grandes["persona"] == persona_liq]
             m7, m8, m9 = st.columns(3)
             m7.metric("Operaciones", f"{ops_persona:,}")
             m8.metric(
-                "Margen de error",
-                f"S/ {margen_persona:,.2f}",
-                help=f"Piso S/ {margen_piso:,.2f} + S/ {margen_tasa:,.3f} por operación, tope S/ {margen_tope:,.2f}.",
+                "A descontar",
+                f"S/ {descuento_persona:,.2f}",
+                help="Descuento asignado − lo que repuso de su bolsillo.",
             )
             m9.metric(
-                "A descontar",
-                f"S/ {sh.a_descontar(saldo_persona, margen_persona):,.2f}",
-                help="Saldo − Margen. Solo lo que pasa del margen de error; 0 si queda dentro.",
+                "A investigar aparte",
+                f"{len(grandes_persona)} (S/ {grandes_persona['diferencia'].sum():+,.2f})",
+                help="Ítems grandes: no entran al reparto, se revisan uno por uno (pueden ser un error de registro).",
             )
 
             inc = _incentivos_de(persona_liq)
@@ -1483,7 +1483,6 @@ with tab_liquidacion:
                 i1.metric("A pagar (local aprobado)", f"S/ {inc['pagar']:,.2f}")
                 i2.metric("Condicionado (falta la nota)", f"S/ {inc['condicionado']:,.2f}")
                 i3.metric("No se paga (nota no aprobada)", f"S/ {inc['no_aprobado']:,.2f}")
-                descuento_persona = sh.a_descontar(saldo_persona, margen_persona)
                 st.caption(
                     f"Referencia (no es un movimiento): incentivos a pagar S/ {inc['pagar']:,.2f} − "
                     f"a descontar S/ {descuento_persona:,.2f} = S/ {inc['pagar'] - descuento_persona:,.2f}. "
@@ -1635,6 +1634,88 @@ with tab_sucursales:
                     hide_index=True,
                     column_config={"Diferencia (S/)": st.column_config.NumberColumn(format="%+.2f")},
                 )
+
+    st.divider()
+    st.subheader("📐 Política de descuento por sucursal")
+    st.caption(
+        "Primero la sucursal, después el reparto entre operadores: (1) pérdida neta del mes = "
+        "faltantes − sobrantes, sin los ítems grandes; (2) se resta la franquicia (piso + tasa × "
+        "operaciones de la sucursal); (3) lo que sobra se descuenta con un techo por sucursal; "
+        "(4) el descuento se reparte entre los operadores según lo que le faltó a cada uno, y quien "
+        "no tuvo faltantes no paga. Los ítems grandes se investigan aparte."
+    )
+    pp1, pp2, pp3, pp4 = st.columns(4)
+    pp1.number_input(
+        "Franquicia: S/ por operación", min_value=0.0, value=POL_TASA_DEF, step=0.005,
+        format="%.3f", key="pol_tasa",
+    )
+    pp2.number_input("Franquicia: piso (S/)", min_value=0.0, value=POL_PISO_DEF, step=1.0, key="pol_piso")
+    pp3.number_input(
+        "Techo de descuento por sucursal (S/)", min_value=0.0, value=POL_TOPE_DEF, step=5.0, key="pol_tope"
+    )
+    pp4.number_input(
+        "Ítem grande (S/): se investiga aparte", min_value=1.0, value=POL_GRANDE_DEF, step=5.0, key="pol_grande"
+    )
+    st.caption("Los valores vuelven a los acordados (S/ 0.01 por operación, techo S/ 30, ítem grande S/ 40) al recargar la página.")
+
+    if pol_suc.empty:
+        st.caption("Sin datos para calcular la política en el rango seleccionado.")
+    else:
+        vista_pol = pol_suc.rename(
+            columns={
+                "local": "Local", "operaciones": "Operaciones", "faltantes": "Faltantes (S/)",
+                "sobrantes": "Sobrantes (S/)", "perdida_neta": "Pérdida neta (S/)",
+                "franquicia": "Franquicia (S/)", "exceso": "Pasa la franquicia (S/)",
+                "descuento": "Descuento (S/)", "items_grandes": "Ítems grandes",
+                "monto_grandes": "Monto ítems grandes (S/)",
+            }
+        )
+        total_pol = {"Local": "TOTAL", **{c: vista_pol[c].sum() for c in vista_pol.columns if c != "Local"}}
+        st.dataframe(
+            sh.arrow_safe(pd.concat([vista_pol, pd.DataFrame([total_pol])], ignore_index=True)),
+            width="stretch",
+            hide_index=True,
+            column_config={
+                c: st.column_config.NumberColumn(format="%.2f")
+                for c in ["Faltantes (S/)", "Sobrantes (S/)", "Pérdida neta (S/)", "Franquicia (S/)",
+                          "Pasa la franquicia (S/)", "Descuento (S/)", "Monto ítems grandes (S/)"]
+            },
+        )
+        if pol_rep.empty:
+            st.success("Ninguna sucursal supera su franquicia: no hay descuento por repartir.")
+        else:
+            st.markdown("**Reparto entre operadores**")
+            st.dataframe(
+                sh.arrow_safe(
+                    pol_rep.assign(participacion=pol_rep["participacion"] * 100)
+                    .sort_values(["local", "asignado"], ascending=[True, False])
+                    .rename(
+                        columns={"local": "Local", "persona": "Persona", "faltante": "Faltante (S/)",
+                                 "participacion": "Participación (%)", "asignado": "Descuento asignado (S/)"}
+                    )
+                ),
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "Faltante (S/)": st.column_config.NumberColumn(format="%.2f"),
+                    "Participación (%)": st.column_config.NumberColumn(format="%.1f"),
+                    "Descuento asignado (S/)": st.column_config.NumberColumn(format="%.2f"),
+                },
+            )
+        if not pol_grandes.empty:
+            st.markdown("**Ítems grandes: investigar aparte (no entran al reparto)**")
+            st.dataframe(
+                sh.arrow_safe(
+                    pol_grandes.rename(
+                        columns={"persona": "Persona", "tipo": "Tipo", "fecha": "Fecha", "local": "Local",
+                                 "detalle": "Detalle", "diferencia": "Diferencia (S/)",
+                                 "observaciones": "Observaciones"}
+                    ).sort_values("Fecha", ascending=False)
+                ),
+                width="stretch",
+                hide_index=True,
+                column_config={"Diferencia (S/)": st.column_config.NumberColumn(format="%+.2f")},
+            )
 
 with tab_comisiones:
     # -------------------------------------------------------------

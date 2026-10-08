@@ -545,7 +545,7 @@ def totales_ticket(items: pd.DataFrame, compensar: bool = False) -> dict:
     if items is None or items.empty:
         return {"faltantes": 0.0, "sobrantes": 0.0, "neto": 0.0, "a_revisar": 0.0}
     dif = items["diferencia"]
-    faltantes = float(-dif[dif < 0].sum())
+    faltantes = float(abs(dif[dif < 0].sum()))
     sobrantes = float(dif[dif > 0].sum())
     neto = sobrantes - faltantes
     a_revisar = max(0.0, -neto) if compensar else faltantes
@@ -712,3 +712,69 @@ def con_estado_nota(encuestas: pd.DataFrame, notas: pd.DataFrame) -> pd.DataFram
     pagos = salida["estado_pago"] if "estado_pago" in salida.columns else ["Pendiente"] * len(salida)
     salida["estado_visible"] = [estado_visible(p, n) for p, n in zip(pagos, salida["estado_nota"])]
     return salida
+
+
+# ---------------------------------------------------------------------
+# Politica de descuento POR SUCURSAL (primero el local, despues el reparto
+# entre operadores):
+#  1. Pool de la sucursal = sus diferencias del mes SIN los items "grandes"
+#     (|dif| >= grande), que se investigan aparte porque suelen ser un
+#     error de registro o un retiro mal anotado, no ruido de caja.
+#  2. Perdida neta = faltantes - sobrantes del pool (nunca negativa).
+#  3. Franquicia = piso + tasa x operaciones de la sucursal.
+#  4. Descuento = min(tope, perdida neta - franquicia), minimo 0.
+#  5. Reparto entre operadores: proporcional a lo que le FALTO a cada uno;
+#     quien no tuvo faltantes no paga.
+# ---------------------------------------------------------------------
+COLUMNAS_POL_SUCURSAL = [
+    "local", "operaciones", "faltantes", "sobrantes", "perdida_neta",
+    "franquicia", "exceso", "descuento", "items_grandes", "monto_grandes",
+]
+COLUMNAS_POL_REPARTO = ["local", "persona", "faltante", "participacion", "asignado"]
+
+
+def politica_sucursal(items, ops_por_local: dict, tasa: float, piso: float, tope: float, grande: float):
+    """Devuelve (por sucursal, reparto por operador, items grandes)."""
+    if items is None or items.empty:
+        items = pd.DataFrame(columns=COLUMNAS_TICKET)
+        pool = grandes = items
+    else:
+        es_grande = items["diferencia"].abs() >= grande
+        grandes, pool = items[es_grande], items[~es_grande]
+
+    locales = sorted(set(ops_por_local) | set(items["local"]))
+    filas, reparto = [], []
+    for loc in locales:
+        p = pool[pool["local"] == loc]
+        dif = p["diferencia"]
+        faltantes = float(abs(dif[dif < 0].sum()))
+        sobrantes = float(dif[dif > 0].sum())
+        perdida = max(0.0, faltantes - sobrantes)
+        ops = float(ops_por_local.get(loc, 0) or 0)
+        franquicia = float(piso + tasa * ops)
+        exceso = max(0.0, perdida - franquicia)
+        descuento = float(min(tope, exceso))
+        g = grandes[grandes["local"] == loc]
+        filas.append(
+            {
+                "local": loc, "operaciones": int(ops), "faltantes": faltantes,
+                "sobrantes": sobrantes, "perdida_neta": perdida, "franquicia": franquicia,
+                "exceso": exceso, "descuento": descuento, "items_grandes": int(len(g)),
+                "monto_grandes": float(g["diferencia"].sum()),
+            }
+        )
+        if faltantes > 0:
+            por_persona = p[p["diferencia"] < 0].groupby("persona")["diferencia"].sum().abs()
+            for persona, f in por_persona.items():
+                reparto.append(
+                    {
+                        "local": loc, "persona": persona, "faltante": float(f),
+                        "participacion": float(f) / faltantes,
+                        "asignado": descuento * float(f) / faltantes,
+                    }
+                )
+    return (
+        pd.DataFrame(filas, columns=COLUMNAS_POL_SUCURSAL),
+        pd.DataFrame(reparto, columns=COLUMNAS_POL_REPARTO),
+        grandes,
+    )

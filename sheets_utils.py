@@ -53,6 +53,7 @@ from cuadre import (  # noqa: F401  (re-export para el resto de la app)
     creditos_repuso,
     items_ticket,
     mapa_alias,
+    politica_sucursal,
     margen_error,
     resolver_nombre,
     resumen_turnos,
