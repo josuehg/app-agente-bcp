@@ -2076,6 +2076,59 @@ with tab_personal:
         )
         st.caption("Para editar o desactivar a alguien, cambia su fila directo en la hoja «Personal» del Google Sheet.")
 
+    # Nombres que NO coinciden con ninguna persona/alias de la hoja Personal:
+    # son los que hacen aparecer "mas nombres" en Liquidacion y los reportes.
+    _mapa_pers = sh.mapa_alias(personal_df)
+    sin_asignar = (
+        df.groupby(["nombre_original", "local"])
+        .agg(Registros=("id", "count"))
+        .reset_index()
+    )
+    sin_asignar = sin_asignar[
+        [sh.clave_alias(n) not in _mapa_pers for n in sin_asignar["nombre_original"]]
+    ]
+    if sin_asignar.empty:
+        st.success("Todos los nombres registrados están asignados a una persona del Personal.")
+    else:
+        oficiales_pers = sorted(set(personal_df["nombre"])) if not personal_df.empty else []
+        sin_asignar = sin_asignar.assign(
+            Sugerencia=[sh.sugerir_oficial(n, oficiales_pers) for n in sin_asignar["nombre_original"]]
+        ).rename(columns={"nombre_original": "Nombre registrado", "local": "Local"})
+        st.warning(
+            f"{len(sin_asignar)} nombre(s) registrado(s) no están asignados a nadie del Personal, "
+            "por eso salen como personas aparte en Liquidación y en los reportes."
+        )
+        st.dataframe(sh.arrow_safe(sin_asignar), width="stretch", hide_index=True)
+        if oficiales_pers:
+            u1, u2, u3 = st.columns([2, 2, 1])
+            nombre_sin = u1.selectbox(
+                "Nombre registrado", sin_asignar["Nombre registrado"].tolist(), key="alias_nombre_sin"
+            )
+            sugerido = sin_asignar.loc[sin_asignar["Nombre registrado"] == nombre_sin, "Sugerencia"].iloc[0]
+            etiquetas_pers = [f"{r['nombre']} · {r['local']}" for _, r in personal_df.iterrows()]
+            idx_sug = next(
+                (i for i, r in enumerate(personal_df.itertuples()) if r.nombre == sugerido), 0
+            )
+            destino = u2.selectbox(
+                "Es en realidad…", range(len(etiquetas_pers)),
+                format_func=lambda i: etiquetas_pers[i], index=idx_sug,
+                key=f"alias_destino_{nombre_sin}",
+            )
+            u3.write("")
+            if u3.button("Unir", key="alias_unir"):
+                fila_dest = personal_df.iloc[destino]
+                alias_nuevos = [a for a in fila_dest["alias"].split("|") if a.strip()]
+                if nombre_sin not in alias_nuevos:
+                    alias_nuevos.append(nombre_sin)
+                sh.actualizar_persona(
+                    fila_dest["nombre"], fila_dest["local"],
+                    {"nombre": fila_dest["nombre"], "local": fila_dest["local"],
+                     "alias": "|".join(alias_nuevos), "activo": fila_dest["activo"] or "Sí"},
+                )
+                st.success(f"«{nombre_sin}» ahora se cuenta como {fila_dest['nombre']}.")
+                st.rerun()
+        st.caption("Si es una persona nueva, agrégala más abajo en «Agregar persona».")
+
     st.markdown("**Nombres tal como se registraron**")
     detectados = (
         df.groupby(["nombre_original", "local"])

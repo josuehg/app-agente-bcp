@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 from cuadre import (
+    sugerir_oficial,
     politica_sucursal,
     estado_visible,
     estado_parcial,
@@ -470,3 +471,15 @@ def test_politica_sucursal_pool_franquicia_tope_y_reparto():
     assert suc2.iloc[0]["descuento"] == 15.0
     vacio = politica_sucursal(None, {}, 0.01, 0, 30, 40)
     assert vacio[0].empty and vacio[1].empty
+
+
+def test_alias_ignora_tildes_y_sugiere_oficial():
+    personal = pd.DataFrame([{"nombre": "Ana León", "local": "Colon", "alias": "", "activo": "Sí"}])
+    m = mapa_alias(personal)
+    assert resolver_nombre("ANA LEON", "Colon", m) == "Ana León"
+    assert resolver_nombre("  ana   león ", "X", m) == "Ana León"
+    oficiales = ["Ana León", "Priscila Paniura", "María Pérez"]
+    assert sugerir_oficial("Priscila", oficiales) == "Priscila Paniura"
+    assert sugerir_oficial("Maria", oficiales) == "María Pérez"
+    assert sugerir_oficial("Priscilla Paniura", oficiales) == "Priscila Paniura"
+    assert sugerir_oficial("Zoila", oficiales) == ""

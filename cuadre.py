@@ -28,6 +28,9 @@ de la app lo usa como sh.calcular_cortes(...), sh.resumen_turnos(...), etc.
 
 from __future__ import annotations
 
+import difflib
+import unicodedata
+
 import pandas as pd
 
 # ---------------------------------------------------------------------
@@ -581,7 +584,32 @@ def creditos_repuso(ajustes: pd.DataFrame, desde, hasta, locales=None) -> pd.Dat
 # repetidos ("Ana") usando el local donde se hizo el registro.
 # ---------------------------------------------------------------------
 def _clave_alias(texto) -> str:
-    return " ".join(str(texto).split()).lower()
+    """Clave para comparar nombres: sin tildes, sin mayusculas ni espacios de
+    sobra ("María  PÉREZ" == "maria perez")."""
+    sin_tildes = "".join(
+        c for c in unicodedata.normalize("NFD", str(texto)) if unicodedata.category(c) != "Mn"
+    )
+    return " ".join(sin_tildes.split()).lower()
+
+
+clave_alias = _clave_alias
+
+
+def sugerir_oficial(nombre, oficiales) -> str:
+    """El nombre oficial que mas se parece a `nombre` ("" si ninguno): primero
+    por palabras contenidas ("Ana Leon" vs "Ana María León"), despues por
+    parecido de letras."""
+    clave = _clave_alias(nombre)
+    if not clave:
+        return ""
+    por_clave = {_clave_alias(o): o for o in oficiales if str(o).strip()}
+    palabras = set(clave.split())
+    for c, o in por_clave.items():
+        otras = set(c.split())
+        if palabras <= otras or otras <= palabras:
+            return o
+    cerca = difflib.get_close_matches(clave, list(por_clave), n=1, cutoff=0.75)
+    return por_clave[cerca[0]] if cerca else ""
 
 
 def mapa_alias(personal: pd.DataFrame) -> dict:
