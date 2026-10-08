@@ -895,6 +895,42 @@ NOMBRE_HOJA_NOTAS = "Notas"
 COLUMNAS_NOTAS = ["mes", "local", "nota", "cargado_por", "timestamp"]
 
 
+_MESES_ES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+             "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+
+
+def mostrar_nota_nps(local: str | None = None) -> None:
+    """Recuadro de color con la ULTIMA nota NPS cargada para el local:
+    verde si aprobo (se pagan los incentivos de encuestas), rojo si no, y
+    amarillo si aun no hay ninguna. Sin local (nadie puso su PIN todavia)
+    no muestra nada. Llamarla justo despues del titulo de cada pagina."""
+    local = local or st.session_state.get("local_autenticado")
+    if not local:
+        return
+    notas = get_notas_df()
+    propias = notas[notas["local"] == local] if not notas.empty else notas
+    if propias.empty:
+        st.warning(
+            "⭐ Nota NPS: todavía no hay nota cargada para tu local. Mientras tanto, "
+            "los incentivos por encuestas quedan condicionados."
+        )
+        return
+    ultima = propias.sort_values("mes").iloc[-1]
+    anio, mes = str(ultima["mes"]).split("-")[:2]
+    nombre_mes = f"{_MESES_ES[int(mes) - 1]} {anio}"
+    nota = float(ultima["nota"])
+    if estado_nota(nota) == "Aprobado":
+        st.success(
+            f"⭐ Nota NPS de {nombre_mes}: **{nota:g}**. ¡Aprobada! "
+            f"Se pagan los incentivos por encuestas (hay que pasar de {UMBRAL_NOTA_LOCAL})."
+        )
+    else:
+        st.error(
+            f"⭐ Nota NPS de {nombre_mes}: **{nota:g}**. No aprobada: hay que pasar de "
+            f"{UMBRAL_NOTA_LOCAL} y ese mes no se pagan los incentivos por encuestas."
+        )
+
+
 def guardar_nota(datos: dict) -> None:
     """Guarda la nota de un local en un mes; si ya existia, la reemplaza."""
     ws = _get_or_create_worksheet(NOMBRE_HOJA_NOTAS, COLUMNAS_NOTAS)

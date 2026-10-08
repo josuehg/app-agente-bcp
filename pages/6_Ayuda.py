@@ -30,6 +30,7 @@ import sheets_utils as sh
 st.set_page_config(page_title="Ayuda - Agente BCP", page_icon="❓")
 sh.aplicar_estilo()
 st.title("❓ Ayuda y videos de uso")
+sh.mostrar_nota_nps()
 st.caption("Videos cortos y guias sobre como usar la app y el equipo del Agente BCP.")
 
 df = sh.get_ayuda_df()

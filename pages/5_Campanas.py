@@ -24,6 +24,7 @@ import sheets_utils as sh
 st.set_page_config(page_title="Campañas - Agente BCP", page_icon="📢")
 sh.aplicar_estilo()
 st.title("📢 Campañas vigentes del BCP")
+sh.mostrar_nota_nps()
 
 df = sh.get_campanas_df()
 

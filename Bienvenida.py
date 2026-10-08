@@ -56,6 +56,7 @@ def mostrar_bienvenida():
 
     st.title("👋 Bienvenido")
     st.caption("Sistema interno de Agente BCP — BCD Farma y Carpe Diem Botica")
+    sh.mostrar_nota_nps()
 
     logo_bcd = _logo("bcd_farma.png")
     logo_carpe_diem = _logo("carpe_diem_botica.png")

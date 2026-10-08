@@ -55,6 +55,7 @@ local = sh.pedir_pin_de_local(
 
 col_local, col_salir = st.columns([4, 1])
 col_local.success(f"Local: **{local}**")
+sh.mostrar_nota_nps(local)
 if col_salir.button("Cambiar de PIN"):
     st.session_state["local_autenticado"] = None
     st.rerun()
