@@ -82,6 +82,14 @@ if _propios or _otros:
 else:
     nombre = st.text_input("Ingrese su nombre", key=f"encuesta_nombre_{v}")
 nota = st.radio("Nota que puso el cliente", ["9", "10"], horizontal=True, key=f"encuesta_nota_{v}")
+medio_pago = st.radio(
+    "Forma de pago del incentivo",
+    sh.MEDIOS_PAGO_ENCUESTA,
+    index=None,
+    horizontal=True,
+    key=f"encuesta_medio_{v}",
+    help="Cómo prefieres cobrar tu incentivo cuando se pague.",
+)
 
 captura_correo = st.file_uploader(
     "Captura del correo con la calificacion",
@@ -108,6 +116,8 @@ if enviado:
     errores = []
     if not nombre.strip():
         errores.append("Falta elegir su nombre.")
+    if not medio_pago:
+        errores.append("Falta elegir la forma de pago del incentivo (Efectivo o Yape).")
     if captura_correo is None:
         errores.append("Falta la captura del correo con la calificacion.")
     if captura_mensaje_exito is None:
@@ -132,6 +142,7 @@ def _dialogo_confirmar_encuesta():
 - **Nombre:** {nombre.strip()}
 - **Nota:** {nota}
 - **Incentivo:** S/ 10
+- **Forma de pago:** {medio_pago}
 """
     )
     col1, col2 = st.columns(2)
@@ -168,6 +179,7 @@ def _dialogo_confirmar_encuesta():
                     "nota": nota,
                     "incentivo": 10,
                     "estado_pago": "Pendiente",
+                    "medio_pago": medio_pago,
                     "captura_correo": sh.subir_foto(
                         captura_correo, f"{prefijo}_correo{_extension(captura_correo)}"
                     ),
@@ -257,12 +269,13 @@ else:
 
     st.dataframe(
         sh.arrow_safe(
-            df_local[["fecha", "nombre", "nota", "incentivo", "estado_visible"]].rename(
+            df_local[["fecha", "nombre", "nota", "incentivo", "medio_pago", "estado_visible"]].rename(
                 columns={
                     "fecha": "Fecha",
                     "nombre": "Nombre",
                     "nota": "Nota",
                     "incentivo": "Incentivo (S/)",
+                    "medio_pago": "Forma de pago",
                     "estado_visible": "Estado",
                 }
             )

@@ -1479,6 +1479,19 @@ with tab_liquidacion:
                     "**Incentivos por encuestas** (se pagan solo si la nota del local en el mes es de "
                     f"{sh.UMBRAL_NOTA_LOCAL} o más; los ya pagados no aparecen aquí)"
                 )
+                _pend_p = encuestas_liq[
+                    (encuestas_liq["nombre"] == persona_liq)
+                    & (encuestas_liq["estado_pago"] == "Pendiente")
+                    & (encuestas_liq["estado_nota"] == "Aprobado")
+                ]
+                _por_medio = _pend_p.assign(
+                    medio_pago=_pend_p["medio_pago"].replace("", "Sin definir")
+                ).groupby("medio_pago")["incentivo"].sum()
+                if not _por_medio.empty:
+                    st.caption(
+                        "A pagar por forma de pago: "
+                        + " · ".join(f"{m}: S/ {monto:,.2f}" for m, monto in _por_medio.items())
+                    )
                 i1, i2, i3 = st.columns(3)
                 i1.metric("A pagar (local aprobado)", f"S/ {inc['pagar']:,.2f}")
                 i2.metric("Condicionado (falta la nota)", f"S/ {inc['condicionado']:,.2f}")
@@ -1984,13 +1997,15 @@ with tab_incentivos:
             st.success("No hay incentivos por pagar ahora. 👍")
         else:
             resumen_por_nombre = (
-                pendientes_df.groupby(["local", "nombre"])["incentivo"]
+                pendientes_df.assign(medio_pago=pendientes_df["medio_pago"].replace("", "Sin definir"))
+                .groupby(["local", "nombre", "medio_pago"])["incentivo"]
                 .agg(["count", "sum"])
                 .reset_index()
                 .rename(
                     columns={
                         "local": "Local",
                         "nombre": "Nombre",
+                        "medio_pago": "Forma de pago",
                         "count": "Encuestas pendientes",
                         "sum": "Monto pendiente (S/)",
                     }
@@ -2003,7 +2018,8 @@ with tab_incentivos:
         for _, fila_encuesta in encuestas_df.sort_values("timestamp", ascending=False).iterrows():
             titulo_encuesta = (
                 f"{fila_encuesta['fecha']} · {fila_encuesta['local']} · {fila_encuesta['nombre']} "
-                f"· Nota {fila_encuesta['nota']} · {fila_encuesta['estado_visible']}"
+                f"· Nota {fila_encuesta['nota']} · {fila_encuesta['estado_visible']} "
+                f"· {fila_encuesta['medio_pago'] or 'Sin forma de pago'}"
             )
             with st.expander(titulo_encuesta):
                 # Chicas por defecto; con el check se ven a ancho completo. Las
@@ -2024,6 +2040,18 @@ with tab_incentivos:
                         )
                     else:
                         st.caption(f"{etiqueta}: no se pudo cargar.")
+
+                medios_opc = ["Sin definir"] + sh.MEDIOS_PAGO_ENCUESTA
+                medio_actual = fila_encuesta["medio_pago"] or "Sin definir"
+                nuevo_medio = st.selectbox(
+                    "Forma de pago",
+                    medios_opc,
+                    index=medios_opc.index(medio_actual) if medio_actual in medios_opc else 0,
+                    key=f"medio_{fila_encuesta['id']}",
+                )
+                if nuevo_medio != medio_actual and nuevo_medio != "Sin definir":
+                    sh.actualizar_medio_pago(fila_encuesta["id"], nuevo_medio)
+                    st.rerun()
 
                 estado_actual = fila_encuesta["estado_pago"]
                 if estado_actual not in ESTADOS_PAGO_ENCUESTA:

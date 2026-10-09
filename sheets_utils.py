@@ -887,7 +887,12 @@ COLUMNAS_ENCUESTAS = [
     "captura_correo",
     "captura_mensaje_exito",
     "observaciones",
+    # Agregada AL FINAL (ver _get_or_create_worksheet): como se paga el
+    # incentivo, "Efectivo" o "Yape". La elige quien registra la encuesta y
+    # el dueno puede cambiarla desde el Dashboard al momento de pagar.
+    "medio_pago",
 ]
+MEDIOS_PAGO_ENCUESTA = ["Efectivo", "Yape"]
 
 
 def guardar_encuesta(datos: dict) -> None:
@@ -909,6 +914,7 @@ def get_encuestas_df() -> pd.DataFrame:
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df["nota"] = pd.to_numeric(df["nota"], errors="coerce")
     df["incentivo"] = pd.to_numeric(df["incentivo"], errors="coerce").fillna(0)
+    df["medio_pago"] = df["medio_pago"].fillna("").astype(str).str.strip().str.capitalize()
     df["nombre_original"] = _normalizar_nombre(df["nombre"])
     df["nombre"] = unificar_nombres(df["nombre_original"], df["local"])
     return df
@@ -1104,6 +1110,16 @@ def actualizar_estado_pago(id_encuesta: str, nuevo_estado: str) -> None:
         return
     columna_estado = COLUMNAS_ENCUESTAS.index("estado_pago") + 1
     ws.update_cell(celda.row, columna_estado, nuevo_estado)
+    get_encuestas_df.clear()
+
+
+def actualizar_medio_pago(id_encuesta: str, medio: str) -> None:
+    """Cambia como se paga el incentivo de UNA encuesta ('Efectivo' / 'Yape')."""
+    ws = _get_or_create_worksheet(NOMBRE_HOJA_ENCUESTAS, COLUMNAS_ENCUESTAS)
+    celda = ws.find(id_encuesta, in_column=COLUMNAS_ENCUESTAS.index("id") + 1)
+    if celda is None:
+        return
+    ws.update_cell(celda.row, COLUMNAS_ENCUESTAS.index("medio_pago") + 1, medio)
     get_encuestas_df.clear()
 
 
