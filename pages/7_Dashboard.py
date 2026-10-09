@@ -593,14 +593,6 @@ with tab_cuadre:
     # proposito deja pasar SIN avisar lo que cambia ENTRE cortes -- este
     # es justo el control que faltaba para ese hueco.
     # -------------------------------------------------------------
-    st.subheader("🔗 Continuidad (Cierre → Apertura siguiente)")
-    st.caption(
-        "El fondo se queda guardado de un Cierre a la Apertura que le sigue, "
-        "sea el mismo turno, el turno siguiente del mismo día, o el día "
-        "siguiente. Si no coincide, alguien movió la caja entre medio (o "
-        "hubo un error al registrar)."
-    )
-
 
     def _semaforo_continuidad(diferencia: float) -> str:
         # Binario, sin estado intermedio: entre un salto y el siguiente no
@@ -678,175 +670,127 @@ with tab_cuadre:
         )
 
     cont_df = pd.DataFrame(filas_continuidad)
-    if cont_df.empty:
-        st.caption("Todavía no hay saltos Cierre → Apertura para comparar en el rango seleccionado.")
-    else:
+    if not cont_df.empty:
         cont_df = cont_df[
             (cont_df["_fecha_cierre"] >= desde) & (cont_df["_fecha_cierre"] <= hasta)
         ].sort_values("_fecha_cierre", ascending=False)
-        if cont_df.empty:
-            st.caption("No hay comparaciones en el rango de fechas seleccionado.")
-        else:
-            con_diferencia = int((cont_df["Estado"] == "🔴 Diferencia").sum())
-            if con_diferencia:
-                st.error(
-                    f"⚠️ {con_diferencia} caso(s) donde el fondo cambió entre un Cierre y "
-                    f"la Apertura siguiente, sin autorización registrada."
+
+
+    def _form_ajuste_salto(fila):
+        """Ajustes ya registrados de una entrega (salto Cierre -> Apertura) y, si todavia
+        falta explicar algo, el formulario para autorizar un retiro/ingreso. `fila` es una
+        fila de cont_df. Se muestra en el detalle de la Linea de tiempo."""
+        # Ajustes ya registrados para este salto especifico, si hay
+        # (nuevo esquema por id_cierre, mas el viejo por local+fecha
+        # si este salto es "Entre días").
+        clave_ajuste = f"salto|{fila['_id_cierre']}"
+        _candidatos = list(nombres_por_local.get(fila["_local"], []))
+        _quien_abrio = (
+            str(_registros_por_id.loc[fila["_id_apertura"], "nombre"])
+            if fila["_id_apertura"] in _registros_por_id.index
+            else ""
+        )
+        if _quien_abrio in _candidatos:
+            _candidatos.remove(_quien_abrio)
+            _candidatos.insert(0, _quien_abrio)
+        previos = pd.DataFrame()
+        if not ajustes_continuidad.empty:
+            previos = ajustes_continuidad[
+                ajustes_continuidad["salto_id_cierre"] == fila["_id_cierre"]
+            ]
+        if fila["Tipo"] == "Entre días" and not ajustes_df.empty:
+            previos_viejo = ajustes_df[
+                (ajustes_df["turno"] == "")
+                & (ajustes_df["salto_id_cierre"] == "")
+                & (ajustes_df["local"] == fila["_local"])
+                & (ajustes_df["fecha"] == fila["_fecha_cierre"])
+            ]
+            previos = pd.concat([previos, previos_viejo]) if not previos.empty else previos_viejo
+        if not previos.empty:
+            st.markdown("**Ajustes ya registrados para este salto:**")
+            for _, aj in previos.iterrows():
+                _repuso_txt = f" · repuso: {aj['repuso']}" if aj.get("repuso") else ""
+                st.caption(
+                    f"S/ {aj['monto']:+,.2f} — {aj['motivo']} "
+                    f"(autorizó: {aj['autorizado_por'] or '—'}){_repuso_txt}"
                 )
-            else:
-                st.success("Todos los cierres coinciden (o están autorizados) con la apertura siguiente. 👍")
-            st.dataframe(
-                sh.arrow_safe(
-                    cont_df.drop(
-                        columns=["_fecha_cierre", "_id_cierre", "_id_apertura", "_local", "_ajuste_total", "_restante"]
+                # Permite marcar/corregir quien repuso en un ajuste YA
+                # guardado (p. ej. uno hecho antes de que existiera el
+                # campo, o con la persona equivocada).
+                if aj["monto"] > 0 and aj.get("id"):
+                    _opc = ["— Nadie —"] + _candidatos
+                    if aj.get("repuso") and aj["repuso"] not in _opc:
+                        _opc.append(aj["repuso"])
+                    _c1, _c2 = st.columns([3, 1])
+                    _nuevo = _c1.selectbox(
+                        "Repuso (quién puso la plata)",
+                        _opc,
+                        index=_opc.index(aj["repuso"]) if aj.get("repuso") in _opc else 0,
+                        key=f"repuso_prev_{aj['id']}",
                     )
-                ),
-                width="stretch",
-                hide_index=True,
-            )
+                    _c2.write("")
+                    if _c2.button("Guardar repuso", key=f"repuso_prev_btn_{aj['id']}"):
+                        sh.actualizar_repuso_ajuste(
+                            aj["id"], "" if _nuevo == "— Nadie —" else _nuevo
+                        )
+                        st.success("Listo.")
+                        st.rerun()
+
+        # Si ya quedó "Autorizado" (el/los ajuste(s) ya registrados
+        # explican toda la diferencia), no tiene sentido seguir
+        # mostrando el formulario para registrar OTRO ajuste -- ya
+        # está resuelto. Solo se ofrece el formulario mientras
+        # falte explicar algo (🔴).
+        if fila["Estado"] != "🔷 Autorizado":
+            st.markdown("**Registrar retiro/ingreso autorizado por administración**")
             st.caption(
-                "🔷 Autorizado = tiene un retiro/ingreso registrado por administración que explica "
-                "la diferencia. Ábrelo para ver el motivo o registrar uno nuevo. **Tipo** dice si el "
-                "salto es dentro del mismo turno, entre Mañana y Tarde, o entre un día y el siguiente."
+                "Esto queda guardado con motivo y quién lo autorizó, y se resta de la "
+                "diferencia de este salto específico en adelante."
             )
-
-            # Detalle campo por campo + registrar retiro/ingreso autorizado.
-            sospechosos = cont_df[cont_df["Estado"] != "✅ Coincide"]
-            for _, fila in sospechosos.iterrows():
-                titulo = (
-                    f"{fila['Local']} · {fila['Tipo']} · {fila['Cierre']} → {fila['Apertura']} · "
-                    f"{fila['Diferencia (S/)']} · {fila['Estado']}"
-                )
-                with st.expander(titulo):
-                    if (
-                        fila["_id_cierre"] in _registros_por_id.index
-                        and fila["_id_apertura"] in _registros_por_id.index
-                    ):
-                        st.caption(
-                            "Compara el Cierre con la Apertura que le sigue. Deberían ser "
-                            "idénticos; si un campo cambió, ahí está el problema (o fue un "
-                            "retiro/ingreso de efectivo hecho a propósito entre medio)."
-                        )
-                        _comparar_par(
-                            _registros_por_id.loc[fila["_id_cierre"]],
-                            _registros_por_id.loc[fila["_id_apertura"]],
-                            "Cierre",
-                            "Apertura siguiente",
-                        )
-                    else:
-                        st.caption("No se encontraron los dos registros para comparar.")
-
-                    # Ajustes ya registrados para este salto especifico, si hay
-                    # (nuevo esquema por id_cierre, mas el viejo por local+fecha
-                    # si este salto es "Entre días").
-                    clave_ajuste = f"salto|{fila['_id_cierre']}"
-                    _candidatos = list(nombres_por_local.get(fila["_local"], []))
-                    _quien_abrio = (
-                        str(_registros_por_id.loc[fila["_id_apertura"], "nombre"])
-                        if fila["_id_apertura"] in _registros_por_id.index
-                        else ""
+            col_monto, col_quien, col_repuso = st.columns(3)
+            monto_ajuste = col_monto.number_input(
+                "Monto (negativo = retiro, positivo = ingreso)",
+                value=round(fila["_restante"], 2),
+                step=10.0,
+                key=f"ajuste_monto_{clave_ajuste}",
+            )
+            autorizo = col_quien.text_input(
+                "Quién autoriza", key=f"ajuste_quien_{clave_ajuste}"
+            )
+            repuso_sel = col_repuso.selectbox(
+                "Repuso (quién puso la plata)",
+                ["— Nadie —"] + _candidatos,
+                key=f"ajuste_repuso_{clave_ajuste}",
+                help="Opcional. Si alguien puso plata de su bolsillo para cubrir la diferencia, "
+                "queda a su favor en la Liquidación.",
+            )
+            motivo_ajuste = st.text_area(
+                "Motivo", key=f"ajuste_motivo_{clave_ajuste}",
+                placeholder="Ej: retiro de efectivo para depósito en banco",
+            )
+            if st.button("✅ Registrar ajuste", key=f"ajuste_btn_{clave_ajuste}"):
+                if not motivo_ajuste.strip() or not autorizo.strip():
+                    st.error("Completa quién autoriza y el motivo antes de guardar.")
+                elif repuso_sel != "— Nadie —" and monto_ajuste <= 0:
+                    st.error("«Repuso» solo aplica a un ingreso: el monto debe ser positivo.")
+                else:
+                    ahora_aj = sh.ahora_local()
+                    sh.guardar_ajuste(
+                        {
+                            "id": sh.nuevo_id(),
+                            "timestamp": ahora_aj.replace(tzinfo=None).isoformat(timespec="seconds"),
+                            "local": fila["_local"],
+                            "fecha": fila["_fecha_cierre"].isoformat(),
+                            "monto": monto_ajuste,
+                            "motivo": motivo_ajuste.strip(),
+                            "autorizado_por": autorizo.strip(),
+                            "turno": "",
+                            "salto_id_cierre": fila["_id_cierre"],
+                            "repuso": "" if repuso_sel == "— Nadie —" else repuso_sel,
+                        }
                     )
-                    if _quien_abrio in _candidatos:
-                        _candidatos.remove(_quien_abrio)
-                        _candidatos.insert(0, _quien_abrio)
-                    previos = pd.DataFrame()
-                    if not ajustes_continuidad.empty:
-                        previos = ajustes_continuidad[
-                            ajustes_continuidad["salto_id_cierre"] == fila["_id_cierre"]
-                        ]
-                    if fila["Tipo"] == "Entre días" and not ajustes_df.empty:
-                        previos_viejo = ajustes_df[
-                            (ajustes_df["turno"] == "")
-                            & (ajustes_df["salto_id_cierre"] == "")
-                            & (ajustes_df["local"] == fila["_local"])
-                            & (ajustes_df["fecha"] == fila["_fecha_cierre"])
-                        ]
-                        previos = pd.concat([previos, previos_viejo]) if not previos.empty else previos_viejo
-                    if not previos.empty:
-                        st.markdown("**Ajustes ya registrados para este salto:**")
-                        for _, aj in previos.iterrows():
-                            _repuso_txt = f" · repuso: {aj['repuso']}" if aj.get("repuso") else ""
-                            st.caption(
-                                f"S/ {aj['monto']:+,.2f} — {aj['motivo']} "
-                                f"(autorizó: {aj['autorizado_por'] or '—'}){_repuso_txt}"
-                            )
-                            # Permite marcar/corregir quien repuso en un ajuste YA
-                            # guardado (p. ej. uno hecho antes de que existiera el
-                            # campo, o con la persona equivocada).
-                            if aj["monto"] > 0 and aj.get("id"):
-                                _opc = ["— Nadie —"] + _candidatos
-                                if aj.get("repuso") and aj["repuso"] not in _opc:
-                                    _opc.append(aj["repuso"])
-                                _c1, _c2 = st.columns([3, 1])
-                                _nuevo = _c1.selectbox(
-                                    "Repuso (quién puso la plata)",
-                                    _opc,
-                                    index=_opc.index(aj["repuso"]) if aj.get("repuso") in _opc else 0,
-                                    key=f"repuso_prev_{aj['id']}",
-                                )
-                                _c2.write("")
-                                if _c2.button("Guardar repuso", key=f"repuso_prev_btn_{aj['id']}"):
-                                    sh.actualizar_repuso_ajuste(
-                                        aj["id"], "" if _nuevo == "— Nadie —" else _nuevo
-                                    )
-                                    st.success("Listo.")
-                                    st.rerun()
-
-                    # Si ya quedó "Autorizado" (el/los ajuste(s) ya registrados
-                    # explican toda la diferencia), no tiene sentido seguir
-                    # mostrando el formulario para registrar OTRO ajuste -- ya
-                    # está resuelto. Solo se ofrece el formulario mientras
-                    # falte explicar algo (🔴).
-                    if fila["Estado"] != "🔷 Autorizado":
-                        st.markdown("**Registrar retiro/ingreso autorizado por administración**")
-                        st.caption(
-                            "Esto queda guardado con motivo y quién lo autorizó, y se resta de la "
-                            "diferencia de este salto específico en adelante."
-                        )
-                        col_monto, col_quien, col_repuso = st.columns(3)
-                        monto_ajuste = col_monto.number_input(
-                            "Monto (negativo = retiro, positivo = ingreso)",
-                            value=round(fila["_restante"], 2),
-                            step=10.0,
-                            key=f"ajuste_monto_{clave_ajuste}",
-                        )
-                        autorizo = col_quien.text_input(
-                            "Quién autoriza", key=f"ajuste_quien_{clave_ajuste}"
-                        )
-                        repuso_sel = col_repuso.selectbox(
-                            "Repuso (quién puso la plata)",
-                            ["— Nadie —"] + _candidatos,
-                            key=f"ajuste_repuso_{clave_ajuste}",
-                            help="Opcional. Si alguien puso plata de su bolsillo para cubrir la diferencia, "
-                            "queda a su favor en la Liquidación.",
-                        )
-                        motivo_ajuste = st.text_area(
-                            "Motivo", key=f"ajuste_motivo_{clave_ajuste}",
-                            placeholder="Ej: retiro de efectivo para depósito en banco",
-                        )
-                        if st.button("✅ Registrar ajuste", key=f"ajuste_btn_{clave_ajuste}"):
-                            if not motivo_ajuste.strip() or not autorizo.strip():
-                                st.error("Completa quién autoriza y el motivo antes de guardar.")
-                            elif repuso_sel != "— Nadie —" and monto_ajuste <= 0:
-                                st.error("«Repuso» solo aplica a un ingreso: el monto debe ser positivo.")
-                            else:
-                                ahora_aj = sh.ahora_local()
-                                sh.guardar_ajuste(
-                                    {
-                                        "id": sh.nuevo_id(),
-                                        "timestamp": ahora_aj.replace(tzinfo=None).isoformat(timespec="seconds"),
-                                        "local": fila["_local"],
-                                        "fecha": fila["_fecha_cierre"].isoformat(),
-                                        "monto": monto_ajuste,
-                                        "motivo": motivo_ajuste.strip(),
-                                        "autorizado_por": autorizo.strip(),
-                                        "turno": "",
-                                        "salto_id_cierre": fila["_id_cierre"],
-                                        "repuso": "" if repuso_sel == "— Nadie —" else repuso_sel,
-                                    }
-                                )
-                                st.success("Ajuste guardado.")
-                                st.rerun()
+                    st.success("Ajuste guardado.")
+                    st.rerun()
 
     # -------------------------------------------------------------
     # Cuadre por turno (cortes Apertura -> Cierre)
@@ -856,12 +800,6 @@ with tab_cuadre:
     # mide contra su propia Apertura, asi que lo que se mueve a proposito
     # entre cortes no ensucia el calculo. Ver cuadre.py.
     # -------------------------------------------------------------
-    st.subheader("🔍 Cuadre por turno")
-    st.caption(
-        "Diferencia = Cierre − Apertura de cada corte (fondo total = efectivo + "
-        "tarjeta). Un turno con cierres parciales tiene varios cortes; acá se "
-        "muestra la **suma** de sus diferencias."
-    )
 
     INDICE_TURNO = ["local", "fecha", "turno"]
     cortes = sh.calcular_cortes(df_filtrado, INDICE_TURNO)
@@ -947,6 +885,59 @@ with tab_cuadre:
             "estado",
         ] = "🔷 Autorizado"
 
+    def _form_ajuste_turno(fila, permitir_nuevo=True):
+        """Ajustes ya registrados de un turno y, si falta explicar algo, el formulario
+        para autorizar un retiro/ingreso. `fila` es una fila de `resumen`."""
+        clave_t = f"turno|{fila['local']}|{fila['fecha']}|{fila['turno']}"
+        if not ajustes_turno.empty:
+            previos_t = ajustes_turno[
+                (ajustes_turno["local"] == fila["local"])
+                & (ajustes_turno["fecha"] == fila["fecha"])
+                & (ajustes_turno["turno"] == fila["turno"])
+            ]
+            if not previos_t.empty:
+                st.markdown("**Ajustes ya registrados para este turno:**")
+                for _, aj in previos_t.iterrows():
+                    st.caption(
+                        f"S/ {aj['monto']:+,.2f} — {aj['motivo']} "
+                        f"(autorizó: {aj['autorizado_por'] or '—'})"
+                    )
+        if not permitir_nuevo:
+            return
+        col_m, col_q = st.columns(2)
+        monto_t = col_m.number_input(
+            "Monto (negativo = retiro, positivo = ingreso)",
+            value=round(float(fila["_restante"]), 2),
+            step=10.0,
+            key=f"aj_t_monto_{clave_t}",
+        )
+        quien_t = col_q.text_input("Quién autoriza", key=f"aj_t_quien_{clave_t}")
+        motivo_t = st.text_area(
+            "Motivo",
+            key=f"aj_t_motivo_{clave_t}",
+            placeholder="Ej: retiro de efectivo a media tarde",
+        )
+        if st.button("✅ Registrar ajuste", key=f"aj_t_btn_{clave_t}"):
+            if not motivo_t.strip() or not quien_t.strip():
+                st.error("Completa quién autoriza y el motivo antes de guardar.")
+            else:
+                ahora_t = sh.ahora_local()
+                sh.guardar_ajuste(
+                    {
+                        "id": sh.nuevo_id(),
+                        "timestamp": ahora_t.replace(tzinfo=None).isoformat(timespec="seconds"),
+                        "local": fila["local"],
+                        "fecha": fila["fecha"].isoformat(),
+                        "monto": monto_t,
+                        "motivo": motivo_t.strip(),
+                        "autorizado_por": quien_t.strip(),
+                        "turno": fila["turno"],
+                    }
+                )
+                st.success("Ajuste guardado.")
+                st.rerun()
+
+
     # -------------------------------------------------------------
     # Linea de tiempo por sucursal (se dibuja ARRIBA, en bloque_linea):
     # cortes y entregas intercalados en orden cronologico. Solo lectura: la
@@ -1013,14 +1004,16 @@ with tab_cuadre:
                 column_config={"Diferencia (S/)": st.column_config.NumberColumn(format="%+.2f")},
             )
 
-            con_dif_tl = vista_tl[vista_tl["estado"].str.contains("Diferencia|Cerró otro", regex=True)]
+            con_dif_tl = vista_tl[
+                vista_tl["estado"].str.contains("Diferencia|Cerró otro|Autorizado", regex=True)
+            ]
             if not con_dif_tl.empty:
                 etiquetas_tl = [
-                    f"{r.fecha} {r.hora} · {r.tipo} · {r.persona} · {r.diferencia:+,.2f}"
+                    f"{r.fecha} {r.hora} · {r.tipo} · {r.persona} · {r.diferencia:+,.2f} · {r.estado}"
                     for r in con_dif_tl.itertuples()
                 ]
                 sel_tl = st.selectbox(
-                    "Ver el detalle de una fila con diferencia", ["—"] + etiquetas_tl, key="tl_detalle"
+                    "Ver el detalle y autorizar una fila", ["—"] + etiquetas_tl, key="tl_detalle"
                 )
                 if sel_tl != "—":
                     fila_tl = con_dif_tl.iloc[etiquetas_tl.index(sel_tl)]
@@ -1036,36 +1029,53 @@ with tab_cuadre:
                                 "Cierre",
                                 "Apertura siguiente",
                             )
-                    st.caption(
-                        "Para autorizarla: «Continuidad» (entregas) o «Registrar retiro/ingreso autorizado "
-                        "de un turno» (cortes), más abajo en esta pestaña."
-                    )
+                    if fila_tl["tipo"] == "Entrega":
+                        _fila_cont = cont_df[cont_df["_id_cierre"] == fila_tl["id_a"]]
+                        if not _fila_cont.empty:
+                            _form_ajuste_salto(_fila_cont.iloc[0])
+                    else:
+                        _fila_turno = resumen[
+                            (resumen["local"] == fila_tl["local"])
+                            & (resumen["fecha"] == fila_tl["fecha"])
+                            & (resumen["turno"] == fila_tl["turno"])
+                        ]
+                        if not _fila_turno.empty:
+                            _ft = _fila_turno.iloc[0]
+                            _falta = (
+                                abs(float(_ft["_restante"] if pd.notna(_ft["_restante"]) else 0)) > sh.UMBRAL_VERDE
+                                and _ft["estado"] not in ("✅ Cuadrado", "🔷 Autorizado")
+                            )
+                            st.markdown("**Ajustes de este turno**")
+                            if not _falta and not _ft["_explicado"]:
+                                st.caption("La suma del turno cuadra: no requiere ajuste.")
+                            _form_ajuste_turno(_ft, permitir_nuevo=_falta)
 
-    st.dataframe(
-        sh.arrow_safe(
-            resumen.rename(
-                columns={
-                    "local": "Local",
-                    "fecha": "Fecha",
-                    "turno": "Turno",
-                    "n_cortes": "Cortes",
-                    "nombres": "Personas",
-                    "diferencia_fmt": "Diferencia total (S/)",
-                    "estado": "Estado",
-                    "observaciones": "Observaciones",
-                }
-            ).drop(columns=["diferencia", "_ajuste_total", "_restante", "_explicado"])
-        ),
-        width="stretch",
-        hide_index=True,
-    )
-    st.caption(
-        "**+** = sobró (el Cierre quedó por encima de la Apertura), **−** = faltó. "
-        "🔴 Diferencia = más de S/1 sin explicar. "
-        "⚠️ Revisar secuencia = al turno le falta un Cierre o hay un Cierre sin Apertura."
-    )
+    with st.expander("📋 Resumen por turno (tabla, corte por corte y gráfico)"):
+        st.dataframe(
+            sh.arrow_safe(
+                resumen.rename(
+                    columns={
+                        "local": "Local",
+                        "fecha": "Fecha",
+                        "turno": "Turno",
+                        "n_cortes": "Cortes",
+                        "nombres": "Personas",
+                        "diferencia_fmt": "Diferencia total (S/)",
+                        "estado": "Estado",
+                        "observaciones": "Observaciones",
+                    }
+                ).drop(columns=["diferencia", "_ajuste_total", "_restante", "_explicado"])
+            ),
+            width="stretch",
+            hide_index=True,
+        )
+        st.caption(
+            "**+** = sobró (el Cierre quedó por encima de la Apertura), **−** = faltó. "
+            "🔴 Diferencia = más de S/1 sin explicar. "
+            "⚠️ Revisar secuencia = al turno le falta un Cierre o hay un Cierre sin Apertura."
+        )
 
-    with st.expander("Ver corte por corte"):
+        st.markdown("**Corte por corte**")
         if cortes.empty:
             st.caption("No hay cortes en el rango seleccionado.")
         else:
@@ -1096,84 +1106,20 @@ with tab_cuadre:
                 hide_index=True,
             )
 
-    # Registrar/ver ajustes de un turno especifico (distinto de los de
-    # Continuidad, que apuntan a un salto por id_cierre). Solo para los que
-    # aun no cuadran ni estan ya autorizados.
-    # Entra TODO turno con una diferencia real sin explicar (> S/1), tenga el
-    # estado que tenga (⚠️ Cerró otro nombre, ⚠️ Revisar secuencia, 🔴):
-    # antes los ⚠️ quedaban fuera y esa plata no se podia autorizar.
-    _sospechosos_turno = resumen[
-        ~resumen["estado"].isin(["✅ Cuadrado", "🔷 Autorizado"])
-        & (resumen["_restante"].fillna(0).abs() > sh.UMBRAL_VERDE)
-    ]
-    if not _sospechosos_turno.empty:
-        st.markdown("**Registrar retiro/ingreso autorizado de un turno**")
-        for _, fila in _sospechosos_turno.iterrows():
-            titulo = (
-                f"{fila['local']} · {fila['fecha']} · {fila['turno']} · {fila['nombres']} · "
-                f"{fila['diferencia_fmt']} · {fila['estado']}"
+        # Para el grafico dejamos fuera los turnos con la secuencia rota (su suma
+        # de diferencias es parcial y engaña); los de "Cerró otro nombre" sí van.
+        turnos_completos = resumen[~resumen["estado"].astype(str).str.contains("secuencia")]
+        if not turnos_completos.empty:
+            fig_dif = px.bar(
+                turnos_completos.sort_values("fecha"),
+                x="fecha",
+                y="diferencia",
+                color="local",
+                barmode="group",
+                labels={"fecha": "Fecha", "diferencia": "Diferencia total del turno (S/)"},
             )
-            with st.expander(titulo):
-                clave_t = f"turno|{fila['local']}|{fila['fecha']}|{fila['turno']}"
-                if not ajustes_turno.empty:
-                    previos_t = ajustes_turno[
-                        (ajustes_turno["local"] == fila["local"])
-                        & (ajustes_turno["fecha"] == fila["fecha"])
-                        & (ajustes_turno["turno"] == fila["turno"])
-                    ]
-                    if not previos_t.empty:
-                        st.markdown("**Ajustes ya registrados para este turno:**")
-                        for _, aj in previos_t.iterrows():
-                            st.caption(
-                                f"S/ {aj['monto']:+,.2f} — {aj['motivo']} "
-                                f"(autorizó: {aj['autorizado_por'] or '—'})"
-                            )
-                col_m, col_q = st.columns(2)
-                monto_t = col_m.number_input(
-                    "Monto (negativo = retiro, positivo = ingreso)",
-                    value=round(float(fila["_restante"]), 2),
-                    step=10.0,
-                    key=f"aj_t_monto_{clave_t}",
-                )
-                quien_t = col_q.text_input("Quién autoriza", key=f"aj_t_quien_{clave_t}")
-                motivo_t = st.text_area(
-                    "Motivo",
-                    key=f"aj_t_motivo_{clave_t}",
-                    placeholder="Ej: retiro de efectivo a media tarde",
-                )
-                if st.button("✅ Registrar ajuste", key=f"aj_t_btn_{clave_t}"):
-                    if not motivo_t.strip() or not quien_t.strip():
-                        st.error("Completa quién autoriza y el motivo antes de guardar.")
-                    else:
-                        ahora_t = sh.ahora_local()
-                        sh.guardar_ajuste(
-                            {
-                                "id": sh.nuevo_id(),
-                                "timestamp": ahora_t.replace(tzinfo=None).isoformat(timespec="seconds"),
-                                "local": fila["local"],
-                                "fecha": fila["fecha"].isoformat(),
-                                "monto": monto_t,
-                                "motivo": motivo_t.strip(),
-                                "autorizado_por": quien_t.strip(),
-                                "turno": fila["turno"],
-                            }
-                        )
-                        st.success("Ajuste guardado.")
-                        st.rerun()
+            st.plotly_chart(fig_dif, width="stretch")
 
-    # Para el grafico dejamos fuera los turnos con la secuencia rota (su suma
-    # de diferencias es parcial y engaña); los de "Cerró otro nombre" sí van.
-    turnos_completos = resumen[~resumen["estado"].astype(str).str.contains("secuencia")]
-    if not turnos_completos.empty:
-        fig_dif = px.bar(
-            turnos_completos.sort_values("fecha"),
-            x="fecha",
-            y="diferencia",
-            color="local",
-            barmode="group",
-            labels={"fecha": "Fecha", "diferencia": "Diferencia total del turno (S/)"},
-        )
-        st.plotly_chart(fig_dif, width="stretch")
 
     # -------------------------------------------------------------
     # Acumulado de diferencias por persona
