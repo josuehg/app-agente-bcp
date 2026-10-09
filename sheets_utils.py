@@ -1143,8 +1143,11 @@ def _escribir_y_confirmar(ws, cambios: list[dict]) -> None:
     """Escribe celdas como TEXTO (sin que Sheets reinterprete fechas ni
     numeros) y las vuelve a leer: si no coinciden, avisa en vez de dar por
     bueno un guardado que no ocurrio."""
-    ws.batch_update(cambios, raw=True)
-    leidos = ws.batch_get([c["range"] for c in cambios])
+    rangos = [c["range"] for c in cambios]
+    # gspread MODIFICA los rangos que recibe (les antepone el nombre de la
+    # hoja): se le pasa una copia para poder releer con los rangos originales.
+    ws.batch_update([dict(c) for c in cambios], raw=True)
+    leidos = ws.batch_get(rangos)
     for cambio, leido in zip(cambios, leidos):
         esperado = str(cambio["values"][0][0]).strip()
         actual = str(leido[0][0]).strip() if leido and leido[0] else ""
