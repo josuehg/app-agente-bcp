@@ -675,7 +675,7 @@ def _registros_crudos_del_turno(local: str, fecha: str, turno: str) -> list[dict
     """Lee la hoja 'Registros' SIN cache y devuelve las filas de ese turno
     (mismo local + misma fecha + mismo Mañana/Tarde), ordenadas por hora."""
     ws = _get_or_create_worksheet(NOMBRE_HOJA_REGISTROS, COLUMNAS_REGISTROS)
-    filas = ws.get_all_records()
+    filas = ws.get_all_records(numericise_ignore=["all"])
     del_turno = [
         f
         for f in filas
@@ -860,7 +860,10 @@ def unificar_nombres(nombres: pd.Series, locales: pd.Series) -> pd.Series:
 @st.cache_data(ttl=30, show_spinner=False)
 def get_registros_df() -> pd.DataFrame:
     ws = _get_or_create_worksheet(NOMBRE_HOJA_REGISTROS, COLUMNAS_REGISTROS)
-    registros = ws.get_all_records()
+    # numericise_ignore: todo llega como TEXTO. Si no, un id como "1234e56789" se
+    # lee como numero (inf) y varios ids distintos terminan siendo "el mismo";
+    # los montos se convierten a numero mas abajo con pd.to_numeric.
+    registros = ws.get_all_records(numericise_ignore=["all"])
     df = pd.DataFrame(registros, columns=COLUMNAS_REGISTROS)
     if df.empty:
         return df
@@ -1318,7 +1321,7 @@ def actualizar_repuso_ajuste(id_ajuste: str, repuso: str) -> None:
 @st.cache_data(ttl=30, show_spinner=False)
 def get_ajustes_df() -> pd.DataFrame:
     ws = _get_or_create_worksheet(NOMBRE_HOJA_AJUSTES, COLUMNAS_AJUSTES)
-    registros = ws.get_all_records()
+    registros = ws.get_all_records(numericise_ignore=["all"])
     df = pd.DataFrame(registros, columns=COLUMNAS_AJUSTES)
     if df.empty:
         return df
