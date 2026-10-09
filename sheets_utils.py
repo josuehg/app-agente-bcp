@@ -20,6 +20,7 @@ CONCEPTOS NUEVOS QUE VAS A VER AQUI:
 from __future__ import annotations
 
 import io
+import time
 import uuid
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
@@ -280,9 +281,30 @@ def _get_credentials() -> Credentials:
     return Credentials.from_service_account_info(info, scopes=SCOPES)
 
 
+def _con_reintento_429(request):
+    """Google Sheets deja hacer ~60 lecturas por minuto. Si se pasa (429), en
+    vez de romper la pagina esperamos unos segundos y reintentamos (3, 6 y 12 s)."""
+
+    def _envuelto(*args, **kwargs):
+        for intento in range(4):
+            try:
+                return request(*args, **kwargs)
+            except gspread.exceptions.APIError as error:
+                codigo = getattr(error, "code", None) or getattr(
+                    getattr(error, "response", None), "status_code", None
+                )
+                if codigo != 429 or intento == 3:
+                    raise
+                time.sleep(3 * 2**intento)
+
+    return _envuelto
+
+
 @st.cache_resource(show_spinner=False)
 def _get_gspread_client() -> gspread.Client:
-    return gspread.authorize(_get_credentials())
+    cliente = gspread.authorize(_get_credentials())
+    cliente.http_client.request = _con_reintento_429(cliente.http_client.request)
+    return cliente
 
 
 @st.cache_resource(show_spinner=False)
@@ -301,6 +323,13 @@ def _get_spreadsheet():
     return client.open_by_key(st.secrets["spreadsheet_id"])
 
 
+# Hojas ya verificadas en este proceso. Abrir una hoja cuesta 2 lecturas a la
+# API (sus datos de la pestaña y su encabezado); como se llamaba en CADA
+# lectura de datos, la app triplicaba su consumo y chocaba con el limite de
+# lecturas por minuto de Google. Con esto se verifica una sola vez.
+_HOJAS_VERIFICADAS: dict = {}
+
+
 def _get_or_create_worksheet(nombre: str, columnas: list[str]):
     """Devuelve la hoja (tab) con ese nombre dentro del spreadsheet.
 
@@ -311,6 +340,9 @@ def _get_or_create_worksheet(nombre: str, columnas: list[str]):
     borrar la pestana a mano cada vez que el codigo cambia; los datos
     ya guardados en las filas de abajo no se tocan.
     """
+    clave_hoja = (nombre, tuple(columnas))
+    if clave_hoja in _HOJAS_VERIFICADAS:
+        return _HOJAS_VERIFICADAS[clave_hoja]
     sh = _get_spreadsheet()
     try:
         ws = sh.worksheet(nombre)
@@ -323,6 +355,7 @@ def _get_or_create_worksheet(nombre: str, columnas: list[str]):
     except gspread.WorksheetNotFound:
         ws = sh.add_worksheet(title=nombre, rows=1000, cols=len(columnas))
         ws.append_row(columnas)
+    _HOJAS_VERIFICADAS[clave_hoja] = ws
     return ws
 
 
