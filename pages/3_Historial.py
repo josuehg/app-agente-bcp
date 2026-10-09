@@ -88,8 +88,11 @@ if df_local.empty:
     st.info("No hay registros de este local en el rango elegido (turno / días).")
     st.stop()
 
-tab_cuadre, tab_continuidad, tab_acumulado, tab_registros = st.tabs(
-    ["🔍 Cuadre por turno", "🔗 Continuidad", "👤 Acumulado por persona", "🗂️ Detalle de registros"]
+tab_linea, tab_cuadre, tab_continuidad, tab_acumulado, tab_registros = st.tabs(
+    [
+        "🧭 Línea de tiempo", "🔍 Cuadre por turno", "🔗 Continuidad",
+        "👤 Acumulado por persona", "🗂️ Detalle de registros",
+    ]
 )
 
 with tab_cuadre:
@@ -330,6 +333,83 @@ with tab_continuidad:
                 "diferencia. **Tipo** dice si el salto es dentro del mismo turno, entre "
                 "Mañana y Tarde, o entre un día y el siguiente."
             )
+
+with tab_linea:
+    # -------------------------------------------------------------
+    # Linea de tiempo del local (el de su PIN): cortes y entregas de caja
+    # intercalados en orden de hora. SOLO LECTURA y solo el Estado -- igual
+    # que Cuadre por turno y Continuidad, no se muestra motivo ni quien
+    # autorizo (eso es informacion de administracion). Se llena aca, despues
+    # de calcular cortes y continuidad, pero aparece como primera pestaña.
+    # -------------------------------------------------------------
+    st.subheader(f"Línea de tiempo — {local}")
+    st.caption(
+        "Tus cortes (lo que pasa dentro de un turno) y las entregas (el paso entre un Cierre y la "
+        "siguiente Apertura) en orden de hora. El corte se le carga a quien abrió; la entrega, a "
+        "quien cerró."
+    )
+    _estado_por_salto_local = (
+        dict(zip(cont_local_df["_id_cierre"], cont_local_df["Estado"]))
+        if not cont_local_df.empty and "_id_cierre" in cont_local_df.columns
+        else {}
+    )
+    linea_local = sh.linea_de_tiempo(cortes.assign(local=local), saltos_local, _estado_por_salto_local)
+    if not linea_local.empty:
+        linea_local = linea_local[linea_local["turno"].isin(turnos_sel)]
+    if linea_local.empty:
+        st.caption("No hay cortes ni entregas en el rango elegido.")
+    else:
+        tl_a, tl_b = st.columns([3, 2])
+        mostrar_tl = tl_a.radio(
+            "Mostrar", ["Todo", "Solo cortes", "Solo entregas"], horizontal=True, key="hist_tl_mostrar"
+        )
+        solo_dif_tl = tl_b.checkbox("Solo con diferencia", key="hist_tl_solo_dif")
+        vista_tl = linea_local
+        if mostrar_tl == "Solo cortes":
+            vista_tl = vista_tl[vista_tl["tipo"] == "Corte"]
+        elif mostrar_tl == "Solo entregas":
+            vista_tl = vista_tl[vista_tl["tipo"] == "Entrega"]
+        if solo_dif_tl:
+            vista_tl = vista_tl[vista_tl["estado"].str.contains("Diferencia|Cerró otro", regex=True)]
+
+        _sin_aut = vista_tl[~vista_tl["estado"].str.contains("Autorizado")]
+        mt1, mt2 = st.columns(2)
+        mt1.metric(
+            "Cortes: neto (a quien abrió)",
+            f"S/ {float(_sin_aut.loc[_sin_aut['tipo'] == 'Corte', 'diferencia'].fillna(0).sum()):+,.2f}",
+        )
+        mt2.metric(
+            "Entregas: neto (a quien cerró)",
+            f"S/ {float(_sin_aut.loc[_sin_aut['tipo'] == 'Entrega', 'diferencia'].fillna(0).sum()):+,.2f}",
+        )
+        st.dataframe(
+            sh.arrow_safe(
+                pd.DataFrame(
+                    {
+                        "Fecha": vista_tl["fecha"],
+                        "Hora": vista_tl["hora"],
+                        "Tipo": vista_tl["tipo"].map({"Corte": "💵 Corte", "Entrega": "🔁 Entrega"}),
+                        "Turno": vista_tl["turno"],
+                        "Detalle": vista_tl["detalle"],
+                        "Persona": vista_tl["persona"],
+                        "Fondo (S/)": [
+                            f"{a:,.2f} → {b:,.2f}" if pd.notna(a) and pd.notna(b) else ""
+                            for a, b in zip(vista_tl["fondo_ini"], vista_tl["fondo_fin"])
+                        ],
+                        "Diferencia (S/)": vista_tl["diferencia"],
+                        "Estado": vista_tl["estado"],
+                        "Observaciones": vista_tl["observaciones"],
+                    }
+                )
+            ),
+            width="stretch",
+            hide_index=True,
+            column_config={"Diferencia (S/)": st.column_config.NumberColumn(format="%+.2f")},
+        )
+        st.caption(
+            "🔷 Autorizado = administración ya registró un ajuste que explica la diferencia. Para ver "
+            "cada registro con sus billetes y fotos, usa «Detalle de registros»."
+        )
 
 with tab_acumulado:
     # -------------------------------------------------------------
