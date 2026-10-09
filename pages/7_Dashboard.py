@@ -2043,35 +2043,46 @@ with tab_incentivos:
 
                 medios_opc = ["Sin definir"] + sh.MEDIOS_PAGO_ENCUESTA
                 medio_actual = fila_encuesta["medio_pago"] or "Sin definir"
-                nuevo_medio = st.selectbox(
-                    "Forma de pago",
-                    medios_opc,
-                    index=medios_opc.index(medio_actual) if medio_actual in medios_opc else 0,
-                    key=f"medio_{fila_encuesta['id']}",
-                )
-                if nuevo_medio != medio_actual and nuevo_medio != "Sin definir":
-                    sh.actualizar_medio_pago(fila_encuesta["id"], nuevo_medio)
-                    st.rerun()
-
                 estado_actual = fila_encuesta["estado_pago"]
                 if estado_actual not in ESTADOS_PAGO_ENCUESTA:
                     estado_actual = "Pendiente"
-                nuevo_estado = st.selectbox(
-                    "Estado",
-                    ESTADOS_PAGO_ENCUESTA,
-                    index=ESTADOS_PAGO_ENCUESTA.index(estado_actual),
-                    key=f"estado_{fila_encuesta['id']}",
-                )
-                if nuevo_estado != estado_actual:
-                    if nuevo_estado == "Pagada" and fila_encuesta["estado_nota"] != "Aprobado":
+
+                # Los dos campos se guardan JUNTOS con un solo boton: asi cambiar
+                # uno no recarga toda la pagina (ni vuelve a leer Google Sheets)
+                # antes de poder cambiar el otro.
+                with st.form(f"form_enc_{fila_encuesta['id']}"):
+                    nuevo_medio = st.selectbox(
+                        "Forma de pago",
+                        medios_opc,
+                        index=medios_opc.index(medio_actual) if medio_actual in medios_opc else 0,
+                        key=f"medio_{fila_encuesta['id']}",
+                    )
+                    nuevo_estado = st.selectbox(
+                        "Estado",
+                        ESTADOS_PAGO_ENCUESTA,
+                        index=ESTADOS_PAGO_ENCUESTA.index(estado_actual),
+                        key=f"estado_{fila_encuesta['id']}",
+                    )
+                    guardar_enc = st.form_submit_button("Guardar cambios")
+                if guardar_enc:
+                    cambio_medio = nuevo_medio != medio_actual and nuevo_medio != "Sin definir"
+                    cambio_estado = nuevo_estado != estado_actual
+                    if cambio_estado and nuevo_estado == "Pagada" and fila_encuesta["estado_nota"] != "Aprobado":
                         st.error(
                             "No se puede marcar como pagada: la nota del local en "
                             f"{fila_encuesta['mes']} está «{fila_encuesta['estado_nota']}» "
                             f"(la nota mínima para pagar es {sh.UMBRAL_NOTA_LOCAL})."
                         )
-                    else:
-                        sh.actualizar_estado_pago(fila_encuesta["id"], nuevo_estado)
+                    elif cambio_medio or cambio_estado:
+                        sh.actualizar_encuesta(
+                            fila_encuesta["id"],
+                            estado_pago=nuevo_estado if cambio_estado else None,
+                            medio_pago=nuevo_medio if cambio_medio else None,
+                        )
+                        st.success("Guardado.")
                         st.rerun()
+                    else:
+                        st.info("No hay cambios para guardar.")
 
 
 with tab_personal:
