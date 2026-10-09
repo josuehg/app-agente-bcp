@@ -65,7 +65,8 @@ with st.sidebar:
     fecha_min, fecha_max = df["fecha"].min(), df["fecha"].max()
     rango = st.date_input(
         "Rango de fechas",
-        value=(max(fecha_min, sh.hoy_local() - timedelta(days=30)), fecha_max),
+        # Por defecto, desde el 1 del mes actual (sin salirse del rango con datos).
+        value=(max(fecha_min, min(sh.hoy_local().replace(day=1), fecha_max)), fecha_max),
         min_value=fecha_min,
         max_value=fecha_max,
     )
