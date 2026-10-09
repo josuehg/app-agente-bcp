@@ -16,6 +16,8 @@ trabajador puede registrar una encuesta nueva y ver el estado (Pendiente
 / Pagada) de las de su local, pero no puede cambiarlo.
 """
 
+from datetime import timedelta
+
 import streamlit as st
 from googleapiclient.errors import HttpError
 
@@ -82,6 +84,24 @@ if _propios or _otros:
 else:
     nombre = st.text_input("Ingrese su nombre", key=f"encuesta_nombre_{v}")
 nota = st.radio("Nota que puso el cliente", ["9", "10"], horizontal=True, key=f"encuesta_nota_{v}")
+# La fecha que cuenta es la de la ENCUESTA (la que figura en el correo), no
+# la de hoy: de ella depende a que mes y a que nota NPS pertenece. Antes se
+# guardaba el dia en que se subia, y una encuesta de un mes pasado caia en el
+# mes equivocado.
+_hoy_enc = sh.hoy_local()
+fecha_encuesta = st.date_input(
+    "Fecha de la encuesta (la que figura en el correo)",
+    value=_hoy_enc,
+    min_value=_hoy_enc - timedelta(days=92),
+    max_value=_hoy_enc,
+    key=f"encuesta_fecha_{v}",
+    help="No es la fecha de hoy: es el día en que el cliente respondió la encuesta.",
+)
+if (fecha_encuesta.year, fecha_encuesta.month) != (_hoy_enc.year, _hoy_enc.month):
+    st.warning(
+        f"Esta encuesta es de **{fecha_encuesta.strftime('%m/%Y')}**, un mes anterior: se contará para la "
+        "nota NPS de ese mes. Verifica que la fecha coincida con la captura del correo."
+    )
 medio_pago = st.radio(
     "Forma de pago del incentivo",
     sh.MEDIOS_PAGO_ENCUESTA,
@@ -140,6 +160,7 @@ def _dialogo_confirmar_encuesta():
     st.markdown(
         f"""
 - **Nombre:** {nombre.strip()}
+- **Fecha de la encuesta:** {fecha_encuesta.strftime('%d/%m/%Y')}
 - **Nota:** {nota}
 - **Incentivo:** S/ 10
 - **Forma de pago:** {medio_pago}
@@ -173,7 +194,7 @@ def _dialogo_confirmar_encuesta():
                 datos = {
                     "id": sh.nuevo_id(),
                     "timestamp": ahora.replace(tzinfo=None).isoformat(timespec="seconds"),
-                    "fecha": ahora.date().isoformat(),
+                    "fecha": fecha_encuesta.isoformat(),
                     "local": local,
                     "nombre": nombre.strip(),
                     "nota": nota,
@@ -269,9 +290,10 @@ else:
 
     st.dataframe(
         sh.arrow_safe(
-            df_local[["fecha", "nombre", "nota", "incentivo", "medio_pago", "estado_visible"]].rename(
+            df_local[["fecha", "timestamp", "nombre", "nota", "incentivo", "medio_pago", "estado_visible"]].rename(
                 columns={
-                    "fecha": "Fecha",
+                    "fecha": "Fecha de la encuesta",
+                    "timestamp": "Subida el",
                     "nombre": "Nombre",
                     "nota": "Nota",
                     "incentivo": "Incentivo (S/)",

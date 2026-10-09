@@ -2016,8 +2016,13 @@ with tab_incentivos:
 
         st.markdown("**Detalle de encuestas (ver capturas y cambiar estado):**")
         for _, fila_encuesta in encuestas_df.sort_values("timestamp", ascending=False).iterrows():
+            _sube = fila_encuesta["timestamp"]
+            _otro_mes = pd.notna(_sube) and (_sube.year, _sube.month) != (
+                fila_encuesta["fecha"].year, fila_encuesta["fecha"].month
+            )
             titulo_encuesta = (
-                f"{fila_encuesta['fecha']} · {fila_encuesta['local']} · {fila_encuesta['nombre']} "
+                f"{'⚠️ ' if _otro_mes else ''}{fila_encuesta['fecha']} · {fila_encuesta['local']} · "
+                f"{fila_encuesta['nombre']} "
                 f"· Nota {fila_encuesta['nota']} · {fila_encuesta['estado_visible']} "
                 f"· {fila_encuesta['medio_pago'] or 'Sin forma de pago'}"
             )
@@ -2041,6 +2046,15 @@ with tab_incentivos:
                     else:
                         st.caption(f"{etiqueta}: no se pudo cargar.")
 
+                st.caption(
+                    f"Fecha de la encuesta (la que declaró quien la subió): **{fila_encuesta['fecha']}** · "
+                    f"subida el {_sube:%Y-%m-%d %H:%M}"
+                    + (
+                        " · ⚠️ **es de un mes distinto al de la subida: verifícala con la captura del correo**"
+                        if _otro_mes
+                        else ""
+                    )
+                )
                 medios_opc = ["Sin definir"] + sh.MEDIOS_PAGO_ENCUESTA
                 medio_actual = fila_encuesta["medio_pago"] or "Sin definir"
                 estado_actual = fila_encuesta["estado_pago"]
