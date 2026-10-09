@@ -938,7 +938,7 @@ def guardar_encuesta(datos: dict) -> None:
 @st.cache_data(ttl=30, show_spinner=False)
 def get_encuestas_df() -> pd.DataFrame:
     ws = _get_or_create_worksheet(NOMBRE_HOJA_ENCUESTAS, COLUMNAS_ENCUESTAS)
-    registros = ws.get_all_records()
+    registros = ws.get_all_records(numericise_ignore=["all"])
     df = pd.DataFrame(registros, columns=COLUMNAS_ENCUESTAS)
     if df.empty:
         return df
@@ -1127,23 +1127,32 @@ def get_ayuda_df() -> pd.DataFrame:
     return df if df.empty else _texto_seguro(df, set())
 
 
-def actualizar_estado_pago(id_encuesta: str, nuevo_estado: str) -> None:
-    """Cambia el estado de pago ('Pendiente' / 'Pagada') de UNA encuesta,
-    buscandola por su id. La usa el Dashboard del dueno cuando marca que
-    ya le pago el incentivo a alguien (o si se equivoco, para revertirlo).
-    """
-    ws = _get_or_create_worksheet(NOMBRE_HOJA_ENCUESTAS, COLUMNAS_ENCUESTAS)
-    columna_id = COLUMNAS_ENCUESTAS.index("id") + 1
-    # En gspread 6.x, ws.find() devuelve None si no encuentra la celda (ya
-    # no lanza la excepcion CellNotFound, que fue eliminada). Si el id no
-    # existe -- por ejemplo, la fila se borro a mano del Sheet -- no hay
-    # nada que actualizar y salimos sin error.
-    celda = ws.find(id_encuesta, in_column=columna_id)
-    if celda is None:
-        return
-    columna_estado = COLUMNAS_ENCUESTAS.index("estado_pago") + 1
-    ws.update_cell(celda.row, columna_estado, nuevo_estado)
-    get_encuestas_df.clear()
+def _fila_de_id(ws, id_valor, columna: int = 1) -> int:
+    """Numero de fila (1-based) cuyo id coincide. Compara TEXTO contra TEXTO
+    leyendo la columna completa: la busqueda con ws.find() fallaba en silencio
+    con ids que parecen numeros ("1234567890", "1234e56789"), y entonces la app
+    decia "Guardado" sin haber guardado nada."""
+    objetivo = str(id_valor).strip()
+    for numero, valor in enumerate(ws.col_values(columna), start=1):
+        if str(valor).strip() == objetivo:
+            return numero
+    raise ValueError(f"No se encontró la encuesta {objetivo} en la hoja (¿se borró la fila?).")
+
+
+def _escribir_y_confirmar(ws, cambios: list[dict]) -> None:
+    """Escribe celdas como TEXTO (sin que Sheets reinterprete fechas ni
+    numeros) y las vuelve a leer: si no coinciden, avisa en vez de dar por
+    bueno un guardado que no ocurrio."""
+    ws.batch_update(cambios, raw=True)
+    leidos = ws.batch_get([c["range"] for c in cambios])
+    for cambio, leido in zip(cambios, leidos):
+        esperado = str(cambio["values"][0][0]).strip()
+        actual = str(leido[0][0]).strip() if leido and leido[0] else ""
+        if esperado != actual:
+            raise RuntimeError(
+                f"No se pudo confirmar el guardado en {cambio['range']}: se esperaba «{esperado}» "
+                f"y la hoja tiene «{actual}»."
+            )
 
 
 def actualizar_encuesta(
@@ -1154,12 +1163,10 @@ def actualizar_encuesta(
     observaciones: str | None = None,
 ) -> None:
     """Guarda en UNA sola operacion el estado de pago, la forma de pago, la
-    fecha y/o las observaciones de una encuesta (una busqueda y una escritura,
-    en vez de una por campo)."""
+    fecha y/o las observaciones de una encuesta. Si no encuentra la fila o la
+    hoja no refleja lo escrito, LANZA un error (nunca un 'guardado' falso)."""
     ws = _get_or_create_worksheet(NOMBRE_HOJA_ENCUESTAS, COLUMNAS_ENCUESTAS)
-    celda = ws.find(id_encuesta, in_column=COLUMNAS_ENCUESTAS.index("id") + 1)
-    if celda is None:
-        return
+    fila = _fila_de_id(ws, id_encuesta, COLUMNAS_ENCUESTAS.index("id") + 1)
     cambios = []
     for columna, valor in (
         ("estado_pago", estado_pago),
@@ -1168,21 +1175,21 @@ def actualizar_encuesta(
         ("observaciones", observaciones),
     ):
         if valor is not None:
-            a1 = gspread.utils.rowcol_to_a1(celda.row, COLUMNAS_ENCUESTAS.index(columna) + 1)
+            a1 = gspread.utils.rowcol_to_a1(fila, COLUMNAS_ENCUESTAS.index(columna) + 1)
             cambios.append({"range": a1, "values": [[valor]]})
     if cambios:
-        ws.batch_update(cambios)
+        _escribir_y_confirmar(ws, cambios)
         get_encuestas_df.clear()
+
+
+def actualizar_estado_pago(id_encuesta: str, nuevo_estado: str) -> None:
+    """Cambia el estado de pago ('Pendiente' / 'Pagada') de UNA encuesta."""
+    actualizar_encuesta(id_encuesta, estado_pago=nuevo_estado)
 
 
 def actualizar_medio_pago(id_encuesta: str, medio: str) -> None:
     """Cambia como se paga el incentivo de UNA encuesta ('Efectivo' / 'Yape')."""
-    ws = _get_or_create_worksheet(NOMBRE_HOJA_ENCUESTAS, COLUMNAS_ENCUESTAS)
-    celda = ws.find(id_encuesta, in_column=COLUMNAS_ENCUESTAS.index("id") + 1)
-    if celda is None:
-        return
-    ws.update_cell(celda.row, COLUMNAS_ENCUESTAS.index("medio_pago") + 1, medio)
-    get_encuestas_df.clear()
+    actualizar_encuesta(id_encuesta, medio_pago=medio)
 
 
 # ---------------------------------------------------------------------

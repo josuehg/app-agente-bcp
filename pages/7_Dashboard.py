@@ -1894,6 +1894,8 @@ with tab_incentivos:
     # sin que tu lo hayas revisado.
     # -------------------------------------------------------------
     st.subheader("⭐ Incentivos por encuestas NPS (S/ 10 c/u)")
+    if "msg_enc_guardada" in st.session_state:
+        st.toast(st.session_state.pop("msg_enc_guardada"), icon="✅")
 
     ESTADOS_PAGO_ENCUESTA = ["Pendiente", "Pagada", "No válido"]
 
@@ -2106,20 +2108,33 @@ with tab_incentivos:
                             f"(la nota mínima para pagar es {sh.UMBRAL_NOTA_LOCAL})."
                         )
                     elif cambio_medio or cambio_estado or cambio_fecha:
-                        sh.actualizar_encuesta(
-                            fila_encuesta["id"],
-                            estado_pago=nuevo_estado if cambio_estado else None,
-                            medio_pago=nuevo_medio if cambio_medio else None,
-                            fecha=nueva_fecha.isoformat() if cambio_fecha else None,
-                            observaciones=(
-                                (str(fila_encuesta["observaciones"] or "").strip() + " | ").lstrip(" |")
-                                + f"Fecha corregida por administración de {fila_encuesta['fecha']} a {nueva_fecha}"
-                                if cambio_fecha
-                                else None
-                            ),
-                        )
-                        st.success("Guardado.")
-                        st.rerun()
+                        try:
+                            sh.actualizar_encuesta(
+                                fila_encuesta["id"],
+                                estado_pago=nuevo_estado if cambio_estado else None,
+                                medio_pago=nuevo_medio if cambio_medio else None,
+                                fecha=nueva_fecha.isoformat() if cambio_fecha else None,
+                                observaciones=(
+                                    (str(fila_encuesta["observaciones"] or "").strip() + " | ").lstrip(" |")
+                                    + f"Fecha corregida por administración de {fila_encuesta['fecha']} a {nueva_fecha}"
+                                    if cambio_fecha
+                                    else None
+                                ),
+                            )
+                        except (ValueError, RuntimeError) as error:
+                            st.error(f"No se guardó: {error}")
+                        else:
+                            _partes = []
+                            if cambio_medio:
+                                _partes.append(f"forma de pago: {nuevo_medio}")
+                            if cambio_estado:
+                                _partes.append(f"estado: {nuevo_estado}")
+                            if cambio_fecha:
+                                _partes.append(f"fecha: {nueva_fecha}")
+                            st.session_state["msg_enc_guardada"] = (
+                                f"Guardado y confirmado en la hoja ({', '.join(_partes)})."
+                            )
+                            st.rerun()
                     else:
                         st.info("No hay cambios para guardar.")
 
