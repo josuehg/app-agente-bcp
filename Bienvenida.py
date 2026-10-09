@@ -84,13 +84,13 @@ def mostrar_bienvenida():
 
         **Si trabajas en tienda:**
         - **Registro**: registra la Apertura o el Cierre de caja de tu turno.
-        - **Historial**: revisa los registros y fotos de tu local, para controlarse entre el equipo.
-        - **Encuestas**: registra las encuestas NPS calificadas con 9 o 10 (incentivo de S/ 10).
+        - **Historial**: revisa la línea de tiempo de tu local (cortes y entregas de caja), las diferencias por persona y los registros con sus fotos.
+        - **Encuestas**: registra las encuestas NPS calificadas con 9 o 10 (incentivo de S/ 10, sujeto a la nota NPS mensual del local).
         - **Campañas**: revisa las campañas vigentes del BCP.
         - **Ayuda**: videos cortos y guias sobre como usar la app y el equipo.
 
         **Si eres administración:**
-        - **Dashboard**: consolidado de todos los locales, alertas de fondo, cuadre por turno, comisiones estimadas e incentivos pendientes de pago (pide PIN, organizado en pestañas). Lo encuentras aparte, abajo del todo en el menu.
+        - **Dashboard**: consolidado de todos los locales, alertas de fondo, línea de tiempo y autorización de diferencias, liquidación por trabajador, balance por sucursal, comisiones, incentivos de encuestas y personal (pide PIN, organizado en pestañas). Lo encuentras aparte, abajo del todo en el menu.
         """
     )
 

@@ -163,11 +163,11 @@ def _comparar_par(row_izq, row_der, label_izq="Apertura", label_der="Cierre"):
 # ---------------------------------------------------------------------
 (
     tab_resumen, tab_cuadre, tab_liquidacion, tab_sucursales, tab_operaciones,
-    tab_comisiones, tab_incentivos, tab_registros, tab_personal,
+    tab_comisiones, tab_incentivos, tab_registros, tab_personal, tab_respaldo,
 ) = st.tabs(
     [
         "🏠 Resumen", "🔍 Cuadre", "🧾 Liquidación", "🏪 Sucursales", "📈 Operaciones",
-        "💰 Comisiones", "⭐ Incentivos", "🗂️ Registros", "👥 Personal",
+        "💰 Comisiones", "⭐ Incentivos", "🗂️ Registros", "👥 Personal", "💾 Respaldo",
     ]
 )
 
@@ -1926,6 +1926,43 @@ with tab_registros:
             for col in columnas_fotos:
                 if fila[col]:
                     st.markdown(f"- [{col}]({fila[col]})")
+
+with tab_respaldo:
+    # -------------------------------------------------------------
+    # Respaldo: una copia del Google Sheet en Drive (con fecha y hora) y/o un
+    # ZIP de CSV para guardar en tu computador. Se hace a pedido, para no gastar
+    # lecturas de Google Sheets en cada recarga.
+    # -------------------------------------------------------------
+    st.subheader("💾 Respaldo de los datos")
+    st.caption(
+        "Haz una copia antes de cambios grandes y, como hábito, al cerrar cada mes. "
+        "El respaldo en Drive es una copia completa del Google Sheet; el ZIP trae los registros, "
+        "ajustes, encuestas, notas y personal en CSV (no incluye los PIN de los locales)."
+    )
+    rb1, rb2 = st.columns(2)
+    if rb1.button("Crear respaldo en Drive ahora", key="respaldo_drive"):
+        try:
+            with st.spinner("Copiando el Google Sheet…"):
+                _copia = sh.crear_respaldo_drive()
+            st.success(f"Respaldo creado: {_copia['name']}")
+            if _copia.get("webViewLink"):
+                st.markdown(f"[Abrir el respaldo]({_copia['webViewLink']})")
+        except Exception as error:
+            st.error(f"No se pudo crear el respaldo: {error}")
+    if rb2.button("Preparar descarga (ZIP de CSV)", key="respaldo_zip"):
+        try:
+            with st.spinner("Armando el ZIP…"):
+                st.session_state["respaldo_zip_bytes"] = sh.respaldo_zip_csv()
+        except Exception as error:
+            st.error(f"No se pudo preparar el ZIP: {error}")
+    if "respaldo_zip_bytes" in st.session_state:
+        st.download_button(
+            "Descargar respaldo (ZIP)",
+            data=st.session_state["respaldo_zip_bytes"],
+            file_name=f"respaldo_agente_bcp_{sh.hoy_local()}.zip",
+            mime="application/zip",
+        )
+
 
 with tab_incentivos:
     # -------------------------------------------------------------

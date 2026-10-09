@@ -1086,6 +1086,55 @@ def get_notas_df() -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------
+# Respaldo de los datos
+# ---------------------------------------------------------------------
+def _hojas_respaldo() -> list:
+    return [
+        (NOMBRE_HOJA_REGISTROS, COLUMNAS_REGISTROS),
+        (NOMBRE_HOJA_AJUSTES, COLUMNAS_AJUSTES),
+        (NOMBRE_HOJA_ENCUESTAS, COLUMNAS_ENCUESTAS),
+        (NOMBRE_HOJA_NOTAS, COLUMNAS_NOTAS),
+        (NOMBRE_HOJA_PERSONAL, COLUMNAS_PERSONAL),
+    ]
+
+
+def crear_respaldo_drive() -> dict:
+    """Copia el Google Sheet completo a la carpeta de Drive de la app, con fecha
+    y hora en el nombre. Devuelve {'id', 'name', 'webViewLink'}."""
+    service = _get_drive_service()
+    cuerpo = {"name": f"Respaldo Agente BCP {ahora_local():%Y-%m-%d %H%M}"}
+    carpeta = st.secrets.get("drive_folder_id")
+    if carpeta:
+        cuerpo["parents"] = [carpeta]
+    return (
+        service.files()
+        .copy(
+            fileId=st.secrets["spreadsheet_id"],
+            body=cuerpo,
+            fields="id,name,webViewLink",
+            supportsAllDrives=True,
+        )
+        .execute(num_retries=3)
+    )
+
+
+def respaldo_zip_csv() -> bytes:
+    """ZIP con un CSV por hoja de datos (registros, ajustes, encuestas, notas y
+    personal). NO incluye 'Config' (trae los PIN de los locales)."""
+    import csv
+    import zipfile
+
+    memoria = io.BytesIO()
+    with zipfile.ZipFile(memoria, "w", zipfile.ZIP_DEFLATED) as zf:
+        for nombre, columnas in _hojas_respaldo():
+            filas = _get_or_create_worksheet(nombre, columnas).get_all_values()
+            texto = io.StringIO()
+            csv.writer(texto).writerows(filas)
+            zf.writestr(f"{nombre}.csv", "\ufeff" + texto.getvalue())
+    return memoria.getvalue()
+
+
+# ---------------------------------------------------------------------
 # Campañas del BCP (informativo, lo administra el dueno directo en la
 # hoja "Campañas": titulo, descripcion, fecha_inicio, fecha_fin, link).
 # No hay funcion para "guardar" desde la app a proposito -- es contenido

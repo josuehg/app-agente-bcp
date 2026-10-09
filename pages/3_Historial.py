@@ -243,6 +243,17 @@ with tab_linea:
         if not cont_local_df.empty and "_id_cierre" in cont_local_df.columns
         else {}
     )
+    # Aviso de turnos con un corte sin cerrar (antes salia como "Revisar secuencia"
+    # en el resumen por turno).
+    _abiertos = cortes[cortes["estado"].astype(str).str.contains("sin Cierre")] if not cortes.empty else cortes
+    if not _abiertos.empty:
+        _lista = ", ".join(
+            f"{r.fecha} {r.hora_apertura} ({r.turno}, abrió {r.nombre})" for r in _abiertos.itertuples()
+        )
+        st.warning(
+            f"⏳ Tienes {len(_abiertos)} corte(s) sin cerrar: {_lista}. "
+            "Recuerda registrar el Cierre en «Registro»."
+        )
     linea_local = sh.linea_de_tiempo(cortes.assign(local=local), saltos_local, _estado_por_salto_local)
     if not linea_local.empty:
         linea_local = linea_local[linea_local["turno"].isin(turnos_sel)]
