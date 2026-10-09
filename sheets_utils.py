@@ -53,6 +53,7 @@ from cuadre import (  # noqa: F401  (re-export para el resto de la app)
     calcular_saltos,
     creditos_repuso,
     items_ticket,
+    linea_de_tiempo,
     clave_alias,
     conflictos_alias,
     mapa_alias,

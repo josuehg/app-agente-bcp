@@ -577,6 +577,10 @@ with tab_resumen:
             )
 
 with tab_cuadre:
+    # Lugar RESERVADO para la linea de tiempo: va primero en la pestaña, pero
+    # se llena mas abajo, cuando cortes/saltos/estados ya estan calculados.
+    bloque_linea = st.container()
+
     # -------------------------------------------------------------
     # Continuidad: CUALQUIER salto Cierre -> Apertura siguiente, por
     # local, en orden cronologico -- sea dentro del mismo turno (corte
@@ -942,6 +946,99 @@ with tab_cuadre:
             ],
             "estado",
         ] = "🔷 Autorizado"
+
+    # -------------------------------------------------------------
+    # Linea de tiempo por sucursal (se dibuja ARRIBA, en bloque_linea):
+    # cortes y entregas intercalados en orden cronologico. Solo lectura: la
+    # autorizacion sigue en los formularios de Continuidad y Cuadre por turno.
+    # -------------------------------------------------------------
+    with bloque_linea:
+        st.subheader("🧭 Línea de tiempo por sucursal")
+        st.caption(
+            "Los cortes (lo que pasa dentro de un turno) y las entregas (el hueco entre un Cierre y la "
+            "siguiente Apertura) en orden de hora. El corte se le carga a quien abrió; la entrega, a "
+            "quien cerró. Para autorizar una diferencia usa los formularios de más abajo."
+        )
+        _estado_por_salto = (
+            dict(zip(cont_df["_id_cierre"], cont_df["Estado"])) if not cont_df.empty else {}
+        )
+        linea = sh.linea_de_tiempo(cortes, saltos, _estado_por_salto)
+        if linea.empty:
+            st.caption("No hay cortes ni entregas en el rango seleccionado.")
+        else:
+            tl1, tl2, tl3 = st.columns([2, 3, 2])
+            local_tl = tl1.selectbox("Sucursal", sorted(linea["local"].unique()), key="tl_local")
+            mostrar_tl = tl2.radio(
+                "Mostrar", ["Todo", "Solo cortes", "Solo entregas"], horizontal=True, key="tl_mostrar"
+            )
+            solo_dif_tl = tl3.checkbox("Solo con diferencia", key="tl_solo_dif")
+
+            vista_tl = linea[linea["local"] == local_tl]
+            if mostrar_tl == "Solo cortes":
+                vista_tl = vista_tl[vista_tl["tipo"] == "Corte"]
+            elif mostrar_tl == "Solo entregas":
+                vista_tl = vista_tl[vista_tl["tipo"] == "Entrega"]
+            if solo_dif_tl:
+                vista_tl = vista_tl[vista_tl["estado"].str.contains("Diferencia|Cerró otro", regex=True)]
+
+            _sin_aut = vista_tl[~vista_tl["estado"].str.contains("Autorizado")]
+            _neto_c = float(_sin_aut.loc[_sin_aut["tipo"] == "Corte", "diferencia"].fillna(0).sum())
+            _neto_e = float(_sin_aut.loc[_sin_aut["tipo"] == "Entrega", "diferencia"].fillna(0).sum())
+            mt1, mt2 = st.columns(2)
+            mt1.metric("Cortes: neto (a quien abrió)", f"S/ {_neto_c:+,.2f}")
+            mt2.metric("Entregas: neto (a quien cerró)", f"S/ {_neto_e:+,.2f}")
+
+            tabla_tl = pd.DataFrame(
+                {
+                    "Fecha": vista_tl["fecha"],
+                    "Hora": vista_tl["hora"],
+                    "Tipo": vista_tl["tipo"].map({"Corte": "💵 Corte", "Entrega": "🔁 Entrega"}),
+                    "Turno": vista_tl["turno"],
+                    "Detalle": vista_tl["detalle"],
+                    "Persona": vista_tl["persona"],
+                    "Fondo (S/)": [
+                        f"{a:,.2f} → {b:,.2f}" if pd.notna(a) and pd.notna(b) else ""
+                        for a, b in zip(vista_tl["fondo_ini"], vista_tl["fondo_fin"])
+                    ],
+                    "Diferencia (S/)": vista_tl["diferencia"],
+                    "Estado": vista_tl["estado"],
+                    "Observaciones": vista_tl["observaciones"],
+                }
+            )
+            st.dataframe(
+                sh.arrow_safe(tabla_tl),
+                width="stretch",
+                hide_index=True,
+                column_config={"Diferencia (S/)": st.column_config.NumberColumn(format="%+.2f")},
+            )
+
+            con_dif_tl = vista_tl[vista_tl["estado"].str.contains("Diferencia|Cerró otro", regex=True)]
+            if not con_dif_tl.empty:
+                etiquetas_tl = [
+                    f"{r.fecha} {r.hora} · {r.tipo} · {r.persona} · {r.diferencia:+,.2f}"
+                    for r in con_dif_tl.itertuples()
+                ]
+                sel_tl = st.selectbox(
+                    "Ver el detalle de una fila con diferencia", ["—"] + etiquetas_tl, key="tl_detalle"
+                )
+                if sel_tl != "—":
+                    fila_tl = con_dif_tl.iloc[etiquetas_tl.index(sel_tl)]
+                    if fila_tl["observaciones"]:
+                        st.caption(f"Observaciones: {fila_tl['observaciones']}")
+                    if fila_tl["id_a"] in _registros_por_id.index and fila_tl["id_b"] in _registros_por_id.index:
+                        if fila_tl["tipo"] == "Corte":
+                            _comparar_par(_registros_por_id.loc[fila_tl["id_a"]], _registros_por_id.loc[fila_tl["id_b"]])
+                        else:
+                            _comparar_par(
+                                _registros_por_id.loc[fila_tl["id_a"]],
+                                _registros_por_id.loc[fila_tl["id_b"]],
+                                "Cierre",
+                                "Apertura siguiente",
+                            )
+                    st.caption(
+                        "Para autorizarla: «Continuidad» (entregas) o «Registrar retiro/ingreso autorizado "
+                        "de un turno» (cortes), más abajo en esta pestaña."
+                    )
 
     st.dataframe(
         sh.arrow_safe(

@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 from cuadre import (
+    linea_de_tiempo,
     sugerir_oficial,
     politica_sucursal,
     estado_visible,
@@ -506,3 +507,33 @@ def test_alias_explicito_gana_y_se_detectan_conflictos():
         ]
     )
     assert conflictos_alias(dos_anas) == []
+
+
+def test_linea_de_tiempo_intercala_cortes_y_entregas():
+    from datetime import date
+
+    cortes = pd.DataFrame(
+        [
+            {"local": "L1", "fecha": date(2026, 10, 2), "turno": "Mañana", "corte": 1, "nombre": "Ana",
+             "nombre_cierre": "Ana", "hora_apertura": "08:00", "hora_cierre": "13:00", "apertura": 100.0,
+             "cierre": 99.0, "diferencia": -1.0, "estado": "✅ Cuadrado", "observaciones": "", "id_apertura": "a1", "id_cierre": "c1"},
+            {"local": "L1", "fecha": date(2026, 10, 2), "turno": "Tarde", "corte": 1, "nombre": "Beto",
+             "nombre_cierre": "Cris", "hora_apertura": "13:05", "hora_cierre": "20:00", "apertura": 99.0,
+             "cierre": 150.0, "diferencia": 51.0, "estado": "🔴 Diferencia", "observaciones": "x", "id_apertura": "a2", "id_cierre": "c2"},
+        ]
+    )
+    saltos = pd.DataFrame(
+        [
+            {"local": "L1", "fecha_cierre": date(2026, 10, 2), "hora_cierre": "13:00", "turno_cierre": "Mañana",
+             "turno_apertura": "Tarde", "tipo_salto": "Entre turnos", "nombre_cierre": "Ana", "nombre_apertura": "Beto",
+             "cierre": 99.0, "apertura": 99.0, "diferencia": 0.0, "id_cierre": "c1", "id_apertura": "a2"},
+            {"local": "L1", "fecha_cierre": date(2026, 10, 2), "hora_cierre": "20:00", "turno_cierre": "Tarde",
+             "turno_apertura": "Mañana", "tipo_salto": "Entre días", "nombre_cierre": "Cris", "nombre_apertura": "Dora",
+             "cierre": 150.0, "apertura": 140.0, "diferencia": -10.0, "id_cierre": "c2", "id_apertura": "a3"},
+        ]
+    )
+    t = linea_de_tiempo(cortes, saltos, {"c1": "✅ Coincide"})  # c2 queda fuera del rango
+    assert list(t["tipo"]) == ["Corte", "Entrega", "Corte"]
+    assert t.loc[2, "persona"] == "Beto (cerró Cris)"
+    assert t.loc[1, "detalle"] == "Entre turnos: Mañana → Tarde"
+    assert linea_de_tiempo(None, None, {}).empty

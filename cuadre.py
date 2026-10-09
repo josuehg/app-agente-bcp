@@ -830,3 +830,70 @@ def politica_sucursal(items, ops_por_local: dict, tasa: float, piso: float, tope
         pd.DataFrame(reparto, columns=COLUMNAS_POL_REPARTO),
         grandes,
     )
+
+
+# ---------------------------------------------------------------------
+# Linea de tiempo: cortes (lo que pasa DENTRO de un turno) y entregas (el
+# hueco ENTRE un Cierre y la Apertura siguiente) intercalados en orden
+# cronologico. Es solo una forma de VERLOS: cada tipo conserva su propia
+# atribucion (cortes -> quien abrio, entregas -> quien cerro) y sus totales.
+# ---------------------------------------------------------------------
+COLUMNAS_LINEA = [
+    "local", "orden", "fecha", "hora", "tipo", "turno", "detalle", "persona",
+    "fondo_ini", "fondo_fin", "diferencia", "estado", "observaciones", "id_a", "id_b",
+]
+
+
+def _momento(fecha, hhmm) -> pd.Timestamp:
+    base = pd.Timestamp(fecha)
+    try:
+        h, m = str(hhmm).split(":")[:2]
+        return base + pd.Timedelta(hours=int(h), minutes=int(m))
+    except (ValueError, TypeError):
+        return base
+
+
+def linea_de_tiempo(cortes: pd.DataFrame, saltos: pd.DataFrame, estado_por_salto: dict) -> pd.DataFrame:
+    """Una fila por corte y por entrega. `estado_por_salto` es {id_cierre: estado}
+    ya con los ajustes aplicados; solo entran las entregas que estan ahi (las
+    del rango filtrado)."""
+    filas = []
+    if cortes is not None and not cortes.empty:
+        for _, c in cortes.iterrows():
+            nombre = str(c.get("nombre", "")).strip()
+            cerro = str(c.get("nombre_cierre", "")).strip()
+            persona = nombre + (f" (cerró {cerro})" if cerro and cerro.lower() != nombre.lower() else "")
+            filas.append(
+                {
+                    "local": c["local"], "orden": _momento(c["fecha"], c.get("hora_apertura")),
+                    "fecha": c["fecha"], "hora": c.get("hora_apertura", ""), "tipo": "Corte",
+                    "turno": c["turno"],
+                    "detalle": f"Corte {c['corte']} · {c.get('hora_apertura', '')} → {c.get('hora_cierre') or 'sin cerrar'}",
+                    "persona": persona, "fondo_ini": c["apertura"], "fondo_fin": c["cierre"],
+                    "diferencia": c["diferencia"], "estado": c["estado"],
+                    "observaciones": c.get("observaciones", ""),
+                    "id_a": c.get("id_apertura", ""), "id_b": c.get("id_cierre", ""),
+                }
+            )
+    if saltos is not None and not saltos.empty:
+        for _, s in saltos.iterrows():
+            if s["id_cierre"] not in estado_por_salto:
+                continue
+            filas.append(
+                {
+                    "local": s["local"], "orden": _momento(s["fecha_cierre"], s.get("hora_cierre")),
+                    "fecha": s["fecha_cierre"], "hora": s.get("hora_cierre", ""), "tipo": "Entrega",
+                    "turno": s["turno_cierre"],
+                    "detalle": f"{s['tipo_salto']}: {s['turno_cierre']} → {s['turno_apertura']}",
+                    "persona": f"{s['nombre_cierre']} → {s['nombre_apertura']}",
+                    "fondo_ini": s["cierre"], "fondo_fin": s["apertura"],
+                    "diferencia": s["diferencia"], "estado": estado_por_salto[s["id_cierre"]],
+                    "observaciones": "", "id_a": s["id_cierre"], "id_b": s["id_apertura"],
+                }
+            )
+    salida = pd.DataFrame(filas, columns=COLUMNAS_LINEA)
+    if salida.empty:
+        return salida
+    # Estable: si un corte y su entrega comparten minuto, primero el corte.
+    salida["_t"] = (salida["tipo"] == "Entrega").astype(int)
+    return salida.sort_values(["local", "orden", "_t"], kind="stable").drop(columns="_t").reset_index(drop=True)
