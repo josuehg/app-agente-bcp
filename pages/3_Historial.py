@@ -88,261 +88,151 @@ if df_local.empty:
     st.info("No hay registros de este local en el rango elegido (turno / días).")
     st.stop()
 
-tab_linea, tab_cuadre, tab_continuidad, tab_acumulado, tab_registros = st.tabs(
-    [
-        "🧭 Línea de tiempo", "🔍 Cuadre por turno", "🔗 Continuidad",
-        "👤 Acumulado por persona", "🗂️ Detalle de registros",
-    ]
+tab_linea, tab_acumulado, tab_registros = st.tabs(
+    ["🧭 Línea de tiempo", "👤 Diferencias por persona", "🗂️ Detalle de registros"]
 )
 
-with tab_cuadre:
-    # -------------------------------------------------------------
-    # Cuadre por turno: cada turno puede tener varios CORTES (cierres
-    # parciales). Mostramos cada corte con su diferencia y, arriba, el
-    # subtotal del turno (la suma de sus cortes). Le sirve al equipo para
-    # ver si un turno quedo sin cerrar o si algun corte salto de forma rara.
-    # -------------------------------------------------------------
-    st.subheader(f"Cuadre por turno — {local}")
+# ---------------------------------------------------------------------
+# Calculos del local (cortes, ajustes por turno y continuidad). Ya no tienen
+# pestaña propia: los usan la Linea de tiempo y las Diferencias por persona.
+# Siguen siendo SOLO LECTURA y solo el Estado (nunca motivo ni quien autorizo).
+# ---------------------------------------------------------------------
+cortes = sh.calcular_cortes(df_local, ["fecha", "turno"])
+resumen = sh.resumen_turnos(cortes, ["fecha", "turno"]).sort_values(
+    ["fecha", "turno"], ascending=[False, True]
+)
 
-    cortes = sh.calcular_cortes(df_local, ["fecha", "turno"])
-    resumen = sh.resumen_turnos(cortes, ["fecha", "turno"]).sort_values(
-        ["fecha", "turno"], ascending=[False, True]
+# Si administración ya registró un ajuste (retiro/ingreso autorizado)
+# para un turno, el estado pasa a "🔷 Autorizado" -- igual que en el
+# Dashboard. Aquí SOLO se muestra el estado: el motivo y quién autorizó
+# son información de administración, no se muestran en Historial.
+_ajustes_turno_local = sh.get_ajustes_df()
+if not _ajustes_turno_local.empty:
+    _ajustes_turno_local = _ajustes_turno_local[
+        (_ajustes_turno_local["local"] == local) & (_ajustes_turno_local["turno"] != "")
+    ]
+_turnos_autorizados_local = set()
+if not (resumen.empty or _ajustes_turno_local.empty):
+    _ajuste_por_fecha_turno = (
+        _ajustes_turno_local.groupby(["fecha", "turno"])["monto"].sum().to_dict()
     )
 
-    # Si administración ya registró un ajuste (retiro/ingreso autorizado)
-    # para un turno, el estado pasa a "🔷 Autorizado" -- igual que en el
-    # Dashboard. Aquí SOLO se muestra el estado: el motivo y quién autorizó
-    # son información de administración, no se muestran en Historial.
-    _ajustes_turno_local = sh.get_ajustes_df()
-    if not _ajustes_turno_local.empty:
-        _ajustes_turno_local = _ajustes_turno_local[
-            (_ajustes_turno_local["local"] == local) & (_ajustes_turno_local["turno"] != "")
-        ]
-    _turnos_autorizados_local = set()
-    if not (resumen.empty or _ajustes_turno_local.empty):
-        _ajuste_por_fecha_turno = (
-            _ajustes_turno_local.groupby(["fecha", "turno"])["monto"].sum().to_dict()
-        )
-
-        def _con_ajuste_turno_local(fila):
-            ajuste_total = float(_ajuste_por_fecha_turno.get((fila["fecha"], fila["turno"]), 0.0))
-            diferencia = fila["diferencia"]
-            if ajuste_total == 0 or pd.isna(diferencia):
-                return pd.Series({"estado": fila["estado"], "_explicado": False})
-            explicado = abs(diferencia - ajuste_total) <= sh.UMBRAL_VERDE
-            if str(fila["estado"]).startswith("⚠️ Revisar secuencia"):
-                # El problema de secuencia se sigue mostrando, pero el MONTO
-                # ya autorizado no se le cuenta a nadie (ver Dashboard).
-                nuevo = fila["estado"]
-            elif explicado:
-                nuevo = "🔷 Autorizado"
-            else:
-                nuevo = "🔴 Diferencia"
-            return pd.Series({"estado": nuevo, "_explicado": explicado})
-
-        _ajustado_local = resumen.apply(_con_ajuste_turno_local, axis=1)
-        resumen["estado"] = _ajustado_local["estado"]
-        _turnos_autorizados_local = set(
-            resumen.loc[_ajustado_local["_explicado"].astype(bool), ["fecha", "turno"]]
-            .itertuples(index=False, name=None)
-        )
-
-    # Turnos con el monto ya autorizado: se pisa el Estado de los cortes de
-    # ese turno que YA estaban en "🔴 Diferencia" (o "Cerró otro nombre" con
-    # diferencia real), en "cortes" mismo, asi que se ve igual en "Ver corte
-    # por corte" y se reusa mas abajo en Acumulado. Un corte que ya estaba
-    # "✅ Cuadrado" por si solo NO se toca.
-    if _turnos_autorizados_local:
-        cortes.loc[
-            [
-                (f, t) in _turnos_autorizados_local
-                and (
-                    est == "🔴 Diferencia"
-                    or (est.startswith("⚠️ Cerró otro nombre") and abs(dif) > sh.UMBRAL_VERDE)
-                )
-                for f, t, est, dif in zip(
-                    cortes["fecha"], cortes["turno"], cortes["estado"], cortes["diferencia"].fillna(0)
-                )
-            ],
-            "estado",
-        ] = "🔷 Autorizado"
-
-    # df_local ya viene ordenado por timestamp descendente, asi que la
-    # primera fila es el registro MAS RECIENTE. Lo usamos para (1) un aviso
-    # claro arriba y (2) resaltar su turno en la tabla.
-    fila_reciente = df_local.iloc[0]
-    fecha_reciente = fila_reciente["fecha"]
-    turno_reciente = fila_reciente["turno"]
-    hora_reciente = ""
-    if pd.notna(fila_reciente["timestamp"]):
-        hora_reciente = pd.to_datetime(fila_reciente["timestamp"]).strftime("%H:%M")
-
-    st.info(
-        f"🆕 **Último registro:** {fila_reciente['tipo']} de {turno_reciente} "
-        f"por **{fila_reciente['nombre']}** — {fecha_reciente} {hora_reciente}"
-    )
-
-    tabla_resumen = sh.arrow_safe(
-        resumen.rename(
-            columns={
-                "fecha": "Fecha",
-                "turno": "Turno",
-                "n_cortes": "Cortes",
-                "nombres": "Personas",
-                "diferencia_fmt": "Diferencia total (S/)",
-                "estado": "Estado",
-                "observaciones": "Observaciones",
-            }
-        ).drop(columns=["diferencia"])
-    )
-    # arrow_safe pasa la fecha a texto ("2026-09-08"), asi que comparamos como texto.
-    _fecha_reciente_txt = str(fecha_reciente)
-
-
-    def _resaltar_turno_reciente(fila):
-        # Fila del turno del ultimo registro: fondo amarillo suave + negrita.
-        es_reciente = fila["Fecha"] == _fecha_reciente_txt and fila["Turno"] == turno_reciente
-        estilo = "background-color: #FFE9B0; font-weight: 700" if es_reciente else ""
-        return [estilo] * len(fila)
-
-
-    st.dataframe(
-        tabla_resumen.style.apply(_resaltar_turno_reciente, axis=1),
-        width="stretch",
-        hide_index=True,
-    )
-    st.caption(
-        "La fila resaltada 🟡 es la del turno del último registro. "
-        "**+** = sobró, **−** = faltó. 🔴 Diferencia = más de S/1 sin "
-        "explicar. ⚠️ Revisar secuencia = falta un Cierre o hay un "
-        "Cierre sin Apertura."
-    )
-
-    if not cortes.empty and (cortes["corte"].max() > 1 or "⚠️" in " ".join(resumen["estado"])):
-        with st.expander("Ver corte por corte"):
-            st.dataframe(
-                sh.arrow_safe(
-                    cortes.sort_values(["fecha", "turno", "corte"], ascending=[False, True, True])
-                    .rename(
-                        columns={
-                            "fecha": "Fecha",
-                            "turno": "Turno",
-                            "corte": "Corte",
-                            "nombre": "Abrió",
-                            "nombre_cierre": "Cerró",
-                            "hora_apertura": "Hora ap.",
-                            "hora_cierre": "Hora cie.",
-                            "apertura": "Apertura (S/)",
-                            "cierre": "Cierre (S/)",
-                            "diferencia_fmt": "Diferencia (S/)",
-                            "estado": "Estado",
-                            "motivo": "Motivo (otro nombre)",
-                        }
-                    )
-                    .drop(columns=["diferencia", "observaciones"])
-                ),
-                width="stretch",
-                hide_index=True,
-            )
-
-with tab_continuidad:
-    # -------------------------------------------------------------
-    # Continuidad: compara cada Cierre con la Apertura que le sigue
-    # (mismo turno / entre turnos / entre días) -- igual que en el
-    # Dashboard, pero SOLO LECTURA: se ve el Estado, no el motivo ni
-    # quién autorizó un ajuste (eso es información de administración).
-    #
-    # Se calcula sobre TODO el historial del local (no solo lo filtrado
-    # por fecha), para no perder el salto justo en el borde del rango
-    # -- recien despues se filtra lo que se muestra.
-    # -------------------------------------------------------------
-    st.subheader(f"Continuidad — {local}")
-    st.caption(
-        "Compara cada Cierre con la Apertura que le sigue (mismo turno, "
-        "entre turnos, o entre días): el fondo debería quedar guardado de "
-        "un salto a otro. Aquí solo se ve el Estado."
-    )
-
-    saltos_local = sh.calcular_saltos(df[df["local"] == local])
-
-    _ajustes_todas_local = sh.get_ajustes_df()
-    if not _ajustes_todas_local.empty:
-        _ajustes_todas_local = _ajustes_todas_local[_ajustes_todas_local["local"] == local]
-    if _ajustes_todas_local.empty:
-        _ajuste_por_salto_local = {}
-        _ajuste_viejo_por_fecha_local = {}
-    else:
-        _ajustes_salto_local = _ajustes_todas_local[_ajustes_todas_local["salto_id_cierre"] != ""]
-        _ajuste_por_salto_local = _ajustes_salto_local.groupby("salto_id_cierre")["monto"].sum().to_dict()
-        _ajustes_viejo_local = _ajustes_todas_local[
-            (_ajustes_todas_local["turno"] == "") & (_ajustes_todas_local["salto_id_cierre"] == "")
-        ]
-        _ajuste_viejo_por_fecha_local = _ajustes_viejo_local.groupby("fecha")["monto"].sum().to_dict()
-
-    filas_cont_local = []
-    for _, s in saltos_local.iterrows():
-        if pd.isna(s["diferencia"]):
-            continue
-        ajuste_nuevo = float(_ajuste_por_salto_local.get(s["id_cierre"], 0.0))
-        ajuste_viejo = 0.0
-        if s["tipo_salto"] == "Entre días":
-            ajuste_viejo = float(_ajuste_viejo_por_fecha_local.get(s["fecha_cierre"], 0.0))
-        ajuste_total = ajuste_nuevo + ajuste_viejo
-        diferencia = s["diferencia"]
-        restante = diferencia - ajuste_total
-        if ajuste_total != 0 and abs(restante) <= sh.UMBRAL_VERDE:
-            estado = "🔷 Autorizado"
-        elif abs(restante) <= sh.UMBRAL_VERDE:
-            estado = "✅ Coincide"
+    def _con_ajuste_turno_local(fila):
+        ajuste_total = float(_ajuste_por_fecha_turno.get((fila["fecha"], fila["turno"]), 0.0))
+        diferencia = fila["diferencia"]
+        if ajuste_total == 0 or pd.isna(diferencia):
+            return pd.Series({"estado": fila["estado"], "_explicado": False})
+        explicado = abs(diferencia - ajuste_total) <= sh.UMBRAL_VERDE
+        if str(fila["estado"]).startswith("⚠️ Revisar secuencia"):
+            # El problema de secuencia se sigue mostrando, pero el MONTO
+            # ya autorizado no se le cuenta a nadie (ver Dashboard).
+            nuevo = fila["estado"]
+        elif explicado:
+            nuevo = "🔷 Autorizado"
         else:
-            estado = "🔴 Diferencia"
-        filas_cont_local.append(
-            {
-                "_fecha_cierre": s["fecha_cierre"],
-                "_id_cierre": s["id_cierre"],
-                "Tipo": s["tipo_salto"],
-                "Cierre": f"{s['fecha_cierre']} {s['turno_cierre']} {s['hora_cierre']} — {s['nombre_cierre']}",
-                "Apertura": f"{s['fecha_apertura']} {s['turno_apertura']} {s['hora_apertura']} — {s['nombre_apertura']}",
-                "Diferencia (S/)": f"{diferencia:+,.2f}",
-                "Estado": estado,
-            }
-        )
+            nuevo = "🔴 Diferencia"
+        return pd.Series({"estado": nuevo, "_explicado": explicado})
 
-    cont_local_df = pd.DataFrame(filas_cont_local)
-    if cont_local_df.empty:
-        st.caption("Todavía no hay saltos Cierre → Apertura para comparar.")
+    _ajustado_local = resumen.apply(_con_ajuste_turno_local, axis=1)
+    resumen["estado"] = _ajustado_local["estado"]
+    _turnos_autorizados_local = set(
+        resumen.loc[_ajustado_local["_explicado"].astype(bool), ["fecha", "turno"]]
+        .itertuples(index=False, name=None)
+    )
+
+# Turnos con el monto ya autorizado: se pisa el Estado de los cortes de
+# ese turno que YA estaban en "🔴 Diferencia" (o "Cerró otro nombre" con
+# diferencia real), en "cortes" mismo, asi que se ve igual en "Ver corte
+# por corte" y se reusa mas abajo en Acumulado. Un corte que ya estaba
+# "✅ Cuadrado" por si solo NO se toca.
+if _turnos_autorizados_local:
+    cortes.loc[
+        [
+            (f, t) in _turnos_autorizados_local
+            and (
+                est == "🔴 Diferencia"
+                or (est.startswith("⚠️ Cerró otro nombre") and abs(dif) > sh.UMBRAL_VERDE)
+            )
+            for f, t, est, dif in zip(
+                cortes["fecha"], cortes["turno"], cortes["estado"], cortes["diferencia"].fillna(0)
+            )
+        ],
+        "estado",
+    ] = "🔷 Autorizado"
+
+fila_reciente = df_local.iloc[0]
+fecha_reciente = fila_reciente["fecha"]
+turno_reciente = fila_reciente["turno"]
+hora_reciente = ""
+if pd.notna(fila_reciente["timestamp"]):
+    hora_reciente = pd.to_datetime(fila_reciente["timestamp"]).strftime("%H:%M")
+
+# Continuidad: se calcula sobre TODO el historial del local (no solo lo filtrado
+# por fecha), para no perder el salto justo en el borde del rango.
+saltos_local = sh.calcular_saltos(df[df["local"] == local])
+
+_ajustes_todas_local = sh.get_ajustes_df()
+if not _ajustes_todas_local.empty:
+    _ajustes_todas_local = _ajustes_todas_local[_ajustes_todas_local["local"] == local]
+if _ajustes_todas_local.empty:
+    _ajuste_por_salto_local = {}
+    _ajuste_viejo_por_fecha_local = {}
+else:
+    _ajustes_salto_local = _ajustes_todas_local[_ajustes_todas_local["salto_id_cierre"] != ""]
+    _ajuste_por_salto_local = _ajustes_salto_local.groupby("salto_id_cierre")["monto"].sum().to_dict()
+    _ajustes_viejo_local = _ajustes_todas_local[
+        (_ajustes_todas_local["turno"] == "") & (_ajustes_todas_local["salto_id_cierre"] == "")
+    ]
+    _ajuste_viejo_por_fecha_local = _ajustes_viejo_local.groupby("fecha")["monto"].sum().to_dict()
+
+filas_cont_local = []
+for _, s in saltos_local.iterrows():
+    if pd.isna(s["diferencia"]):
+        continue
+    ajuste_nuevo = float(_ajuste_por_salto_local.get(s["id_cierre"], 0.0))
+    ajuste_viejo = 0.0
+    if s["tipo_salto"] == "Entre días":
+        ajuste_viejo = float(_ajuste_viejo_por_fecha_local.get(s["fecha_cierre"], 0.0))
+    ajuste_total = ajuste_nuevo + ajuste_viejo
+    diferencia = s["diferencia"]
+    restante = diferencia - ajuste_total
+    if ajuste_total != 0 and abs(restante) <= sh.UMBRAL_VERDE:
+        estado = "🔷 Autorizado"
+    elif abs(restante) <= sh.UMBRAL_VERDE:
+        estado = "✅ Coincide"
     else:
-        cont_local_df = cont_local_df[cont_local_df["_fecha_cierre"] >= desde].sort_values(
-            "_fecha_cierre", ascending=False
-        )
-        if cont_local_df.empty:
-            st.caption("No hay comparaciones en el rango de fechas seleccionado.")
-        else:
-            con_diferencia_local = int((cont_local_df["Estado"] == "🔴 Diferencia").sum())
-            if con_diferencia_local:
-                st.warning(f"⚠️ {con_diferencia_local} caso(s) sin explicar todavía.")
-            else:
-                st.success("Todo coincide (o está autorizado). 👍")
-            st.dataframe(
-                sh.arrow_safe(cont_local_df.drop(columns=["_fecha_cierre", "_id_cierre"])),
-                width="stretch",
-                hide_index=True,
-            )
-            st.caption(
-                "🔷 Autorizado = administración ya registró un ajuste que explica la "
-                "diferencia. **Tipo** dice si el salto es dentro del mismo turno, entre "
-                "Mañana y Tarde, o entre un día y el siguiente."
-            )
+        estado = "🔴 Diferencia"
+    filas_cont_local.append(
+        {
+            "_fecha_cierre": s["fecha_cierre"],
+            "_id_cierre": s["id_cierre"],
+            "Tipo": s["tipo_salto"],
+            "Cierre": f"{s['fecha_cierre']} {s['turno_cierre']} {s['hora_cierre']} — {s['nombre_cierre']}",
+            "Apertura": f"{s['fecha_apertura']} {s['turno_apertura']} {s['hora_apertura']} — {s['nombre_apertura']}",
+            "Diferencia (S/)": f"{diferencia:+,.2f}",
+            "Estado": estado,
+        }
+    )
+
+cont_local_df = pd.DataFrame(filas_cont_local)
+if not cont_local_df.empty:
+    cont_local_df = cont_local_df[cont_local_df["_fecha_cierre"] >= desde].sort_values(
+        "_fecha_cierre", ascending=False
+    )
 
 with tab_linea:
     # -------------------------------------------------------------
     # Linea de tiempo del local (el de su PIN): cortes y entregas de caja
     # intercalados en orden de hora. SOLO LECTURA y solo el Estado -- igual
-    # que Cuadre por turno y Continuidad, no se muestra motivo ni quien
+    # que el resto de Historial, no se muestra motivo ni quien
     # autorizo (eso es informacion de administracion). Se llena aca, despues
     # de calcular cortes y continuidad, pero aparece como primera pestaña.
     # -------------------------------------------------------------
     st.subheader(f"Línea de tiempo — {local}")
+    st.info(
+        f"🆕 **Último registro:** {fila_reciente['tipo']} de {turno_reciente} "
+        f"por **{fila_reciente['nombre']}** — {fecha_reciente} {hora_reciente}"
+    )
     st.caption(
         "Tus cortes (lo que pasa dentro de un turno) y las entregas (el paso entre un Cierre y la "
         "siguiente Apertura), del más reciente al más antiguo. El corte se le carga a quien abrió; la entrega, a "
@@ -423,15 +313,15 @@ with tab_acumulado:
     # esta explicada por un ajuste de administracion, no es un
     # descuadre real que deba sumarse a nadie.
     # -------------------------------------------------------------
-    st.subheader(f"Acumulado de diferencias por persona — {local}")
+    st.subheader(f"Diferencias por persona — {local}")
     st.caption(
         "En el rango de fechas filtrado. La diferencia de cada corte se le "
         "atribuye a quien abrió; la diferencia en la entrega se le atribuye "
-        "a quien cerró (ver pestaña Continuidad). No incluye lo ya "
+        "a quien cerró (ver Línea de tiempo). No incluye lo ya "
         "'🔷 Autorizado'. Ordenado por descuadre total (sin importar el signo)."
     )
 
-    # _turnos_autorizados_local ya se calculó arriba, en Cuadre por turno
+    # _turnos_autorizados_local ya se calculó arriba (calculos del local)
     # (se reusa aca para no recalcularlo).
     if _turnos_autorizados_local:
         _claves_cortes_local = list(zip(cortes["fecha"], cortes["turno"]))
@@ -442,7 +332,7 @@ with tab_acumulado:
         cortes_acumulado_local = cortes
 
     # "Diferencia entre cortes": lo que pasa en el HUECO entre un Cierre y
-    # la Apertura siguiente (pestaña Continuidad), atribuido a quien
+    # la Apertura siguiente (las entregas de la Linea de tiempo), atribuido a quien
     # cerró -- distinto de la diferencia DENTRO de un corte (arriba).
     _ids_autorizados_salto_local = (
         set(cont_local_df.loc[cont_local_df["Estado"] == "🔷 Autorizado", "_id_cierre"])
