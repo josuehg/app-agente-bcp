@@ -956,7 +956,7 @@ with tab_cuadre:
         st.subheader("🧭 Línea de tiempo por sucursal")
         st.caption(
             "Los cortes (lo que pasa dentro de un turno) y las entregas (el hueco entre un Cierre y la "
-            "siguiente Apertura) en orden de hora. El corte se le carga a quien abrió; la entrega, a "
+            "siguiente Apertura), del más reciente al más antiguo. El corte se le carga a quien abrió; la entrega, a "
             "quien cerró. Para autorizar una diferencia usa los formularios de más abajo."
         )
         _estado_por_salto = (
@@ -981,6 +981,7 @@ with tab_cuadre:
             if solo_dif_tl:
                 vista_tl = vista_tl[vista_tl["estado"].str.contains("Diferencia|Cerró otro", regex=True)]
 
+            vista_tl = vista_tl.iloc[::-1]  # lo mas reciente primero
             _sin_aut = vista_tl[~vista_tl["estado"].str.contains("Autorizado")]
             _neto_c = float(_sin_aut.loc[_sin_aut["tipo"] == "Corte", "diferencia"].fillna(0).sum())
             _neto_e = float(_sin_aut.loc[_sin_aut["tipo"] == "Entrega", "diferencia"].fillna(0).sum())

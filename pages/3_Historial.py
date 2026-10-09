@@ -345,7 +345,7 @@ with tab_linea:
     st.subheader(f"Línea de tiempo — {local}")
     st.caption(
         "Tus cortes (lo que pasa dentro de un turno) y las entregas (el paso entre un Cierre y la "
-        "siguiente Apertura) en orden de hora. El corte se le carga a quien abrió; la entrega, a "
+        "siguiente Apertura), del más reciente al más antiguo. El corte se le carga a quien abrió; la entrega, a "
         "quien cerró."
     )
     _estado_por_salto_local = (
@@ -372,6 +372,7 @@ with tab_linea:
         if solo_dif_tl:
             vista_tl = vista_tl[vista_tl["estado"].str.contains("Diferencia|Cerró otro", regex=True)]
 
+        vista_tl = vista_tl.iloc[::-1]  # lo mas reciente primero
         _sin_aut = vista_tl[~vista_tl["estado"].str.contains("Autorizado")]
         mt1, mt2 = st.columns(2)
         mt1.metric(
