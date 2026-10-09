@@ -2065,6 +2065,14 @@ with tab_incentivos:
                 # uno no recarga toda la pagina (ni vuelve a leer Google Sheets)
                 # antes de poder cambiar el otro.
                 with st.form(f"form_enc_{fila_encuesta['id']}"):
+                    nueva_fecha = st.date_input(
+                        "Fecha de la encuesta",
+                        value=fila_encuesta["fecha"],
+                        max_value=sh.hoy_local(),
+                        key=f"fecha_{fila_encuesta['id']}",
+                        help="Corrígela si quien subió la encuesta puso la fecha de subida en vez de la fecha real "
+                        "del correo: de ella depende a qué mes y a qué nota NPS pertenece.",
+                    )
                     nuevo_medio = st.selectbox(
                         "Forma de pago",
                         medios_opc,
@@ -2081,17 +2089,34 @@ with tab_incentivos:
                 if guardar_enc:
                     cambio_medio = nuevo_medio != medio_actual and nuevo_medio != "Sin definir"
                     cambio_estado = nuevo_estado != estado_actual
-                    if cambio_estado and nuevo_estado == "Pagada" and fila_encuesta["estado_nota"] != "Aprobado":
+                    cambio_fecha = nueva_fecha != fila_encuesta["fecha"]
+                    # Si se corrige la fecha, el pago se evalua con la nota del mes NUEVO.
+                    _estado_nota_nuevo = (
+                        sh.con_estado_nota(
+                            pd.DataFrame([{"fecha": nueva_fecha, "local": fila_encuesta["local"]}]),
+                            notas_df,
+                        )["estado_nota"].iloc[0]
+                        if cambio_fecha
+                        else fila_encuesta["estado_nota"]
+                    )
+                    if nuevo_estado == "Pagada" and (cambio_estado or cambio_fecha) and _estado_nota_nuevo != "Aprobado":
                         st.error(
                             "No se puede marcar como pagada: la nota del local en "
-                            f"{fila_encuesta['mes']} está «{fila_encuesta['estado_nota']}» "
+                            f"{nueva_fecha:%Y-%m} está «{_estado_nota_nuevo}» "
                             f"(la nota mínima para pagar es {sh.UMBRAL_NOTA_LOCAL})."
                         )
-                    elif cambio_medio or cambio_estado:
+                    elif cambio_medio or cambio_estado or cambio_fecha:
                         sh.actualizar_encuesta(
                             fila_encuesta["id"],
                             estado_pago=nuevo_estado if cambio_estado else None,
                             medio_pago=nuevo_medio if cambio_medio else None,
+                            fecha=nueva_fecha.isoformat() if cambio_fecha else None,
+                            observaciones=(
+                                (str(fila_encuesta["observaciones"] or "").strip() + " | ").lstrip(" |")
+                                + f"Fecha corregida por administración de {fila_encuesta['fecha']} a {nueva_fecha}"
+                                if cambio_fecha
+                                else None
+                            ),
                         )
                         st.success("Guardado.")
                         st.rerun()

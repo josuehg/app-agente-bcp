@@ -1146,15 +1146,27 @@ def actualizar_estado_pago(id_encuesta: str, nuevo_estado: str) -> None:
     get_encuestas_df.clear()
 
 
-def actualizar_encuesta(id_encuesta: str, estado_pago: str | None = None, medio_pago: str | None = None) -> None:
-    """Guarda en UNA sola operacion el estado de pago y/o la forma de pago de
-    una encuesta (una busqueda y una escritura, en vez de una por campo)."""
+def actualizar_encuesta(
+    id_encuesta: str,
+    estado_pago: str | None = None,
+    medio_pago: str | None = None,
+    fecha: str | None = None,
+    observaciones: str | None = None,
+) -> None:
+    """Guarda en UNA sola operacion el estado de pago, la forma de pago, la
+    fecha y/o las observaciones de una encuesta (una busqueda y una escritura,
+    en vez de una por campo)."""
     ws = _get_or_create_worksheet(NOMBRE_HOJA_ENCUESTAS, COLUMNAS_ENCUESTAS)
     celda = ws.find(id_encuesta, in_column=COLUMNAS_ENCUESTAS.index("id") + 1)
     if celda is None:
         return
     cambios = []
-    for columna, valor in (("estado_pago", estado_pago), ("medio_pago", medio_pago)):
+    for columna, valor in (
+        ("estado_pago", estado_pago),
+        ("medio_pago", medio_pago),
+        ("fecha", fecha),
+        ("observaciones", observaciones),
+    ):
         if valor is not None:
             a1 = gspread.utils.rowcol_to_a1(celda.row, COLUMNAS_ENCUESTAS.index(columna) + 1)
             cambios.append({"range": a1, "values": [[valor]]})
