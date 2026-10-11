@@ -364,7 +364,12 @@ def _get_or_create_worksheet(nombre: str, columnas: list[str]):
 # Config (por local: fondo minimo, PIN, tipo de agente y tarifa de comision)
 # ---------------------------------------------------------------------
 
-COLUMNAS_CONFIG = ["local", "fondo_minimo", "pin", "tipo_agente", "soles_por_operacion"]
+# meta_ops_manana / meta_ops_tarde: minimo de operaciones que se exige por turno
+# en ese local (0 o vacio = sin meta). Se editan desde el Dashboard.
+COLUMNAS_CONFIG = [
+    "local", "fondo_minimo", "pin", "tipo_agente", "soles_por_operacion",
+    "meta_ops_manana", "meta_ops_tarde",
+]
 
 # Tarifa promedio de comision por operacion, por tipo de agente. Es solo
 # el valor por defecto: si en la hoja 'Config' se llena
@@ -406,7 +411,9 @@ def get_config_df() -> pd.DataFrame:
             df[col] = ""
 
     df["fondo_minimo"] = pd.to_numeric(df["fondo_minimo"], errors="coerce").fillna(0)
-    df = _texto_seguro(df, {"fondo_minimo", "soles_por_operacion"})
+    for col in ("meta_ops_manana", "meta_ops_tarde"):
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+    df = _texto_seguro(df, {"fondo_minimo", "soles_por_operacion", "meta_ops_manana", "meta_ops_tarde"})
     df["pin"] = df["pin"].str.strip()
     df["local"] = df["local"].str.strip()
 
@@ -426,6 +433,34 @@ def get_config_df() -> pd.DataFrame:
 
 def get_locales() -> list[str]:
     return get_config_df()["local"].tolist()
+
+
+def get_meta_operaciones(local: str, turno: str) -> int:
+    """Minimo de operaciones exigido para ese local y turno (0 = sin meta)."""
+    df = get_config_df()
+    fila = df[df["local"] == local]
+    columna = "meta_ops_manana" if turno == "Mañana" else "meta_ops_tarde"
+    if fila.empty:
+        return 0
+    return int(fila.iloc[0][columna])
+
+
+def guardar_metas(metas: dict) -> None:
+    """Guarda las metas {(local, turno): minimo} en la hoja Config (una escritura
+    confirmada). Las filas se buscan por nombre de local."""
+    ws = _get_or_create_worksheet(NOMBRE_HOJA_CONFIG, COLUMNAS_CONFIG)
+    locales = [str(v).strip() for v in ws.col_values(COLUMNAS_CONFIG.index("local") + 1)]
+    cambios = []
+    for (local, turno), minimo in metas.items():
+        if local not in locales:
+            raise ValueError(f"No se encontró el local {local} en la hoja Config.")
+        fila = locales.index(local) + 1
+        columna = "meta_ops_manana" if turno == "Mañana" else "meta_ops_tarde"
+        a1 = gspread.utils.rowcol_to_a1(fila, COLUMNAS_CONFIG.index(columna) + 1)
+        cambios.append({"range": a1, "values": [[int(minimo)]]})
+    if cambios:
+        _escribir_y_confirmar(ws, cambios)
+        get_config_df.clear()
 
 
 def get_fondo_minimo(local: str) -> float:

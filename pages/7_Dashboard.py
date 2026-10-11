@@ -410,15 +410,28 @@ with tab_operaciones:
             .sort_values(["turno", "local"])
         )
         propuesta["Mínimo a exigir"] = propuesta["propuesto"].round().astype(int)
+        # Si ya hay una META guardada en Config para ese local y turno, esa es
+        # la que se muestra por defecto (el cuartil elegido solo se usa donde
+        # todavia no hay meta).
+        _metas_cfg = {}
+        for _, _c in config_df.iterrows():
+            _metas_cfg[(_c["local"], "Mañana")] = int(_c["meta_ops_manana"])
+            _metas_cfg[(_c["local"], "Tarde")] = int(_c["meta_ops_tarde"])
+        propuesta["Meta guardada"] = [
+            _metas_cfg.get((l, t), 0) for t, l in zip(propuesta["turno"], propuesta["local"])
+        ]
+        propuesta["Mínimo a exigir"] = propuesta["Meta guardada"].where(
+            propuesta["Meta guardada"] > 0, propuesta["Mínimo a exigir"]
+        )
         propuesta = propuesta.rename(columns={"turno": "Turno", "local": "Local"})[
-            ["Turno", "Local", "Turnos", "Mediana", "Mínimo a exigir"]
+            ["Turno", "Local", "Turnos", "Mediana", "Meta guardada", "Mínimo a exigir"]
         ]
         propuesta["Mediana"] = propuesta["Mediana"].round(0)
         editado = st.data_editor(
             propuesta,
             hide_index=True,
             width="stretch",
-            disabled=["Turno", "Local", "Turnos", "Mediana"],
+            disabled=["Turno", "Local", "Turnos", "Mediana", "Meta guardada"],
             column_config={
                 "Mínimo a exigir": st.column_config.NumberColumn(min_value=0, step=1, format="%d"),
                 "Mediana": st.column_config.NumberColumn(format="%.0f"),
@@ -426,6 +439,15 @@ with tab_operaciones:
             key=f"ops_minimos_{_q}",
         )
         minimos = {(r["Turno"], r["Local"]): int(r["Mínimo a exigir"]) for _, r in editado.iterrows()}
+        if st.button("💾 Guardar estos mínimos como meta de cada local y turno", key="ops_guardar_metas"):
+            try:
+                sh.guardar_metas({(l, t): m for (t, l), m in minimos.items()})
+                st.success(
+                    "Metas guardadas en la hoja Config. El personal las verá en Registro (Cierre) "
+                    "e Historial, y aquí quedan como valor por defecto."
+                )
+            except (ValueError, RuntimeError) as error:
+                st.error(f"No se guardaron las metas: {error}")
         ops_turnos["minimo"] = [minimos.get((t, l), 0) for t, l in zip(ops_turnos["turno"], ops_turnos["local"])]
         ops_turnos["cumple"] = ops_turnos["operaciones"] >= ops_turnos["minimo"]
 

@@ -229,6 +229,11 @@ with tab_linea:
     # de calcular cortes y continuidad, pero aparece como primera pestaña.
     # -------------------------------------------------------------
     st.subheader(f"Línea de tiempo — {local}")
+    _meta_m, _meta_t = sh.get_meta_operaciones(local, "Mañana"), sh.get_meta_operaciones(local, "Tarde")
+    if _meta_m or _meta_t:
+        st.caption(
+            f"🎯 Meta de operaciones por turno de tu local: Mañana **{_meta_m or '—'}** · Tarde **{_meta_t or '—'}**."
+        )
     st.info(
         f"🆕 **Último registro:** {fila_reciente['tipo']} de {turno_reciente} "
         f"por **{fila_reciente['nombre']}** — {fecha_reciente} {hora_reciente}"

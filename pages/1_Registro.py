@@ -276,6 +276,9 @@ else:
     num_operaciones = st.number_input(
         "Numero de Operaciones", min_value=0, step=1, key=f"num_op_{v}"
     )
+    _meta_turno = sh.get_meta_operaciones(local, turno)
+    if _meta_turno:
+        st.caption(f"🎯 Meta de tu local para el turno {turno}: **{_meta_turno}** operaciones.")
     st.subheader("Fotos de Cierre (obligatorio)")
     foto_voucher_saldo_final_tarjeta = st.file_uploader(
         "Voucher de saldo FINAL en Tarjeta", type=["jpg", "jpeg", "png"], key=f"foto_vf_{v}"
