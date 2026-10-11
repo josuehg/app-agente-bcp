@@ -704,13 +704,13 @@ with tab_metas:
     st.caption(
         "Define la meta de cada local y turno. Puedes partir del **sugerido estadístico** (botón) y "
         "subirlo con la ambición que quieras, o escribir tu meta a mano en cada fila. Abajo ves qué "
-        "significa para el volumen y la comisión. Usa el rango de fechas de la izquierda (2 o 3 meses "
+        "significa para el volumen y la comisión (con la tarifa actual). Usa el rango de fechas de la izquierda (2 o 3 meses "
         "da una estadística más confiable)."
     )
     if ops_turnos.empty:
         st.caption("Todavía no hay turnos cerrados con operaciones en el rango seleccionado.")
     else:
-        mc1, mc2, mc3 = st.columns(3)
+        mc1, mc2 = st.columns(2)
         base_meta = mc1.selectbox(
             "Sugerido estadístico",
             ["Mediana", "Promedio", "Cuartil bajo", "Cuartil alto"],
@@ -720,10 +720,6 @@ with tab_metas:
         ambicion = mc2.number_input(
             "Ambición sobre el sugerido (%)", min_value=-50, max_value=300, value=0, step=5, key="meta_ambicion",
             help="0% = el sugerido tal cual. 20% = una meta 20% más alta que el sugerido.",
-        )
-        aumento_com = mc3.number_input(
-            "Aumento de comisión que propones (%)", min_value=0, max_value=200, value=50, step=5,
-            key="meta_aumento_com",
         )
 
         if "meta_modo" not in st.session_state:
@@ -787,7 +783,6 @@ with tab_metas:
         proy["ops_meta"] = proy["Mi meta"] * proy["turnos_mes"]
         proy["com_hoy"] = proy["ops_hoy"] * proy["tarifa"]
         proy["com_meta"] = proy["ops_meta"] * proy["tarifa"]
-        proy["com_meta_aumento"] = proy["com_meta"] * (1 + aumento_com / 100)
         proy["brecha"] = proy["Mi meta"] - proy["Promedio"]
 
         # % de turnos que hoy ya llegarian a la meta definida
@@ -798,9 +793,9 @@ with tab_metas:
         ).mean() * 100
         proy["llegan_hoy"] = [_ya.get((t, l), 0) for t, l in zip(proy["Turno"], proy["Local"])]
 
-        tot_hoy, tot_meta, tot_aum = proy["com_hoy"].sum(), proy["com_meta"].sum(), proy["com_meta_aumento"].sum()
+        tot_hoy, tot_meta = proy["com_hoy"].sum(), proy["com_meta"].sum()
         st.markdown("**Qué significa esta meta (por mes de 30 días)**")
-        p1, p2, p3 = st.columns(3)
+        p1, p2 = st.columns(2)
         p1.metric(
             "Operaciones al mes",
             f"{proy['ops_meta'].sum():,.0f}",
@@ -811,19 +806,13 @@ with tab_metas:
             f"S/ {tot_meta:,.0f}",
             f"{tot_meta - tot_hoy:+,.0f} vs hoy (S/ {tot_hoy:,.0f})",
         )
-        p3.metric(
-            f"Comisión con la meta y +{aumento_com}% de tarifa",
-            f"S/ {tot_aum:,.0f}",
-            f"{tot_aum - tot_hoy:+,.0f} vs hoy",
-        )
 
         vista_proy = proy.rename(
             columns={"ops_hoy": "Ops/mes hoy", "ops_meta": "Ops/mes con meta", "brecha": "Brecha por turno",
                      "llegan_hoy": "% turnos que hoy llegan", "com_hoy": "Comisión hoy (S/ mes)",
-                     "com_meta": "Con meta (S/ mes)", "com_meta_aumento": "Con meta y aumento (S/ mes)"}
+                     "com_meta": "Con meta (S/ mes)"}
         )[["Turno", "Local", "Mi meta", "Promedio", "Brecha por turno", "% turnos que hoy llegan",
-           "Ops/mes hoy", "Ops/mes con meta", "Comisión hoy (S/ mes)", "Con meta (S/ mes)",
-           "Con meta y aumento (S/ mes)"]]
+           "Ops/mes hoy", "Ops/mes con meta", "Comisión hoy (S/ mes)", "Con meta (S/ mes)"]]
         st.dataframe(
             sh.arrow_safe(vista_proy),
             width="stretch",
