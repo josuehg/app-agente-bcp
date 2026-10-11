@@ -1740,10 +1740,43 @@ with tab_liquidacion:
             "no_aprobado": float(e.loc[e["estado_nota"] == "No aprobado", "incentivo"].sum()),
         }
 
+    # Liquidacion lista a TODOS los que trabajaron en el periodo (aunque tengan 0
+    # diferencias) y al personal activo de los locales filtrados.
+    _trabajadores = set(df_filtrado["nombre"].dropna().astype(str)) - {""}
+    _personal_act = sh.get_personal_df()
+    if not _personal_act.empty:
+        _act = _personal_act[
+            (_personal_act["nombre"] != "")
+            & ~_personal_act["activo"].str.lower().isin({"no", "false", "0"})
+            & _personal_act["local"].isin(locales_sel)
+        ]
+        _trabajadores |= set(_act["nombre"])
     personas_liq = sorted(
         set(items_liq["persona"])
         | set(creditos_liq["persona"])
         | (set(encuestas_liq["nombre"]) if not encuestas_liq.empty else set())
+        | _trabajadores
+    )
+
+    # Datos solo INFORMATIVOS por persona: encuestas del periodo y turnos con la
+    # meta de operaciones cumplida (de los turnos donde trabajo y que ya cerraron).
+    _meta_liq = {}
+    for _, _c in config_df.iterrows():
+        _meta_liq[(_c["local"], "Mañana")] = int(_c["meta_ops_manana"])
+        _meta_liq[(_c["local"], "Tarde")] = int(_c["meta_ops_tarde"])
+    _tp = (
+        df_filtrado[["local", "fecha", "turno", "nombre"]]
+        .drop_duplicates()
+        .merge(ops_turnos[["local", "fecha", "turno", "operaciones"]], on=["local", "fecha", "turno"], how="left")
+    )
+    _tp["meta"] = [_meta_liq.get((l, t), 0) for l, t in zip(_tp["local"], _tp["turno"])]
+    _tp["con_meta"] = (_tp["meta"] > 0) & _tp["operaciones"].notna()
+    _tp["cumple"] = _tp["con_meta"] & (_tp["operaciones"] >= _tp["meta"])
+    stats_turnos_liq = _tp.groupby("nombre").agg(
+        trabajados=("turno", "size"), con_meta=("con_meta", "sum"), cumplidos=("cumple", "sum")
+    )
+    n_encuestas_liq = (
+        encuestas_liq.groupby("nombre").size().to_dict() if not encuestas_liq.empty else {}
     )
 
     # Operaciones de cada persona en el rango: las del Cierre de cada corte
@@ -1782,6 +1815,11 @@ with tab_liquidacion:
             )
             filas_resumen_liq[-1]["Incentivo a pagar (S/)"] = _incentivos_de(_persona)["pagar"]
             filas_resumen_liq[-1]["Operaciones"] = _ops
+            filas_resumen_liq[-1]["Encuestas llenadas"] = int(n_encuestas_liq.get(_persona, 0))
+            _st = stats_turnos_liq.loc[_persona] if _persona in stats_turnos_liq.index else None
+            filas_resumen_liq[-1]["Turnos trabajados"] = int(_st["trabajados"]) if _st is not None else 0
+            filas_resumen_liq[-1]["Turnos con meta"] = int(_st["con_meta"]) if _st is not None else 0
+            filas_resumen_liq[-1]["Meta cumplida"] = int(_st["cumplidos"]) if _st is not None else 0
         resumen_liq = pd.DataFrame(filas_resumen_liq).sort_values(
             ["A descontar (S/)", "A revisar (S/)"], ascending=False
         )
@@ -1842,6 +1880,21 @@ with tab_liquidacion:
                 "A investigar aparte",
                 f"{len(grandes_persona)} (S/ {grandes_persona['diferencia'].sum():+,.2f})",
                 help="Ítems grandes: no entran al reparto, se revisan uno por uno (pueden ser un error de registro).",
+            )
+
+            st.caption("Datos informativos del periodo (no afectan descuentos ni pagos):")
+            _stp = stats_turnos_liq.loc[persona_liq] if persona_liq in stats_turnos_liq.index else None
+            i1x, i2x, i3x = st.columns(3)
+            i1x.metric("Encuestas llenadas", int(n_encuestas_liq.get(persona_liq, 0)))
+            i2x.metric("Turnos trabajados", int(_stp["trabajados"]) if _stp is not None else 0)
+            i3x.metric(
+                "Turnos con meta cumplida",
+                (
+                    f"{int(_stp['cumplidos'])} de {int(_stp['con_meta'])}"
+                    if _stp is not None and int(_stp["con_meta"])
+                    else "sin meta"
+                ),
+                help="De los turnos donde trabajó, ya cerrados y con meta de operaciones definida.",
             )
 
             inc = _incentivos_de(persona_liq)
