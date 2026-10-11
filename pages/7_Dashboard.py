@@ -162,11 +162,11 @@ def _comparar_par(row_izq, row_der, label_izq="Apertura", label_der="Cierre"):
 # "Cuadre por turno" calcula `cortes` y "Acumulado por persona" lo usa).
 # ---------------------------------------------------------------------
 (
-    tab_resumen, tab_cuadre, tab_liquidacion, tab_sucursales, tab_operaciones,
+    tab_resumen, tab_cuadre, tab_liquidacion, tab_sucursales, tab_operaciones, tab_metas,
     tab_comisiones, tab_incentivos, tab_registros, tab_personal, tab_respaldo,
 ) = st.tabs(
     [
-        "🏠 Resumen", "🔍 Cuadre", "🧾 Liquidación", "🏪 Sucursales", "📈 Operaciones",
+        "🏠 Resumen", "🔍 Cuadre", "🧾 Liquidación", "🏪 Sucursales", "📈 Operaciones", "🎯 Metas",
         "💰 Comisiones", "⭐ Incentivos", "🗂️ Registros", "👥 Personal", "💾 Respaldo",
     ]
 )
@@ -341,10 +341,10 @@ with tab_operaciones:
         .reset_index()
         .merge(_turnos_cerrados, on=["local", "fecha", "turno"], how="inner")
     )
+    tarifa_local = config_df.set_index("local")["soles_por_operacion"].to_dict()
     if ops_turnos.empty:
         st.caption("Todavía no hay turnos cerrados con operaciones en el rango seleccionado.")
     else:
-        tarifa_local = config_df.set_index("local")["soles_por_operacion"].to_dict()
         ops_turnos["comision"] = ops_turnos["operaciones"] * ops_turnos["local"].map(tarifa_local).fillna(0)
 
         k1, k2, k3, k4 = st.columns(4)
@@ -391,115 +391,33 @@ with tab_operaciones:
             | {"Comisión prom. (S/)": st.column_config.NumberColumn(format="%.2f")},
         )
 
-        st.markdown("**Mínimo a exigir por local y turno**")
-        st.caption(
-            "Cada combinación (por ejemplo ZolA Mañana, ZolB Mañana, ZolA Tarde…) tiene su propio "
-            "mínimo: edítalo en la columna «Mínimo a exigir» y abajo verás cuántos turnos lo cumplen."
-        )
-        base_punto = st.radio(
-            "Punto de partida del mínimo",
-            ["Cuartil bajo (lo superan 3 de cada 4 turnos)", "Mediana (lo superan la mitad)", "Cuartil alto"],
-            horizontal=True,
-            key="ops_punto_partida",
-        )
-        _q = {"Cuartil bajo": 0.25, "Mediana": 0.5, "Cuartil alto": 0.75}[base_punto.split(" (")[0]]
-        propuesta = (
-            ops_turnos.groupby(["turno", "local"])["operaciones"]
-            .agg(Turnos="size", Mediana="median", propuesto=lambda x: x.quantile(_q))
-            .reset_index()
-            .sort_values(["turno", "local"])
-        )
-        propuesta["Mínimo a exigir"] = propuesta["propuesto"].round().astype(int)
-        # Si ya hay una META guardada en Config para ese local y turno, esa es
-        # la que se muestra por defecto (el cuartil elegido solo se usa donde
-        # todavia no hay meta).
-        _metas_cfg = {}
+        # La meta se DEFINE en la pestaña 🎯 Metas; aca solo se ve cuanto la cumple
+        # cada turno historicamente.
+        _metas_vig = {}
         for _, _c in config_df.iterrows():
-            _metas_cfg[(_c["local"], "Mañana")] = int(_c["meta_ops_manana"])
-            _metas_cfg[(_c["local"], "Tarde")] = int(_c["meta_ops_tarde"])
-        propuesta["Meta guardada"] = [
-            _metas_cfg.get((l, t), 0) for t, l in zip(propuesta["turno"], propuesta["local"])
-        ]
-        propuesta["Mínimo a exigir"] = propuesta["Meta guardada"].where(
-            propuesta["Meta guardada"] > 0, propuesta["Mínimo a exigir"]
-        )
-        propuesta = propuesta.rename(columns={"turno": "Turno", "local": "Local"})[
-            ["Turno", "Local", "Turnos", "Mediana", "Meta guardada", "Mínimo a exigir"]
-        ]
-        propuesta["Mediana"] = propuesta["Mediana"].round(0)
-        editado = st.data_editor(
-            propuesta,
-            hide_index=True,
-            width="stretch",
-            disabled=["Turno", "Local", "Turnos", "Mediana", "Meta guardada"],
-            column_config={
-                "Mínimo a exigir": st.column_config.NumberColumn(min_value=0, step=1, format="%d"),
-                "Mediana": st.column_config.NumberColumn(format="%.0f"),
-            },
-            key=f"ops_minimos_{_q}",
-        )
-        minimos = {(r["Turno"], r["Local"]): int(r["Mínimo a exigir"]) for _, r in editado.iterrows()}
-        if st.button("💾 Guardar estos mínimos como meta de cada local y turno", key="ops_guardar_metas"):
-            try:
-                sh.guardar_metas({(l, t): m for (t, l), m in minimos.items()})
-                st.success(
-                    "Metas guardadas en la hoja Config. El personal las verá en Registro (Cierre) "
-                    "e Historial, y aquí quedan como valor por defecto."
-                )
-            except (ValueError, RuntimeError) as error:
-                st.error(f"No se guardaron las metas: {error}")
-        ops_turnos["minimo"] = [minimos.get((t, l), 0) for t, l in zip(ops_turnos["turno"], ops_turnos["local"])]
-        ops_turnos["cumple"] = ops_turnos["operaciones"] >= ops_turnos["minimo"]
-
-        cumplimiento = (
-            ops_turnos.groupby(["turno", "local"])
-            .agg(Turnos=("cumple", "size"), Cumplen=("cumple", "sum"), Minimo=("minimo", "first"))
-            .reset_index()
-            .sort_values(["turno", "local"])
-        )
-        cumplimiento["No cumplen"] = cumplimiento["Turnos"] - cumplimiento["Cumplen"]
-        cumplimiento["% que cumple"] = cumplimiento["Cumplen"] / cumplimiento["Turnos"] * 100
-        cumplimiento = cumplimiento.rename(
-            columns={"turno": "Turno", "local": "Local", "Minimo": "Mínimo"}
-        )[["Turno", "Local", "Mínimo", "Turnos", "Cumplen", "No cumplen", "% que cumple"]]
-
-        total_cumplen = int(ops_turnos["cumple"].sum())
-        st.metric(
-            "Turnos que llegan a su mínimo",
-            f"{total_cumplen / len(ops_turnos) * 100:.0f}%",
-            f"{total_cumplen} de {len(ops_turnos)} turnos",
-        )
-        st.dataframe(
-            sh.arrow_safe(cumplimiento),
-            width="stretch",
-            hide_index=True,
-            column_config={"% que cumple": st.column_config.NumberColumn(format="%.0f%%")},
-        )
-        fig_cumpl = px.bar(
-            cumplimiento.assign(Etiqueta=cumplimiento["Local"] + " · " + cumplimiento["Turno"]),
-            x="Etiqueta",
-            y="% que cumple",
-            color="Turno",
-            labels={"Etiqueta": "", "% que cumple": "% de turnos que llegan a su mínimo"},
-        )
-        fig_cumpl.update_yaxes(range=[0, 100])
-        st.plotly_chart(fig_cumpl, width="stretch")
-
-        bajo_minimo = ops_turnos[~ops_turnos["cumple"]].sort_values(["turno", "local", "fecha"])
-        with st.expander(f"Turnos por debajo de su mínimo ({len(bajo_minimo)})"):
-            if bajo_minimo.empty:
-                st.success("Todos los turnos analizados llegan a su mínimo.")
-            else:
-                st.dataframe(
-                    sh.arrow_safe(
-                        bajo_minimo[["fecha", "local", "turno", "operaciones", "minimo", "personas"]].rename(
-                            columns={"fecha": "Fecha", "local": "Local", "turno": "Turno",
-                                     "operaciones": "Operaciones", "minimo": "Mínimo", "personas": "Personas"}
-                        )
-                    ),
-                    width="stretch",
-                    hide_index=True,
-                )
+            _metas_vig[(_c["local"], "Mañana")] = int(_c["meta_ops_manana"])
+            _metas_vig[(_c["local"], "Tarde")] = int(_c["meta_ops_tarde"])
+        ops_turnos["meta"] = [_metas_vig.get((l, t), 0) for l, t in zip(ops_turnos["local"], ops_turnos["turno"])]
+        con_meta = ops_turnos[ops_turnos["meta"] > 0]
+        st.markdown("**Cumplimiento de la meta vigente**")
+        if con_meta.empty:
+            st.info("Todavía no hay metas definidas: créalas en la pestaña **🎯 Metas**.")
+        else:
+            con_meta = con_meta.assign(cumple=con_meta["operaciones"] >= con_meta["meta"])
+            cumpl = (
+                con_meta.groupby(["turno", "local"])
+                .agg(Meta=("meta", "first"), Turnos=("cumple", "size"), Cumplen=("cumple", "sum"))
+                .reset_index()
+                .sort_values(["turno", "local"])
+                .rename(columns={"turno": "Turno", "local": "Local"})
+            )
+            cumpl["% que cumple"] = cumpl["Cumplen"] / cumpl["Turnos"] * 100
+            st.dataframe(
+                sh.arrow_safe(cumpl),
+                width="stretch",
+                hide_index=True,
+                column_config={"% que cumple": st.column_config.NumberColumn(format="%.0f%%")},
+            )
 
         fig_hist = px.histogram(
             ops_turnos,
@@ -511,107 +429,6 @@ with tab_operaciones:
             labels={"operaciones": "Operaciones en el turno", "turno": "Turno", "count": "Turnos", "local": "Local"},
         )
         st.plotly_chart(fig_hist, width="stretch")
-
-        # -----------------------------------------------------------------
-        # Propuesta de comision: cuanto sube tu comision con +X% y que
-        # estructura es mas facil de pactar con el banco, calculado con tus
-        # propios turnos (y los minimos de arriba).
-        # -----------------------------------------------------------------
-        st.divider()
-        st.subheader("💰 Propuesta de aumento de comisión")
-        st.caption(
-            "Con tus turnos reales: cuánto significa un aumento de la tarifa por operación y qué "
-            "estructura es más fácil de pactar. Usa los mínimos por local y turno de arriba."
-        )
-        pa1, pa2 = st.columns(2)
-        aumento = pa1.number_input(
-            "Aumento de comisión a proponer (%)", min_value=0, max_value=200, value=50, step=5,
-            key="prop_aumento",
-        ) / 100
-        factor_min = pa2.number_input(
-            "Mínimo pactado (% del mínimo de arriba)", min_value=0, max_value=300, value=100, step=10,
-            key="prop_factor_min",
-            help="100% = exactamente los mínimos por local y turno de la tabla de arriba.",
-        ) / 100
-
-        _dias = max(int(ops_turnos["fecha"].nunique()), 1)
-        _mes = 30 / _dias   # lleva lo observado a "un mes" de 30 dias
-        _t = ops_turnos["local"].map(tarifa_local).fillna(0)
-        _m = ops_turnos["minimo"] * factor_min
-        ops_turnos["com_actual"] = ops_turnos["operaciones"] * _t
-        ops_turnos["com_plana"] = ops_turnos["com_actual"] * (1 + aumento)
-        ops_turnos["com_excedente"] = (
-            ops_turnos[["operaciones"]].assign(m=_m).min(axis=1) * _t
-            + (ops_turnos["operaciones"] - _m).clip(lower=0) * _t * (1 + aumento)
-        )
-
-        por_local = (
-            ops_turnos.groupby("local")
-            .agg(ops=("operaciones", "sum"), actual=("com_actual", "sum"),
-                 plana=("com_plana", "sum"), excedente=("com_excedente", "sum"))
-            .reset_index()
-        )
-        por_local[["ops", "actual", "plana", "excedente"]] *= _mes
-        total = por_local[["ops", "actual", "plana", "excedente"]].sum()
-
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Comisión estimada hoy (por mes)", f"S/ {total['actual']:,.0f}")
-        c2.metric(
-            f"Con +{aumento * 100:.0f}% a toda operación",
-            f"S/ {total['plana']:,.0f}",
-            f"+S/ {total['plana'] - total['actual']:,.0f} al mes",
-        )
-        uplift_exc = (total["excedente"] / total["actual"] - 1) * 100 if total["actual"] else 0
-        c3.metric(
-            f"Con +{aumento * 100:.0f}% solo sobre el excedente del mínimo",
-            f"S/ {total['excedente']:,.0f}",
-            f"+{uplift_exc:.0f}% (+S/ {total['excedente'] - total['actual']:,.0f} al mes)",
-        )
-
-        tabla_prop = por_local.rename(
-            columns={"local": "Local", "ops": "Operaciones/mes", "actual": "Comisión hoy (S/ mes)",
-                     "plana": "Con aumento a todo (S/ mes)", "excedente": "Con aumento sobre excedente (S/ mes)"}
-        )
-        tabla_prop["Aumento efectivo (excedente)"] = (
-            tabla_prop["Con aumento sobre excedente (S/ mes)"] / tabla_prop["Comisión hoy (S/ mes)"] - 1
-        ) * 100
-        st.dataframe(
-            sh.arrow_safe(tabla_prop),
-            width="stretch",
-            hide_index=True,
-            column_config={
-                "Operaciones/mes": st.column_config.NumberColumn(format="%.0f"),
-                "Comisión hoy (S/ mes)": st.column_config.NumberColumn(format="%.0f"),
-                "Con aumento a todo (S/ mes)": st.column_config.NumberColumn(format="%.0f"),
-                "Con aumento sobre excedente (S/ mes)": st.column_config.NumberColumn(format="%.0f"),
-                "Aumento efectivo (excedente)": st.column_config.NumberColumn(format="%+.0f%%"),
-            },
-        )
-
-        # Curva: que aumento efectivo obtienes segun lo bajo/alto del minimo pactado.
-        _curva = []
-        for f in range(0, 201, 10):
-            mm = ops_turnos["minimo"] * f / 100
-            com = (
-                ops_turnos[["operaciones"]].assign(m=mm).min(axis=1) * _t
-                + (ops_turnos["operaciones"] - mm).clip(lower=0) * _t * (1 + aumento)
-            ).sum()
-            base = ops_turnos["com_actual"].sum()
-            _curva.append({"Mínimo pactado (% del mínimo de arriba)": f, "Aumento efectivo (%)": (com / base - 1) * 100 if base else 0})
-        fig_curva = px.line(
-            pd.DataFrame(_curva),
-            x="Mínimo pactado (% del mínimo de arriba)",
-            y="Aumento efectivo (%)",
-            markers=True,
-        )
-        st.plotly_chart(fig_curva, width="stretch")
-        crecimiento = (1 + aumento) - 1
-        st.caption(
-            f"Para ganar +{aumento * 100:.0f}% **sin** cambiar la tarifa, necesitarías "
-            f"{crecimiento * 100:.0f}% más operaciones (unas {ops_turnos['operaciones'].mean() * crecimiento:,.0f} "
-            "más por turno en promedio). Un mínimo más bajo hace que casi todo cuente como "
-            "excedente (el aumento efectivo se acerca al pedido); uno más alto, lo contrario."
-        )
 
     st.divider()
     st.subheader("🕐 Movimientos por turno")
@@ -875,6 +692,173 @@ with tab_resumen:
                 f"En el rango: de S/ {primer_valor:,.2f} a S/ {ultimo_valor:,.2f} "
                 f"(variación S/ {ultimo_valor - primer_valor:+,.2f})."
             )
+
+with tab_metas:
+    # -------------------------------------------------------------
+    # Metas de operaciones por turno: aca se PROYECTA y se DEFINE la meta de
+    # cada local y turno (ZolA Mañana, ZolB Mañana, ZolA Tarde...). Parte de lo
+    # que dice la estadistica, pero la meta final la decides tu (puede ser mas
+    # ambiciosa). Lo que guardes va a la hoja Config y el personal lo ve.
+    # -------------------------------------------------------------
+    st.subheader("🎯 Metas de operaciones por turno")
+    st.caption(
+        "Define la meta de cada local y turno. Puedes partir del **sugerido estadístico** (botón) y "
+        "subirlo con la ambición que quieras, o escribir tu meta a mano en cada fila. Abajo ves qué "
+        "significa para el volumen y la comisión. Usa el rango de fechas de la izquierda (2 o 3 meses "
+        "da una estadística más confiable)."
+    )
+    if ops_turnos.empty:
+        st.caption("Todavía no hay turnos cerrados con operaciones en el rango seleccionado.")
+    else:
+        mc1, mc2, mc3 = st.columns(3)
+        base_meta = mc1.selectbox(
+            "Sugerido estadístico",
+            ["Mediana", "Promedio", "Cuartil bajo", "Cuartil alto"],
+            help="Cuartil bajo: lo superan 3 de cada 4 turnos. Mediana: la mitad. Cuartil alto: 1 de cada 4.",
+            key="meta_base",
+        )
+        ambicion = mc2.number_input(
+            "Ambición sobre el sugerido (%)", min_value=-50, max_value=300, value=0, step=5, key="meta_ambicion",
+            help="0% = el sugerido tal cual. 20% = una meta 20% más alta que el sugerido.",
+        )
+        aumento_com = mc3.number_input(
+            "Aumento de comisión que propones (%)", min_value=0, max_value=200, value=50, step=5,
+            key="meta_aumento_com",
+        )
+
+        if "meta_modo" not in st.session_state:
+            st.session_state["meta_modo"] = "guardada"
+            st.session_state["meta_version"] = 0
+        bb1, bb2 = st.columns(2)
+        if bb1.button("📊 Usar el sugerido estadístico (con la ambición)", key="meta_btn_sugerido"):
+            st.session_state["meta_modo"] = "sugerido"
+            st.session_state["meta_version"] += 1
+        if bb2.button("↩️ Volver a las metas guardadas", key="meta_btn_guardada"):
+            st.session_state["meta_modo"] = "guardada"
+            st.session_state["meta_version"] += 1
+
+        def _stat(x):
+            return {
+                "Mediana": x.median(), "Promedio": x.mean(),
+                "Cuartil bajo": x.quantile(0.25), "Cuartil alto": x.quantile(0.75),
+            }[base_meta]
+
+        hist = (
+            ops_turnos.groupby(["turno", "local"])["operaciones"]
+            .agg(Turnos="size", Promedio="mean", Mediana="median", Maximo="max", sugerido=_stat)
+            .reset_index()
+            .sort_values(["turno", "local"])
+        )
+        hist["Sugerido"] = (hist["sugerido"] * (1 + ambicion / 100)).round().astype(int)
+        _guard = {}
+        for _, _c in config_df.iterrows():
+            _guard[(_c["local"], "Mañana")] = int(_c["meta_ops_manana"])
+            _guard[(_c["local"], "Tarde")] = int(_c["meta_ops_tarde"])
+        hist["Meta guardada"] = [_guard.get((l, t), 0) for l, t in zip(hist["local"], hist["turno"])]
+        if st.session_state["meta_modo"] == "sugerido":
+            hist["Mi meta"] = hist["Sugerido"]
+        else:
+            hist["Mi meta"] = hist["Meta guardada"].where(hist["Meta guardada"] > 0, hist["Sugerido"])
+        tabla_meta = hist.rename(columns={"turno": "Turno", "local": "Local", "Maximo": "Máximo"})[
+            ["Turno", "Local", "Turnos", "Promedio", "Mediana", "Máximo", "Sugerido", "Meta guardada", "Mi meta"]
+        ].copy()
+        for c in ["Promedio", "Mediana", "Máximo"]:
+            tabla_meta[c] = tabla_meta[c].round(0)
+        editada = st.data_editor(
+            tabla_meta,
+            hide_index=True,
+            width="stretch",
+            disabled=["Turno", "Local", "Turnos", "Promedio", "Mediana", "Máximo", "Sugerido", "Meta guardada"],
+            column_config={
+                "Mi meta": st.column_config.NumberColumn(min_value=0, step=1, format="%d"),
+                "Promedio": st.column_config.NumberColumn(format="%.0f"),
+                "Mediana": st.column_config.NumberColumn(format="%.0f"),
+                "Máximo": st.column_config.NumberColumn(format="%.0f"),
+            },
+            key=f"metas_editor_{st.session_state['meta_version']}_{base_meta}_{ambicion}",
+        )
+
+        # ---- Proyeccion: que significa la meta (llevado a 30 dias)
+        _dias_meta = max(int(ops_turnos["fecha"].nunique()), 1)
+        proy = editada.copy()
+        proy["tarifa"] = proy["Local"].map(tarifa_local).fillna(0)
+        proy["turnos_mes"] = proy["Turnos"] / _dias_meta * 30
+        proy["ops_hoy"] = proy["Promedio"] * proy["turnos_mes"]
+        proy["ops_meta"] = proy["Mi meta"] * proy["turnos_mes"]
+        proy["com_hoy"] = proy["ops_hoy"] * proy["tarifa"]
+        proy["com_meta"] = proy["ops_meta"] * proy["tarifa"]
+        proy["com_meta_aumento"] = proy["com_meta"] * (1 + aumento_com / 100)
+        proy["brecha"] = proy["Mi meta"] - proy["Promedio"]
+
+        # % de turnos que hoy ya llegarian a la meta definida
+        _meta_por_fila = {(r["Turno"], r["Local"]): r["Mi meta"] for _, r in editada.iterrows()}
+        ops_turnos["_meta_prop"] = [_meta_por_fila.get((t, l), 0) for t, l in zip(ops_turnos["turno"], ops_turnos["local"])]
+        _ya = (ops_turnos["operaciones"] >= ops_turnos["_meta_prop"]).groupby(
+            [ops_turnos["turno"], ops_turnos["local"]]
+        ).mean() * 100
+        proy["llegan_hoy"] = [_ya.get((t, l), 0) for t, l in zip(proy["Turno"], proy["Local"])]
+
+        tot_hoy, tot_meta, tot_aum = proy["com_hoy"].sum(), proy["com_meta"].sum(), proy["com_meta_aumento"].sum()
+        st.markdown("**Qué significa esta meta (por mes de 30 días)**")
+        p1, p2, p3 = st.columns(3)
+        p1.metric(
+            "Operaciones al mes",
+            f"{proy['ops_meta'].sum():,.0f}",
+            f"{proy['ops_meta'].sum() - proy['ops_hoy'].sum():+,.0f} vs hoy ({proy['ops_hoy'].sum():,.0f})",
+        )
+        p2.metric(
+            "Comisión con la meta (tarifa actual)",
+            f"S/ {tot_meta:,.0f}",
+            f"{tot_meta - tot_hoy:+,.0f} vs hoy (S/ {tot_hoy:,.0f})",
+        )
+        p3.metric(
+            f"Comisión con la meta y +{aumento_com}% de tarifa",
+            f"S/ {tot_aum:,.0f}",
+            f"{tot_aum - tot_hoy:+,.0f} vs hoy",
+        )
+
+        vista_proy = proy.rename(
+            columns={"ops_hoy": "Ops/mes hoy", "ops_meta": "Ops/mes con meta", "brecha": "Brecha por turno",
+                     "llegan_hoy": "% turnos que hoy llegan", "com_hoy": "Comisión hoy (S/ mes)",
+                     "com_meta": "Con meta (S/ mes)", "com_meta_aumento": "Con meta y aumento (S/ mes)"}
+        )[["Turno", "Local", "Mi meta", "Promedio", "Brecha por turno", "% turnos que hoy llegan",
+           "Ops/mes hoy", "Ops/mes con meta", "Comisión hoy (S/ mes)", "Con meta (S/ mes)",
+           "Con meta y aumento (S/ mes)"]]
+        st.dataframe(
+            sh.arrow_safe(vista_proy),
+            width="stretch",
+            hide_index=True,
+            column_config={
+                c: st.column_config.NumberColumn(format="%.0f")
+                for c in vista_proy.columns if c not in ("Turno", "Local")
+            },
+        )
+        fig_meta = px.bar(
+            proy.assign(Etiqueta=proy["Local"] + " · " + proy["Turno"])
+            .melt(id_vars="Etiqueta", value_vars=["Promedio", "Mi meta"], var_name="Serie", value_name="Operaciones"),
+            x="Etiqueta", y="Operaciones", color="Serie", barmode="group",
+            labels={"Etiqueta": ""},
+        )
+        st.plotly_chart(fig_meta, width="stretch")
+        _mas_dificil = proy.sort_values("llegan_hoy").iloc[0]
+        st.caption(
+            f"La meta más exigente respecto a hoy es **{_mas_dificil['Local']} · {_mas_dificil['Turno']}**: "
+            f"hoy solo {_mas_dificil['llegan_hoy']:.0f}% de sus turnos la alcanza. Una meta ambiciosa suele "
+            "ser alcanzable por entre 30% y 60% de los turnos actuales; mucho menos que eso, conviene "
+            "acompañarla de un plan para llegar."
+        )
+
+        if st.button("💾 Guardar estas metas", key="meta_guardar", type="primary"):
+            try:
+                sh.guardar_metas({(r["Local"], r["Turno"]): int(r["Mi meta"]) for _, r in editada.iterrows()})
+                st.session_state["meta_modo"] = "guardada"
+                st.success(
+                    "Metas guardadas en la hoja Config. El personal las ve en Registro (Cierre) e "
+                    "Historial, y aquí quedan como «Meta guardada»."
+                )
+            except (ValueError, RuntimeError) as error:
+                st.error(f"No se guardaron las metas: {error}")
+
 
 with tab_cuadre:
     # Lugar RESERVADO para la linea de tiempo: va primero en la pestaña, pero
