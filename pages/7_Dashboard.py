@@ -490,6 +490,107 @@ with tab_operaciones:
         )
         st.plotly_chart(fig_hist, width="stretch")
 
+        # -----------------------------------------------------------------
+        # Propuesta de comision: cuanto sube tu comision con +X% y que
+        # estructura es mas facil de pactar con el banco, calculado con tus
+        # propios turnos (y los minimos de arriba).
+        # -----------------------------------------------------------------
+        st.divider()
+        st.subheader("💰 Propuesta de aumento de comisión")
+        st.caption(
+            "Con tus turnos reales: cuánto significa un aumento de la tarifa por operación y qué "
+            "estructura es más fácil de pactar. Usa los mínimos por local y turno de arriba."
+        )
+        pa1, pa2 = st.columns(2)
+        aumento = pa1.number_input(
+            "Aumento de comisión a proponer (%)", min_value=0, max_value=200, value=50, step=5,
+            key="prop_aumento",
+        ) / 100
+        factor_min = pa2.number_input(
+            "Mínimo pactado (% del mínimo de arriba)", min_value=0, max_value=300, value=100, step=10,
+            key="prop_factor_min",
+            help="100% = exactamente los mínimos por local y turno de la tabla de arriba.",
+        ) / 100
+
+        _dias = max(int(ops_turnos["fecha"].nunique()), 1)
+        _mes = 30 / _dias   # lleva lo observado a "un mes" de 30 dias
+        _t = ops_turnos["local"].map(tarifa_local).fillna(0)
+        _m = ops_turnos["minimo"] * factor_min
+        ops_turnos["com_actual"] = ops_turnos["operaciones"] * _t
+        ops_turnos["com_plana"] = ops_turnos["com_actual"] * (1 + aumento)
+        ops_turnos["com_excedente"] = (
+            ops_turnos[["operaciones"]].assign(m=_m).min(axis=1) * _t
+            + (ops_turnos["operaciones"] - _m).clip(lower=0) * _t * (1 + aumento)
+        )
+
+        por_local = (
+            ops_turnos.groupby("local")
+            .agg(ops=("operaciones", "sum"), actual=("com_actual", "sum"),
+                 plana=("com_plana", "sum"), excedente=("com_excedente", "sum"))
+            .reset_index()
+        )
+        por_local[["ops", "actual", "plana", "excedente"]] *= _mes
+        total = por_local[["ops", "actual", "plana", "excedente"]].sum()
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Comisión estimada hoy (por mes)", f"S/ {total['actual']:,.0f}")
+        c2.metric(
+            f"Con +{aumento * 100:.0f}% a toda operación",
+            f"S/ {total['plana']:,.0f}",
+            f"+S/ {total['plana'] - total['actual']:,.0f} al mes",
+        )
+        uplift_exc = (total["excedente"] / total["actual"] - 1) * 100 if total["actual"] else 0
+        c3.metric(
+            f"Con +{aumento * 100:.0f}% solo sobre el excedente del mínimo",
+            f"S/ {total['excedente']:,.0f}",
+            f"+{uplift_exc:.0f}% (+S/ {total['excedente'] - total['actual']:,.0f} al mes)",
+        )
+
+        tabla_prop = por_local.rename(
+            columns={"local": "Local", "ops": "Operaciones/mes", "actual": "Comisión hoy (S/ mes)",
+                     "plana": "Con aumento a todo (S/ mes)", "excedente": "Con aumento sobre excedente (S/ mes)"}
+        )
+        tabla_prop["Aumento efectivo (excedente)"] = (
+            tabla_prop["Con aumento sobre excedente (S/ mes)"] / tabla_prop["Comisión hoy (S/ mes)"] - 1
+        ) * 100
+        st.dataframe(
+            sh.arrow_safe(tabla_prop),
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Operaciones/mes": st.column_config.NumberColumn(format="%.0f"),
+                "Comisión hoy (S/ mes)": st.column_config.NumberColumn(format="%.0f"),
+                "Con aumento a todo (S/ mes)": st.column_config.NumberColumn(format="%.0f"),
+                "Con aumento sobre excedente (S/ mes)": st.column_config.NumberColumn(format="%.0f"),
+                "Aumento efectivo (excedente)": st.column_config.NumberColumn(format="%+.0f%%"),
+            },
+        )
+
+        # Curva: que aumento efectivo obtienes segun lo bajo/alto del minimo pactado.
+        _curva = []
+        for f in range(0, 201, 10):
+            mm = ops_turnos["minimo"] * f / 100
+            com = (
+                ops_turnos[["operaciones"]].assign(m=mm).min(axis=1) * _t
+                + (ops_turnos["operaciones"] - mm).clip(lower=0) * _t * (1 + aumento)
+            ).sum()
+            base = ops_turnos["com_actual"].sum()
+            _curva.append({"Mínimo pactado (% del mínimo de arriba)": f, "Aumento efectivo (%)": (com / base - 1) * 100 if base else 0})
+        fig_curva = px.line(
+            pd.DataFrame(_curva),
+            x="Mínimo pactado (% del mínimo de arriba)",
+            y="Aumento efectivo (%)",
+            markers=True,
+        )
+        st.plotly_chart(fig_curva, width="stretch")
+        crecimiento = (1 + aumento) - 1
+        st.caption(
+            f"Para ganar +{aumento * 100:.0f}% **sin** cambiar la tarifa, necesitarías "
+            f"{crecimiento * 100:.0f}% más operaciones (unas {ops_turnos['operaciones'].mean() * crecimiento:,.0f} "
+            "más por turno en promedio). Un mínimo más bajo hace que casi todo cuente como "
+            "excedente (el aumento efectivo se acerca al pedido); uno más alto, lo contrario."
+        )
+
     st.divider()
     st.subheader("🕐 Movimientos por turno")
     st.caption(
