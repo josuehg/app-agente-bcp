@@ -377,8 +377,9 @@ with tab_operaciones:
             .apply(_resumen_ops)
             .reset_index()
             .rename(columns={"local": "Local", "turno": "Turno"})
+            .sort_values(["Turno", "Local"])
         )
-        st.markdown("**Distribución de operaciones por turno**")
+        st.markdown("**Distribución de operaciones por local y turno**")
         st.dataframe(
             sh.arrow_safe(distribucion),
             width="stretch",
@@ -390,27 +391,59 @@ with tab_operaciones:
             | {"Comisión prom. (S/)": st.column_config.NumberColumn(format="%.2f")},
         )
 
-        st.markdown("**¿Cuántos turnos cumplirían un mínimo?**")
-        minimo_ops = st.number_input(
-            "Mínimo de operaciones por turno a evaluar",
-            min_value=0,
-            value=int(round(float(ops_turnos["operaciones"].quantile(0.25)))),
-            step=5,
-            help="Por defecto, el cuartil bajo: el nivel que hoy superan 3 de cada 4 turnos.",
-            key="ops_minimo_eval",
+        st.markdown("**Mínimo a exigir por local y turno**")
+        st.caption(
+            "Cada combinación (por ejemplo ZolA Mañana, ZolB Mañana, ZolA Tarde…) tiene su propio "
+            "mínimo: edítalo en la columna «Mínimo a exigir» y abajo verás cuántos turnos lo cumplen."
         )
-        ops_turnos["cumple"] = ops_turnos["operaciones"] >= minimo_ops
-        cumplimiento = (
-            ops_turnos.groupby(["local", "turno"])
-            .agg(Turnos=("cumple", "size"), Cumplen=("cumple", "sum"))
+        base_punto = st.radio(
+            "Punto de partida del mínimo",
+            ["Cuartil bajo (lo superan 3 de cada 4 turnos)", "Mediana (lo superan la mitad)", "Cuartil alto"],
+            horizontal=True,
+            key="ops_punto_partida",
+        )
+        _q = {"Cuartil bajo": 0.25, "Mediana": 0.5, "Cuartil alto": 0.75}[base_punto.split(" (")[0]]
+        propuesta = (
+            ops_turnos.groupby(["turno", "local"])["operaciones"]
+            .agg(Turnos="size", Mediana="median", propuesto=lambda x: x.quantile(_q))
             .reset_index()
+            .sort_values(["turno", "local"])
+        )
+        propuesta["Mínimo a exigir"] = propuesta["propuesto"].round().astype(int)
+        propuesta = propuesta.rename(columns={"turno": "Turno", "local": "Local"})[
+            ["Turno", "Local", "Turnos", "Mediana", "Mínimo a exigir"]
+        ]
+        propuesta["Mediana"] = propuesta["Mediana"].round(0)
+        editado = st.data_editor(
+            propuesta,
+            hide_index=True,
+            width="stretch",
+            disabled=["Turno", "Local", "Turnos", "Mediana"],
+            column_config={
+                "Mínimo a exigir": st.column_config.NumberColumn(min_value=0, step=1, format="%d"),
+                "Mediana": st.column_config.NumberColumn(format="%.0f"),
+            },
+            key=f"ops_minimos_{_q}",
+        )
+        minimos = {(r["Turno"], r["Local"]): int(r["Mínimo a exigir"]) for _, r in editado.iterrows()}
+        ops_turnos["minimo"] = [minimos.get((t, l), 0) for t, l in zip(ops_turnos["turno"], ops_turnos["local"])]
+        ops_turnos["cumple"] = ops_turnos["operaciones"] >= ops_turnos["minimo"]
+
+        cumplimiento = (
+            ops_turnos.groupby(["turno", "local"])
+            .agg(Turnos=("cumple", "size"), Cumplen=("cumple", "sum"), Minimo=("minimo", "first"))
+            .reset_index()
+            .sort_values(["turno", "local"])
         )
         cumplimiento["No cumplen"] = cumplimiento["Turnos"] - cumplimiento["Cumplen"]
         cumplimiento["% que cumple"] = cumplimiento["Cumplen"] / cumplimiento["Turnos"] * 100
-        cumplimiento = cumplimiento.rename(columns={"local": "Local", "turno": "Turno"})
+        cumplimiento = cumplimiento.rename(
+            columns={"turno": "Turno", "local": "Local", "Minimo": "Mínimo"}
+        )[["Turno", "Local", "Mínimo", "Turnos", "Cumplen", "No cumplen", "% que cumple"]]
+
         total_cumplen = int(ops_turnos["cumple"].sum())
         st.metric(
-            f"Turnos que llegan a {minimo_ops} operaciones",
+            "Turnos que llegan a su mínimo",
             f"{total_cumplen / len(ops_turnos) * 100:.0f}%",
             f"{total_cumplen} de {len(ops_turnos)} turnos",
         )
@@ -424,21 +457,22 @@ with tab_operaciones:
             cumplimiento.assign(Etiqueta=cumplimiento["Local"] + " · " + cumplimiento["Turno"]),
             x="Etiqueta",
             y="% que cumple",
-            labels={"Etiqueta": "", "% que cumple": f"% de turnos con ≥ {minimo_ops} operaciones"},
+            color="Turno",
+            labels={"Etiqueta": "", "% que cumple": "% de turnos que llegan a su mínimo"},
         )
         fig_cumpl.update_yaxes(range=[0, 100])
         st.plotly_chart(fig_cumpl, width="stretch")
 
-        bajo_minimo = ops_turnos[~ops_turnos["cumple"]].sort_values(["operaciones", "fecha"])
-        with st.expander(f"Turnos por debajo de {minimo_ops} operaciones ({len(bajo_minimo)})"):
+        bajo_minimo = ops_turnos[~ops_turnos["cumple"]].sort_values(["turno", "local", "fecha"])
+        with st.expander(f"Turnos por debajo de su mínimo ({len(bajo_minimo)})"):
             if bajo_minimo.empty:
-                st.success("Todos los turnos analizados llegan al mínimo.")
+                st.success("Todos los turnos analizados llegan a su mínimo.")
             else:
                 st.dataframe(
                     sh.arrow_safe(
-                        bajo_minimo[["fecha", "local", "turno", "operaciones", "personas"]].rename(
+                        bajo_minimo[["fecha", "local", "turno", "operaciones", "minimo", "personas"]].rename(
                             columns={"fecha": "Fecha", "local": "Local", "turno": "Turno",
-                                     "operaciones": "Operaciones", "personas": "Personas"}
+                                     "operaciones": "Operaciones", "minimo": "Mínimo", "personas": "Personas"}
                         )
                     ),
                     width="stretch",
@@ -449,12 +483,11 @@ with tab_operaciones:
             ops_turnos,
             x="operaciones",
             color="turno",
-            nbins=20,
-            barmode="overlay",
-            opacity=0.7,
-            labels={"operaciones": "Operaciones en el turno", "turno": "Turno", "count": "Turnos"},
+            facet_col="local",
+            facet_col_wrap=3,
+            nbins=15,
+            labels={"operaciones": "Operaciones en el turno", "turno": "Turno", "count": "Turnos", "local": "Local"},
         )
-        fig_hist.add_vline(x=minimo_ops, line_dash="dash", annotation_text=f"mínimo {minimo_ops}")
         st.plotly_chart(fig_hist, width="stretch")
 
     st.divider()
