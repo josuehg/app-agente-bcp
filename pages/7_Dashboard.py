@@ -849,6 +849,44 @@ with tab_metas:
                 st.error(f"No se guardaron las metas: {error}")
 
 
+with tab_resumen:
+    # Cumplimiento de metas de operaciones por local y turno (rango del filtro).
+    # Se dibuja aca porque ops_turnos se calcula mas arriba, en Operaciones.
+    st.subheader("🎯 Cumplimiento de metas de operaciones")
+    if ops_turnos.empty or "meta" not in ops_turnos.columns or (ops_turnos["meta"] <= 0).all():
+        st.caption("Todavía no hay metas definidas: créalas en la pestaña **🎯 Metas**.")
+    else:
+        _cm = ops_turnos[ops_turnos["meta"] > 0].assign(
+            cumple=lambda d: d["operaciones"] >= d["meta"]
+        )
+        _res = (
+            _cm.groupby(["turno", "local"])
+            .agg(Meta=("meta", "first"), Promedio=("operaciones", "mean"),
+                 Turnos=("cumple", "size"), Cumplen=("cumple", "sum"))
+            .reset_index()
+            .sort_values(["turno", "local"])
+        )
+        _res["% que cumple"] = _res["Cumplen"] / _res["Turnos"] * 100
+        _bajo = _res[_res["% que cumple"] < 50]
+        if not _bajo.empty:
+            st.warning(
+                "Por debajo del 50% de cumplimiento: "
+                + ", ".join(
+                    f"{l} · {t} ({p:.0f}%)"
+                    for l, t, p in zip(_bajo["local"], _bajo["turno"], _bajo["% que cumple"])
+                )
+            )
+        st.dataframe(
+            sh.arrow_safe(_res.rename(columns={"turno": "Turno", "local": "Local"})),
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Promedio": st.column_config.NumberColumn(format="%.0f"),
+                "% que cumple": st.column_config.NumberColumn(format="%.0f%%"),
+            },
+        )
+
+
 with tab_cuadre:
     # Lugar RESERVADO para la linea de tiempo: va primero en la pestaña, pero
     # se llena mas abajo, cuando cortes/saltos/estados ya estan calculados.

@@ -57,6 +57,7 @@ from cuadre import (  # noqa: F401  (re-export para el resto de la app)
     clave_alias,
     conflictos_alias,
     mapa_alias,
+    operaciones_por_turno,
     sugerir_oficial,
     politica_sucursal,
     margen_error,
@@ -443,6 +444,28 @@ def get_meta_operaciones(local: str, turno: str) -> int:
     if fila.empty:
         return 0
     return int(fila.iloc[0][columna])
+
+
+def resumen_meta_turno(local: str, turno: str) -> dict:
+    """Para mostrar la meta en Registro: la meta del turno, las operaciones que
+    ya se registraron HOY en ese turno (Cierres parciales anteriores) y el
+    promedio de los ultimos 7 turnos cerrados de ese local y turno."""
+    meta = get_meta_operaciones(local, turno)
+    df = get_registros_df()
+    if df.empty:
+        return {"meta": meta, "previas": 0, "promedio": None, "n": 0}
+    hoy = hoy_local()
+    propio = df[(df["local"] == local) & (df["turno"] == turno)]
+    cierres_hoy = propio[(propio["fecha"] == hoy) & (propio["tipo"] == "Cierre")]
+    previas = int(pd.to_numeric(cierres_hoy["num_operaciones"], errors="coerce").fillna(0).sum())
+    ops = operaciones_por_turno(propio)
+    ops = ops[ops["fecha"] < hoy].sort_values("fecha").tail(7)
+    return {
+        "meta": meta,
+        "previas": previas,
+        "promedio": float(ops["operaciones"].mean()) if not ops.empty else None,
+        "n": len(ops),
+    }
 
 
 def guardar_metas(metas: dict) -> None:

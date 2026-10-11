@@ -221,6 +221,18 @@ if tipo == "Cierre":
                 placeholder="Ej: la persona que abrió se retiró por una emergencia",
             )
 
+# Meta de operaciones del turno: se muestra desde la APERTURA (para saber a que se
+# apunta) y se compara en vivo al hacer el CIERRE.
+_res_meta = sh.resumen_meta_turno(local, turno)
+if tipo == "Apertura" and _res_meta["meta"]:
+    _extra = (
+        f" En tus últimos {_res_meta['n']} turnos de {turno} hicieron en promedio "
+        f"**{_res_meta['promedio']:.0f}**."
+        if _res_meta["promedio"] is not None
+        else ""
+    )
+    st.info(f"🎯 **Meta de hoy ({turno}): {_res_meta['meta']} operaciones.**{_extra}")
+
 tarjeta = st.number_input("Monto en Tarjeta (S/)", min_value=0.0, step=10.0, key=f"tarjeta_{v}")
 
 # Desglose de efectivo: en vez de subir una foto del "sello" con el
@@ -276,9 +288,25 @@ else:
     num_operaciones = st.number_input(
         "Numero de Operaciones", min_value=0, step=1, key=f"num_op_{v}"
     )
-    _meta_turno = sh.get_meta_operaciones(local, turno)
+    _meta_turno = _res_meta["meta"]
     if _meta_turno:
-        st.caption(f"🎯 Meta de tu local para el turno {turno}: **{_meta_turno}** operaciones.")
+        _llevas = _res_meta["previas"] + int(num_operaciones or 0)
+        _previas_txt = (
+            f" (ya llevabas {_res_meta['previas']} de cortes anteriores de este turno)"
+            if _res_meta["previas"]
+            else ""
+        )
+        if _llevas >= _meta_turno:
+            st.success(
+                f"🎯 ¡Meta cumplida! Llevas **{_llevas}** de **{_meta_turno}** operaciones{_previas_txt}."
+            )
+        elif int(num_operaciones or 0) > 0:
+            st.warning(
+                f"🎯 Llevas **{_llevas}** de **{_meta_turno}** operaciones{_previas_txt}: "
+                f"te faltan **{_meta_turno - _llevas}** para la meta del turno."
+            )
+        else:
+            st.caption(f"🎯 Meta de tu local para el turno {turno}: **{_meta_turno}** operaciones.")
     st.subheader("Fotos de Cierre (obligatorio)")
     foto_voucher_saldo_final_tarjeta = st.file_uploader(
         "Voucher de saldo FINAL en Tarjeta", type=["jpg", "jpeg", "png"], key=f"foto_vf_{v}"
@@ -511,6 +539,16 @@ def _dialogo_confirmar_registro():
 
     st.divider()
 
+    _linea_meta = ""
+    if tipo == "Cierre" and _res_meta["meta"]:
+        _total_turno = _res_meta["previas"] + int(num_operaciones or 0)
+        _estado_meta = (
+            "✅ cumplida"
+            if _total_turno >= _res_meta["meta"]
+            else f"faltan {_res_meta['meta'] - _total_turno}"
+        )
+        _linea_meta = f"- **Meta del turno:** {_res_meta['meta']} · {_estado_meta}"
+
     st.write(f"Vas a guardar un registro de **{tipo}** del turno **{turno}** en **{local}**:")
     st.markdown(
         f"""
@@ -519,6 +557,7 @@ def _dialogo_confirmar_registro():
 - **Tarjeta:** S/ {tarjeta:,.2f}
 - **Total:** S/ {total:,.2f}
 {f"- **N° de operaciones:** {num_operaciones}" if tipo == "Cierre" else ""}
+{_linea_meta}
 - **Observaciones:** {observaciones.strip()}
 """
     )

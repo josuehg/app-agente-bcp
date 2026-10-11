@@ -897,3 +897,25 @@ def linea_de_tiempo(cortes: pd.DataFrame, saltos: pd.DataFrame, estado_por_salto
     # Estable: si un corte y su entrega comparten minuto, primero el corte.
     salida["_t"] = (salida["tipo"] == "Entrega").astype(int)
     return salida.sort_values(["local", "orden", "_t"], kind="stable").drop(columns="_t").reset_index(drop=True)
+
+
+COLUMNAS_OPS_TURNO = ["local", "fecha", "turno", "operaciones"]
+
+
+def operaciones_por_turno(registros: pd.DataFrame) -> pd.DataFrame:
+    """Operaciones de cada turno (local + fecha + Mañana/Tarde): la suma de las de
+    TODOS sus Cierres. Solo cuentan turnos ya cerrados (si el ultimo registro es
+    una Apertura, las operaciones estan a medias)."""
+    if registros is None or registros.empty:
+        return pd.DataFrame(columns=COLUMNAS_OPS_TURNO)
+    r = registros.copy()
+    r["_ts"] = pd.to_datetime(r["timestamp"], errors="coerce")
+    ultimo = r.sort_values("_ts").groupby(["local", "fecha", "turno"]).tail(1)
+    cerrados = ultimo[ultimo["tipo"] == "Cierre"][["local", "fecha", "turno"]]
+    cierres = r[r["tipo"] == "Cierre"].copy()
+    cierres["num_operaciones"] = pd.to_numeric(cierres["num_operaciones"], errors="coerce").fillna(0)
+    ops = (
+        cierres.groupby(["local", "fecha", "turno"])["num_operaciones"].sum().reset_index()
+        .rename(columns={"num_operaciones": "operaciones"})
+    )
+    return ops.merge(cerrados, on=["local", "fecha", "turno"], how="inner")[COLUMNAS_OPS_TURNO]

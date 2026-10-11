@@ -234,6 +234,20 @@ with tab_linea:
         st.caption(
             f"🎯 Meta de operaciones por turno de tu local: Mañana **{_meta_m or '—'}** · Tarde **{_meta_t or '—'}**."
         )
+        _ops_local = sh.operaciones_por_turno(df[df["local"] == local])
+        _ops_local = _ops_local[_ops_local["fecha"] >= desde]
+        _ops_local = _ops_local.assign(
+            meta=_ops_local["turno"].map({"Mañana": _meta_m, "Tarde": _meta_t})
+        )
+        _ops_local = _ops_local[_ops_local["meta"] > 0]
+        if not _ops_local.empty:
+            _cumplen = int((_ops_local["operaciones"] >= _ops_local["meta"]).sum())
+            _pct = _cumplen / len(_ops_local) * 100
+            _msg = (
+                f"En este periodo, **{_cumplen} de {len(_ops_local)}** turnos cumplieron la meta "
+                f"de operaciones ({_pct:.0f}%)."
+            )
+            (st.success if _pct >= 60 else st.info)(_msg)
     st.info(
         f"🆕 **Último registro:** {fila_reciente['tipo']} de {turno_reciente} "
         f"por **{fila_reciente['nombre']}** — {fecha_reciente} {hora_reciente}"
