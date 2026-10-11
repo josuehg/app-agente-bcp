@@ -755,8 +755,10 @@ with tab_metas:
             hist["Mi meta"] = hist["Sugerido"]
         else:
             hist["Mi meta"] = hist["Meta guardada"].where(hist["Meta guardada"] > 0, hist["Sugerido"])
+        hist["Activa"] = hist["Meta guardada"] > 0
         tabla_meta = hist.rename(columns={"turno": "Turno", "local": "Local", "Maximo": "Máximo"})[
-            ["Turno", "Local", "Turnos", "Promedio", "Mediana", "Máximo", "Sugerido", "Meta guardada", "Mi meta"]
+            ["Turno", "Local", "Turnos", "Promedio", "Mediana", "Máximo", "Sugerido", "Meta guardada",
+             "Activa", "Mi meta"]
         ].copy()
         for c in ["Promedio", "Mediana", "Máximo"]:
             tabla_meta[c] = tabla_meta[c].round(0)
@@ -766,6 +768,10 @@ with tab_metas:
             width="stretch",
             disabled=["Turno", "Local", "Turnos", "Promedio", "Mediana", "Máximo", "Sugerido", "Meta guardada"],
             column_config={
+                "Activa": st.column_config.CheckboxColumn(
+                    help="Marca los locales y turnos donde la meta YA se muestra al personal (piloto). "
+                    "Sin marcar = sin meta: no se ve en Registro ni en Historial."
+                ),
                 "Mi meta": st.column_config.NumberColumn(min_value=0, step=1, format="%d"),
                 "Promedio": st.column_config.NumberColumn(format="%.0f"),
                 "Mediana": st.column_config.NumberColumn(format="%.0f"),
@@ -777,6 +783,7 @@ with tab_metas:
         # ---- Proyeccion: que significa la meta (llevado a 30 dias)
         _dias_meta = max(int(ops_turnos["fecha"].nunique()), 1)
         proy = editada.copy()
+        proy["Mi meta"] = proy["Mi meta"].where(proy["Activa"], proy["Promedio"])
         proy["tarifa"] = proy["Local"].map(tarifa_local).fillna(0)
         proy["turnos_mes"] = proy["Turnos"] / _dias_meta * 30
         proy["ops_hoy"] = proy["Promedio"] * proy["turnos_mes"]
@@ -786,7 +793,9 @@ with tab_metas:
         proy["brecha"] = proy["Mi meta"] - proy["Promedio"]
 
         # % de turnos que hoy ya llegarian a la meta definida
-        _meta_por_fila = {(r["Turno"], r["Local"]): r["Mi meta"] for _, r in editada.iterrows()}
+        _meta_por_fila = {
+            (r["Turno"], r["Local"]): (r["Mi meta"] if r["Activa"] else 0) for _, r in editada.iterrows()
+        }
         ops_turnos["_meta_prop"] = [_meta_por_fila.get((t, l), 0) for t, l in zip(ops_turnos["turno"], ops_turnos["local"])]
         _ya = (ops_turnos["operaciones"] >= ops_turnos["_meta_prop"]).groupby(
             [ops_turnos["turno"], ops_turnos["local"]]
@@ -829,7 +838,8 @@ with tab_metas:
             labels={"Etiqueta": ""},
         )
         st.plotly_chart(fig_meta, width="stretch")
-        _mas_dificil = proy.sort_values("llegan_hoy").iloc[0]
+        _activas = proy[proy["Activa"]]
+        _mas_dificil = (_activas if not _activas.empty else proy).sort_values("llegan_hoy").iloc[0]
         st.caption(
             f"La meta más exigente respecto a hoy es **{_mas_dificil['Local']} · {_mas_dificil['Turno']}**: "
             f"hoy solo {_mas_dificil['llegan_hoy']:.0f}% de sus turnos la alcanza. Una meta ambiciosa suele "
@@ -839,11 +849,16 @@ with tab_metas:
 
         if st.button("💾 Guardar estas metas", key="meta_guardar", type="primary"):
             try:
-                sh.guardar_metas({(r["Local"], r["Turno"]): int(r["Mi meta"]) for _, r in editada.iterrows()})
+                sh.guardar_metas(
+                    {
+                        (r["Local"], r["Turno"]): int(r["Mi meta"]) if r["Activa"] else 0
+                        for _, r in editada.iterrows()
+                    }
+                )
                 st.session_state["meta_modo"] = "guardada"
                 st.success(
-                    "Metas guardadas en la hoja Config. El personal las ve en Registro (Cierre) e "
-                    "Historial, y aquí quedan como «Meta guardada»."
+                    "Metas guardadas en la hoja Config. El personal las ve en Registro e Historial "
+                    "solo en los locales y turnos marcados como «Activa»."
                 )
             except (ValueError, RuntimeError) as error:
                 st.error(f"No se guardaron las metas: {error}")
