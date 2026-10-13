@@ -446,12 +446,13 @@ def get_meta_operaciones(local: str, turno: str) -> int:
     return int(fila.iloc[0][columna])
 
 
-def resumen_meta_turno(local: str, turno: str) -> dict:
+def resumen_meta_turno(local: str, turno: str, df: pd.DataFrame | None = None) -> dict:
     """Para mostrar la meta en Registro: la meta del turno, las operaciones que
     ya se registraron HOY en ese turno (Cierres parciales anteriores) y el
     promedio de los ultimos 7 turnos cerrados de ese local y turno."""
     meta = get_meta_operaciones(local, turno)
-    df = get_registros_df()
+    if df is None:
+        df = get_registros_df()
     if df.empty:
         return {"meta": meta, "previas": 0, "promedio": None, "n": 0}
     hoy = hoy_local()
@@ -771,6 +772,32 @@ def estado_turno(local: str, fecha: str, turno: str) -> dict:
     return {"abierto": False, "apertura_abierta": None, "ultimo_tipo": "Cierre"}
 
 
+def estado_turno_df(df: pd.DataFrame, local: str, fecha: str, turno: str) -> dict:
+    """Igual que estado_turno, pero calculado sobre un DataFrame que YA se leyo
+    (get_registros_df): no gasta lecturas de Google Sheets. Sirve para las
+    pistas del formulario; el guardado igual revalida con lectura fresca."""
+    vacio = {"abierto": False, "apertura_abierta": None, "ultimo_tipo": None}
+    if df is None or df.empty:
+        return vacio
+    sub = df[
+        (df["local"] == local) & (df["fecha"] == date.fromisoformat(str(fecha))) & (df["turno"] == turno)
+    ].sort_values("timestamp")
+    if sub.empty:
+        return vacio
+    ultimo = sub.iloc[-1]
+    if str(ultimo["tipo"]).strip() == "Apertura":
+        ts = pd.to_datetime(ultimo["timestamp"], errors="coerce")
+        return {
+            "abierto": True,
+            "apertura_abierta": {
+                "nombre": str(ultimo["nombre"]).strip(),
+                "hora": "" if pd.isna(ts) else ts.strftime("%H:%M"),
+            },
+            "ultimo_tipo": "Apertura",
+        }
+    return {"abierto": False, "apertura_abierta": None, "ultimo_tipo": "Cierre"}
+
+
 @st.cache_data(ttl=15, show_spinner=False)
 def estado_turno_cache(local: str, fecha: str, turno: str) -> dict:
     """Igual que estado_turno pero cacheado 15 s. Se usa solo para las
@@ -1063,7 +1090,10 @@ def mostrar_nota_nps(local: str | None = None) -> None:
     local = local or st.session_state.get("local_autenticado")
     if not local:
         return
-    vigente, ultimo_final = nota_vigente(get_notas_df(), local)
+    try:
+        vigente, ultimo_final = nota_vigente(get_notas_df(), local)
+    except Exception:
+        return  # es solo informativa: si Google esta ocupado, la pagina sigue sin ella
     if vigente is None:
         _caja_nps(
             "⭐ <b>Nota NPS:</b> todavía no hay nota cargada para tu local. Mientras tanto, "

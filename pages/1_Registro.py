@@ -36,7 +36,9 @@ sh.aplicar_estilo()
 st.title("📝 Registro de Apertura / Cierre")
 
 if "mensaje_guardado" in st.session_state:
-    st.toast(st.session_state.pop("mensaje_guardado"), icon="✅")
+    _msg_guardado = st.session_state.pop("mensaje_guardado")
+    st.toast(_msg_guardado, icon="✅")
+    st.success(f"✅ {_msg_guardado}")
 
 # Si el ultimo intento de guardar rompio la secuencia del turno (doble
 # Apertura, o Cierre sin Apertura), sheets_utils.guardar_registro lanzo
@@ -55,6 +57,21 @@ local = sh.pedir_pin_de_local(
 
 col_local, col_salir = st.columns([4, 1])
 col_local.success(f"Local: **{local}**")
+# Los registros se leen UNA vez (cacheado) y de ahi salen todas las pistas del
+# formulario: antes cada pista leia la hoja por su cuenta y, al recargar justo
+# despues de guardar, varias tiendas juntas pasaban el limite de lecturas de
+# Google y la pagina quedaba con el formulario viejo (parecia no guardado).
+try:
+    registros_df = sh.get_registros_df()
+    _lectura_ok = True
+except Exception:
+    registros_df = pd.DataFrame(columns=sh.COLUMNAS_REGISTROS)
+    _lectura_ok = False
+if not _lectura_ok:
+    st.warning(
+        "Google está ocupado y no se pudo leer el historial reciente: no verás las pistas de "
+        "turno, pero puedes registrar igual (al guardar se vuelve a validar el turno)."
+    )
 sh.mostrar_nota_nps(local)
 if col_salir.button("Cambiar de PIN"):
     st.session_state["local_autenticado"] = None
@@ -69,8 +86,8 @@ if "turno_sel" not in st.session_state:
     # del reloj, porque dice exactamente lo que falta hacer. Si no hay
     # nada abierto en ningun turno, recien ahi usamos la hora como pista
     # para una Apertura nueva (antes del mediodia se asume Mañana).
-    _est_manana_inicial = sh.estado_turno_cache(local, fecha_hoy_iso, "Mañana")
-    _est_tarde_inicial = sh.estado_turno_cache(local, fecha_hoy_iso, "Tarde")
+    _est_manana_inicial = sh.estado_turno_df(registros_df, local, fecha_hoy_iso, "Mañana")
+    _est_tarde_inicial = sh.estado_turno_df(registros_df, local, fecha_hoy_iso, "Tarde")
     if _est_manana_inicial["abierto"]:
         st.session_state["turno_sel"] = "Mañana"
         st.session_state["tipo_sel"] = "Cierre"
@@ -94,7 +111,10 @@ with col3:
 # variantes ("Ana", "Ana Maritza...") ni se confunden dos personas. Si la
 # hoja Personal aun esta vacia, queda el campo de texto de siempre.
 OTRA_PERSONA = "Otra persona (escribir el nombre)"
-_propios, _otros = sh.personal_activo(local)
+try:
+    _propios, _otros = sh.personal_activo(local)
+except Exception:
+    _propios, _otros = [], []
 usa_lista = bool(_propios or _otros)
 _opciones_nombre = list(_propios) + [n for n, _ in _otros] + [OTRA_PERSONA]
 _etiquetas_nombre = {n: f"{n} ({loc})" for n, loc in _otros}
@@ -133,8 +153,8 @@ else:
 #    quien abrio (eso lo maneja cuadre.py).
 # ---------------------------------------------------------------------
 turno_correspondiente = "Tarde" if turno == "Mañana" else "Mañana"
-est_turno = sh.estado_turno_cache(local, fecha_hoy_iso, turno)
-est_otro_turno = sh.estado_turno_cache(local, fecha_hoy_iso, turno_correspondiente)
+est_turno = sh.estado_turno_df(registros_df, local, fecha_hoy_iso, turno)
+est_otro_turno = sh.estado_turno_df(registros_df, local, fecha_hoy_iso, turno_correspondiente)
 motivo_cierre_otro_nombre = ""
 
 
@@ -223,7 +243,10 @@ if tipo == "Cierre":
 
 # Meta de operaciones del turno: se muestra desde la APERTURA (para saber a que se
 # apunta) y se compara en vivo al hacer el CIERRE.
-_res_meta = sh.resumen_meta_turno(local, turno)
+try:
+    _res_meta = sh.resumen_meta_turno(local, turno, registros_df if _lectura_ok else None)
+except Exception:
+    _res_meta = {"meta": 0, "previas": 0, "promedio": None, "n": 0}
 if tipo == "Apertura" and _res_meta["meta"]:
     _extra = (
         f" En tus últimos {_res_meta['n']} turnos de {turno} hicieron en promedio "
@@ -410,7 +433,7 @@ def _dialogo_confirmar_registro():
     # bloquea el guardado, porque a veces la diferencia es real (un
     # retiro autorizado por administración).
     if tipo == "Apertura":
-        _cierres_local = sh.get_registros_df()
+        _cierres_local = registros_df
         _cierres_local = _cierres_local[
             (_cierres_local["local"] == local) & (_cierres_local["tipo"] == "Cierre")
         ].sort_values("timestamp")
@@ -475,7 +498,7 @@ def _dialogo_confirmar_registro():
     # motivo: que quien cierra vea al instante si el corte no cuadró, en
     # vez de enterarse despues. Tampoco bloquea el guardado.
     elif tipo == "Cierre":
-        _aperturas_corte = sh.get_registros_df()
+        _aperturas_corte = registros_df
         _aperturas_corte = _aperturas_corte[
             (_aperturas_corte["local"] == local)
             & (_aperturas_corte["fecha"] == sh.hoy_local())
