@@ -2328,9 +2328,10 @@ with tab_comisiones:
     st.divider()
     st.subheader("🧮 Calibrar la tarifa real por local")
     st.caption(
-        "Escribe, por local, lo que BCP te pagó de comisión en el mes y las operaciones que el "
-        "banco reporta. La tarifa real es comisión ÷ operaciones; al guardarla reemplaza el "
-        "promedio en Config y todas las proyecciones (Comisiones y Metas) la usan."
+        "El banco no da el detalle, así que se calibra con lo que sí tienes: lo que te pagó de "
+        "comisión y las operaciones que registra la app (las de los Cierres). "
+        "**Pon el rango de fechas de la izquierda igual al mes de esa comisión** (por ejemplo, el "
+        "mes pasado completo)."
     )
     _cierres_cal = df_filtrado[df_filtrado["tipo"] == "Cierre"].copy()
     _cierres_cal["num_operaciones"] = pd.to_numeric(_cierres_cal["num_operaciones"], errors="coerce").fillna(0)
@@ -2338,58 +2339,78 @@ with tab_comisiones:
     base_cal = config_df[["local", "tipo_agente", "soles_por_operacion"]].rename(
         columns={"local": "Local", "tipo_agente": "Tipo", "soles_por_operacion": "Tarifa vigente (S/)"}
     )
-    base_cal["Operaciones en la app (rango)"] = base_cal["Local"].map(_ops_app).fillna(0).astype(int)
-    base_cal["Comisión pagada por BCP (S/)"] = 0.0
-    base_cal["Operaciones según el banco"] = 0
-    cal_editado = st.data_editor(
-        base_cal,
-        hide_index=True,
-        width="stretch",
-        disabled=["Local", "Tipo", "Tarifa vigente (S/)", "Operaciones en la app (rango)"],
-        column_config={
-            "Tarifa vigente (S/)": st.column_config.NumberColumn(format="%.3f"),
-            "Comisión pagada por BCP (S/)": st.column_config.NumberColumn(min_value=0.0, step=10.0, format="%.2f"),
-            "Operaciones según el banco": st.column_config.NumberColumn(min_value=0, step=10, format="%d"),
-        },
-        key="cal_tarifas_editor",
+    base_cal["Operaciones en la app"] = base_cal["Local"].map(_ops_app).fillna(0).astype(int)
+    base_cal["Comisión estimada hoy (S/)"] = base_cal["Operaciones en la app"] * base_cal["Tarifa vigente (S/)"]
+
+    modo_cal = st.radio(
+        "¿Qué dato tienes?",
+        ["Solo el total de la comisión (todos los locales)", "La comisión de cada local"],
+        horizontal=True,
+        key="cal_modo",
     )
-    cal_validas = cal_editado[
-        (cal_editado["Comisión pagada por BCP (S/)"] > 0) & (cal_editado["Operaciones según el banco"] > 0)
-    ].copy()
-    if cal_validas.empty:
-        st.caption("Completa la comisión y las operaciones del banco de al menos un local para calcular su tarifa real.")
-    else:
-        cal_validas["Tarifa real (S/)"] = (
-            cal_validas["Comisión pagada por BCP (S/)"] / cal_validas["Operaciones según el banco"]
+    cal_resultado = None   # DataFrame con Local y Tarifa nueva
+    if modo_cal.startswith("Solo el total"):
+        total_pagado = st.number_input(
+            "Comisión total que te pagó BCP en ese mes (S/)", min_value=0.0, value=0.0, step=100.0,
+            key="cal_total",
         )
-        cal_validas["Cambio vs vigente (%)"] = (
-            cal_validas["Tarifa real (S/)"] / cal_validas["Tarifa vigente (S/)"] - 1
-        ) * 100
-        cal_validas["App vs banco (%)"] = (
-            cal_validas["Operaciones en la app (rango)"] / cal_validas["Operaciones según el banco"] - 1
-        ) * 100
+        estimada = float(base_cal["Comisión estimada hoy (S/)"].sum())
+        st.caption(
+            f"Con las tarifas vigentes, la app estima **S/ {estimada:,.2f}** para este rango. "
+            "Se escala la tarifa de todos los locales por igual (respetando su diferencia entre "
+            "superagente y normal) para que la suma coincida con lo que realmente te pagaron."
+        )
+        if total_pagado > 0 and estimada > 0:
+            factor_cal = total_pagado / estimada
+            cal_resultado = base_cal.assign(**{"Tarifa nueva (S/)": base_cal["Tarifa vigente (S/)"] * factor_cal})
+            st.metric("Ajuste a las tarifas", f"{(factor_cal - 1) * 100:+.1f}%", f"S/ {total_pagado:,.2f} reales vs S/ {estimada:,.2f} estimados")
+    else:
+        por_local = base_cal.copy()
+        por_local["Comisión pagada (S/)"] = 0.0
+        cal_editado = st.data_editor(
+            por_local[["Local", "Tipo", "Tarifa vigente (S/)", "Operaciones en la app", "Comisión pagada (S/)"]],
+            hide_index=True,
+            width="stretch",
+            disabled=["Local", "Tipo", "Tarifa vigente (S/)", "Operaciones en la app"],
+            column_config={
+                "Tarifa vigente (S/)": st.column_config.NumberColumn(format="%.3f"),
+                "Comisión pagada (S/)": st.column_config.NumberColumn(min_value=0.0, step=10.0, format="%.2f"),
+            },
+            key="cal_tarifas_editor",
+        )
+        validas = cal_editado[
+            (cal_editado["Comisión pagada (S/)"] > 0) & (cal_editado["Operaciones en la app"] > 0)
+        ]
+        if validas.empty:
+            st.caption("Escribe la comisión pagada de al menos un local (con operaciones en el rango).")
+        else:
+            cal_resultado = validas.assign(
+                **{"Tarifa nueva (S/)": validas["Comisión pagada (S/)"] / validas["Operaciones en la app"]}
+            )
+
+    if cal_resultado is not None and not cal_resultado.empty:
+        cal_resultado = cal_resultado.assign(
+            **{"Cambio (%)": (cal_resultado["Tarifa nueva (S/)"] / cal_resultado["Tarifa vigente (S/)"] - 1) * 100}
+        )
         st.dataframe(
-            sh.arrow_safe(
-                cal_validas[["Local", "Tipo", "Tarifa vigente (S/)", "Tarifa real (S/)",
-                             "Cambio vs vigente (%)", "App vs banco (%)"]]
-            ),
+            sh.arrow_safe(cal_resultado[["Local", "Tipo", "Tarifa vigente (S/)", "Tarifa nueva (S/)", "Cambio (%)"]]),
             width="stretch",
             hide_index=True,
             column_config={
                 "Tarifa vigente (S/)": st.column_config.NumberColumn(format="%.3f"),
-                "Tarifa real (S/)": st.column_config.NumberColumn(format="%.3f"),
-                "Cambio vs vigente (%)": st.column_config.NumberColumn(format="%+.1f%%"),
-                "App vs banco (%)": st.column_config.NumberColumn(format="%+.1f%%"),
+                "Tarifa nueva (S/)": st.column_config.NumberColumn(format="%.3f"),
+                "Cambio (%)": st.column_config.NumberColumn(format="%+.1f%%"),
             },
         )
         st.caption(
-            "«App vs banco» compara las operaciones que escribe el personal con las del banco: si "
-            "es muy distinta de 0%, el dato del Cierre no es confiable para ese local."
+            "La tarifa se calcula sobre las operaciones que registra la app: es justo la que usan las "
+            "proyecciones, así que quedan en la misma vara. Si el personal anota de menos o de más, "
+            "la tarifa compensa (por eso es una tarifa «efectiva»)."
         )
-        if st.button("💾 Guardar estas tarifas reales en Config", key="cal_guardar"):
+        if st.button("💾 Guardar estas tarifas en Config", key="cal_guardar"):
             try:
-                sh.guardar_tarifas(dict(zip(cal_validas["Local"], cal_validas["Tarifa real (S/)"])))
-                st.success("Tarifas guardadas en la hoja Config. Las proyecciones ya usan la tarifa real.")
+                sh.guardar_tarifas(dict(zip(cal_resultado["Local"], cal_resultado["Tarifa nueva (S/)"])))
+                st.success("Tarifas guardadas en la hoja Config. Comisiones y Metas ya las usan.")
             except (ValueError, RuntimeError) as error:
                 st.error(f"No se guardaron las tarifas: {error}")
 
