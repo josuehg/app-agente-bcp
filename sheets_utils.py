@@ -487,6 +487,24 @@ def guardar_metas(metas: dict) -> None:
         get_config_df.clear()
 
 
+def guardar_tarifas(tarifas: dict) -> None:
+    """Guarda {local: tarifa por operacion} en la columna soles_por_operacion de
+    Config (una escritura confirmada)."""
+    ws = _get_or_create_worksheet(NOMBRE_HOJA_CONFIG, COLUMNAS_CONFIG)
+    locales = [str(v).strip() for v in ws.col_values(COLUMNAS_CONFIG.index("local") + 1)]
+    cambios = []
+    for local, tarifa in tarifas.items():
+        if local not in locales:
+            raise ValueError(f"No se encontró el local {local} en la hoja Config.")
+        a1 = gspread.utils.rowcol_to_a1(
+            locales.index(local) + 1, COLUMNAS_CONFIG.index("soles_por_operacion") + 1
+        )
+        cambios.append({"range": a1, "values": [[round(float(tarifa), 4)]]})
+    if cambios:
+        _escribir_y_confirmar(ws, cambios)
+        get_config_df.clear()
+
+
 def get_fondo_minimo(local: str) -> float:
     df = get_config_df()
     fila = df[df["local"] == local]

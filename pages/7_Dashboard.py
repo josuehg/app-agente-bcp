@@ -831,6 +831,45 @@ with tab_metas:
                 for c in vista_proy.columns if c not in ("Turno", "Local")
             },
         )
+        st.markdown("**Transacciones por día con la meta (escalón de pago de servicios)**")
+        _tipo_loc = config_df.set_index("local")["tipo_agente"].to_dict()
+        diario = (
+            proy.groupby("Local")
+            .agg(Meta_dia=("Mi meta", "sum"), Hoy_dia=("Promedio", "sum"))
+            .reset_index()
+        )
+        diario["Tipo"] = diario["Local"].map(_tipo_loc)
+
+        def _escalon_servicios(tr, tipo):
+            if tipo != "superagente":
+                return "tarifa fija (agente normal)"
+            if tr < 75:
+                return "0.50 (menos de 75)"
+            if tr <= 110:
+                return "0.75 (75 a 110)"
+            return "1.00 (más de 110)"
+
+        diario["Escalón hoy"] = [_escalon_servicios(t, k) for t, k in zip(diario["Hoy_dia"], diario["Tipo"])]
+        diario["Escalón con la meta"] = [_escalon_servicios(t, k) for t, k in zip(diario["Meta_dia"], diario["Tipo"])]
+        st.dataframe(
+            sh.arrow_safe(
+                diario.rename(columns={"Meta_dia": "TR/día con la meta", "Hoy_dia": "TR/día hoy"})[
+                    ["Local", "Tipo", "TR/día hoy", "TR/día con la meta", "Escalón hoy", "Escalón con la meta"]
+                ]
+            ),
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "TR/día hoy": st.column_config.NumberColumn(format="%.0f"),
+                "TR/día con la meta": st.column_config.NumberColumn(format="%.0f"),
+            },
+        )
+        st.caption(
+            "TR/día = meta de Mañana + meta de Tarde del local. En superagentes, el pago de servicios sube "
+            "con las transacciones por día (0.50, 0.75 y 1.00 por operación): una meta que cruce el 110 "
+            "duplica ese ítem. Los locales normales pagan tarifa fija."
+        )
+
         fig_meta = px.bar(
             proy.assign(Etiqueta=proy["Local"] + " · " + proy["Turno"])
             .melt(id_vars="Etiqueta", value_vars=["Promedio", "Mi meta"], var_name="Serie", value_name="Operaciones"),
@@ -2285,6 +2324,74 @@ with tab_comisiones:
         f"(superagente S/ {sh.TARIFA_DEFAULT['superagente']:.3f}, normal "
         f"S/ {sh.TARIFA_DEFAULT['normal']:.3f})."
     )
+
+    st.divider()
+    st.subheader("🧮 Calibrar la tarifa real por local")
+    st.caption(
+        "Escribe, por local, lo que BCP te pagó de comisión en el mes y las operaciones que el "
+        "banco reporta. La tarifa real es comisión ÷ operaciones; al guardarla reemplaza el "
+        "promedio en Config y todas las proyecciones (Comisiones y Metas) la usan."
+    )
+    _cierres_cal = df_filtrado[df_filtrado["tipo"] == "Cierre"].copy()
+    _cierres_cal["num_operaciones"] = pd.to_numeric(_cierres_cal["num_operaciones"], errors="coerce").fillna(0)
+    _ops_app = _cierres_cal.groupby("local")["num_operaciones"].sum()
+    base_cal = config_df[["local", "tipo_agente", "soles_por_operacion"]].rename(
+        columns={"local": "Local", "tipo_agente": "Tipo", "soles_por_operacion": "Tarifa vigente (S/)"}
+    )
+    base_cal["Operaciones en la app (rango)"] = base_cal["Local"].map(_ops_app).fillna(0).astype(int)
+    base_cal["Comisión pagada por BCP (S/)"] = 0.0
+    base_cal["Operaciones según el banco"] = 0
+    cal_editado = st.data_editor(
+        base_cal,
+        hide_index=True,
+        width="stretch",
+        disabled=["Local", "Tipo", "Tarifa vigente (S/)", "Operaciones en la app (rango)"],
+        column_config={
+            "Tarifa vigente (S/)": st.column_config.NumberColumn(format="%.3f"),
+            "Comisión pagada por BCP (S/)": st.column_config.NumberColumn(min_value=0.0, step=10.0, format="%.2f"),
+            "Operaciones según el banco": st.column_config.NumberColumn(min_value=0, step=10, format="%d"),
+        },
+        key="cal_tarifas_editor",
+    )
+    cal_validas = cal_editado[
+        (cal_editado["Comisión pagada por BCP (S/)"] > 0) & (cal_editado["Operaciones según el banco"] > 0)
+    ].copy()
+    if cal_validas.empty:
+        st.caption("Completa la comisión y las operaciones del banco de al menos un local para calcular su tarifa real.")
+    else:
+        cal_validas["Tarifa real (S/)"] = (
+            cal_validas["Comisión pagada por BCP (S/)"] / cal_validas["Operaciones según el banco"]
+        )
+        cal_validas["Cambio vs vigente (%)"] = (
+            cal_validas["Tarifa real (S/)"] / cal_validas["Tarifa vigente (S/)"] - 1
+        ) * 100
+        cal_validas["App vs banco (%)"] = (
+            cal_validas["Operaciones en la app (rango)"] / cal_validas["Operaciones según el banco"] - 1
+        ) * 100
+        st.dataframe(
+            sh.arrow_safe(
+                cal_validas[["Local", "Tipo", "Tarifa vigente (S/)", "Tarifa real (S/)",
+                             "Cambio vs vigente (%)", "App vs banco (%)"]]
+            ),
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Tarifa vigente (S/)": st.column_config.NumberColumn(format="%.3f"),
+                "Tarifa real (S/)": st.column_config.NumberColumn(format="%.3f"),
+                "Cambio vs vigente (%)": st.column_config.NumberColumn(format="%+.1f%%"),
+                "App vs banco (%)": st.column_config.NumberColumn(format="%+.1f%%"),
+            },
+        )
+        st.caption(
+            "«App vs banco» compara las operaciones que escribe el personal con las del banco: si "
+            "es muy distinta de 0%, el dato del Cierre no es confiable para ese local."
+        )
+        if st.button("💾 Guardar estas tarifas reales en Config", key="cal_guardar"):
+            try:
+                sh.guardar_tarifas(dict(zip(cal_validas["Local"], cal_validas["Tarifa real (S/)"])))
+                st.success("Tarifas guardadas en la hoja Config. Las proyecciones ya usan la tarifa real.")
+            except (ValueError, RuntimeError) as error:
+                st.error(f"No se guardaron las tarifas: {error}")
 
 with tab_registros:
     # -------------------------------------------------------------
