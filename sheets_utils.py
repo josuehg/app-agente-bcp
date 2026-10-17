@@ -20,7 +20,10 @@ CONCEPTOS NUEVOS QUE VAS A VER AQUI:
 from __future__ import annotations
 
 import io
+import os
 import time
+import urllib.parse
+import urllib.request
 import uuid
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
@@ -64,6 +67,10 @@ from cuadre import (  # noqa: F401  (re-export para el resto de la app)
     resolver_nombre,
     resumen_turnos,
     totales_ticket,
+    ESTADOS_SOLICITUD_ACTIVOS,
+    minutos_entre,
+    solicitudes_activas,
+    texto_espera,
 )
 
 # Los "scopes" son los permisos que le pedimos a Google. Sin el permiso
@@ -1204,6 +1211,7 @@ def _hojas_respaldo() -> list:
         (NOMBRE_HOJA_ENCUESTAS, COLUMNAS_ENCUESTAS),
         (NOMBRE_HOJA_NOTAS, COLUMNAS_NOTAS),
         (NOMBRE_HOJA_PERSONAL, COLUMNAS_PERSONAL),
+        (NOMBRE_HOJA_SOLICITUDES, COLUMNAS_SOLICITUDES),
     ]
 
 
@@ -1295,7 +1303,7 @@ def _fila_de_id(ws, id_valor, columna: int = 1) -> int:
     for numero, valor in enumerate(ws.col_values(columna), start=1):
         if str(valor).strip() == objetivo:
             return numero
-    raise ValueError(f"No se encontró la encuesta {objetivo} en la hoja (¿se borró la fila?).")
+    raise ValueError(f"No se encontró el registro {objetivo} en la hoja (¿se borró la fila?).")
 
 
 def _escribir_y_confirmar(ws, cambios: list[dict]) -> None:
@@ -1439,3 +1447,184 @@ def get_ajustes_df() -> pd.DataFrame:
     df["repuso_original"] = _normalizar_nombre(df["repuso"])
     df["repuso"] = unificar_nombres(df["repuso_original"], df["local"])
     return df
+
+
+# ---------------------------------------------------------------------
+# Solicitudes de efectivo / saldo
+#
+# Un local lejano pide plata a administracion: "Falta efectivo" (necesita
+# billetes en la caja) o "Falta saldo" (le sobra efectivo y necesita saldo en
+# la tarjeta). Administracion recibe el aviso por Telegram, verifica en camara
+# el movimiento fisico y cierra la solicitud desde el Dashboard. El total del
+# local (efectivo + tarjeta) no cambia, asi que el cuadre no se toca.
+#
+#   Solicitada -> En proceso (verificado en camara) -> Completada
+#                 (o Cancelada en cualquier momento antes de completarse)
+# ---------------------------------------------------------------------
+NOMBRE_HOJA_SOLICITUDES = "Solicitudes"
+TIPOS_SOLICITUD = ["Falta efectivo", "Falta saldo"]
+CUENTAS_DESTINO = ["Empresa", "Personal"]
+COLUMNAS_SOLICITUDES = [
+    "id",
+    "timestamp",
+    "local",
+    "tipo",  # "Falta efectivo" | "Falta saldo"
+    "monto",
+    "urgente",  # "Sí" o vacio
+    "solicitado_por",
+    "nota",
+    "estado",  # Solicitada | En proceso | Completada | Cancelada
+    "personal_confianza",  # quien intervino en el local (lo anota administracion)
+    "ts_proceso",  # cuando administracion verifico en camara
+    "referencia",  # N° de operacion de la transferencia o del deposito
+    "cuenta_destino",  # solo "Falta efectivo": a que cuenta se deposito
+    "ts_completado",  # cierre (completada o cancelada)
+    "observaciones_admin",
+]
+
+
+class SolicitudDuplicada(Exception):
+    """Ya hay una solicitud abierta de ese tipo en ese local."""
+
+
+def _secreto(nombre_secret: str, nombre_env: str) -> str:
+    """Un dato sensible desde st.secrets o, si no esta, desde una variable de
+    entorno (en Railway es lo mas simple: una variable por dato)."""
+    try:
+        valor = st.secrets.get(nombre_secret)
+    except Exception:
+        valor = None
+    return str(valor or os.environ.get(nombre_env, "")).strip()
+
+
+def telegram_configurado() -> bool:
+    return bool(_secreto("telegram_token", "TELEGRAM_BOT_TOKEN") and _secreto("telegram_chat_id", "TELEGRAM_CHAT_ID"))
+
+
+def notificar_telegram(texto: str) -> bool:
+    """Manda un mensaje al chat de administracion. Devuelve True si Telegram lo
+    acepto. NUNCA lanza error ni muestra el detalle (la URL lleva el token): si
+    falla, la solicitud igual queda guardada y solo se avisa que no hubo alerta."""
+    token = _secreto("telegram_token", "TELEGRAM_BOT_TOKEN")
+    chat_id = _secreto("telegram_chat_id", "TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        return False
+    try:
+        cuerpo = urllib.parse.urlencode({"chat_id": chat_id, "text": texto}).encode()
+        pedido = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=cuerpo)
+        with urllib.request.urlopen(pedido, timeout=8) as respuesta:
+            return 200 <= respuesta.status < 300
+    except Exception:
+        return False
+
+
+def _texto_alerta_solicitud(datos: dict) -> str:
+    pide_efectivo = datos["tipo"] == "Falta efectivo"
+    accion = (
+        "Acción: el personal de confianza entrega efectivo de la reserva; el cajero deposita ese "
+        "monto en el mismo agente a la cuenta."
+        if pide_efectivo
+        else "Acción: el efectivo va a la reserva (verifica en cámara) y tú transfieres a su tarjeta."
+    )
+    lineas = [
+        f"🔔 {datos['local']} pide {'EFECTIVO' if pide_efectivo else 'SALDO'}"
+        + ("  ⚡ URGENTE" if str(datos.get("urgente", "")).strip() == "Sí" else ""),
+        f"💰 S/ {float(datos['monto']):,.2f}",
+        f"👤 {datos['solicitado_por']}",
+    ]
+    if str(datos.get("nota", "")).strip():
+        lineas.append(f"📝 {str(datos['nota']).strip()}")
+    lineas.append(accion)
+    lineas.append("Atiéndela en Dashboard → 📨 Solicitudes.")
+    return "\n".join(lineas)
+
+
+def guardar_solicitud(datos: dict) -> bool:
+    """Guarda una solicitud nueva (estado Solicitada) y avisa por Telegram.
+    Devuelve True si el aviso salio. Antes de escribir revisa, con lectura
+    FRESCA, que no haya otra abierta del mismo tipo en ese local."""
+    ws = _get_or_create_worksheet(NOMBRE_HOJA_SOLICITUDES, COLUMNAS_SOLICITUDES)
+    for f in ws.get_all_records(numericise_ignore=["all"]):
+        if (
+            str(f.get("local", "")).strip() == str(datos["local"]).strip()
+            and str(f.get("tipo", "")).strip() == str(datos["tipo"]).strip()
+            and str(f.get("estado", "")).strip() in ESTADOS_SOLICITUD_ACTIVOS
+        ):
+            raise SolicitudDuplicada(
+                f"Ya hay una solicitud abierta de «{datos['tipo']}» en {datos['local']} "
+                f"(S/ {f.get('monto', '')}, estado {f.get('estado', '')}). Espera a que se atienda."
+            )
+    fila = {
+        "id": nuevo_id(),
+        "timestamp": ahora_local().replace(tzinfo=None).isoformat(timespec="seconds"),
+        "estado": "Solicitada",
+        **datos,
+    }
+    ws.append_row([fila.get(col, "") for col in COLUMNAS_SOLICITUDES])
+    get_solicitudes_df.clear()
+    return notificar_telegram(_texto_alerta_solicitud(fila))
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def get_solicitudes_df() -> pd.DataFrame:
+    ws = _get_or_create_worksheet(NOMBRE_HOJA_SOLICITUDES, COLUMNAS_SOLICITUDES)
+    registros = ws.get_all_records(numericise_ignore=["all"])
+    df = pd.DataFrame(registros, columns=COLUMNAS_SOLICITUDES)
+    if df.empty:
+        return df
+    df = _texto_seguro(df, {"timestamp", "ts_proceso", "ts_completado", "monto"})
+    for col in ("timestamp", "ts_proceso", "ts_completado"):
+        df[col] = pd.to_datetime(df[col], errors="coerce")
+    df["monto"] = pd.to_numeric(df["monto"], errors="coerce").fillna(0)
+    for col in ("local", "estado", "tipo"):
+        df[col] = df[col].str.strip()
+    return df.sort_values("timestamp", ascending=False).reset_index(drop=True)
+
+
+def actualizar_solicitud(id_solicitud: str, **campos) -> None:
+    """Cambia campos de UNA solicitud en una sola escritura confirmada. Si no
+    encuentra la fila o la hoja no refleja lo escrito, LANZA un error."""
+    ws = _get_or_create_worksheet(NOMBRE_HOJA_SOLICITUDES, COLUMNAS_SOLICITUDES)
+    fila = _fila_de_id(ws, id_solicitud, COLUMNAS_SOLICITUDES.index("id") + 1)
+    cambios = []
+    for columna, valor in campos.items():
+        if columna not in COLUMNAS_SOLICITUDES or columna == "id":
+            raise ValueError(f"Campo no permitido en una solicitud: {columna}")
+        a1 = gspread.utils.rowcol_to_a1(fila, COLUMNAS_SOLICITUDES.index(columna) + 1)
+        cambios.append({"range": a1, "values": [[valor]]})
+    if cambios:
+        _escribir_y_confirmar(ws, cambios)
+        get_solicitudes_df.clear()
+
+
+def _ahora_iso() -> str:
+    return ahora_local().replace(tzinfo=None).isoformat(timespec="seconds")
+
+
+def solicitud_en_proceso(id_solicitud: str, personal_confianza: str) -> None:
+    """Administracion verifico en camara el movimiento fisico."""
+    actualizar_solicitud(
+        id_solicitud, estado="En proceso", personal_confianza=personal_confianza.strip(), ts_proceso=_ahora_iso()
+    )
+
+
+def solicitud_completada(id_solicitud: str, referencia: str, cuenta_destino: str = "") -> None:
+    actualizar_solicitud(
+        id_solicitud,
+        estado="Completada",
+        referencia=referencia.strip(),
+        cuenta_destino=cuenta_destino,
+        ts_completado=_ahora_iso(),
+    )
+
+
+def solicitud_cancelada(id_solicitud: str, motivo: str = "", local: str = "", tipo: str = "", por: str = "") -> bool:
+    """Cancela una solicitud y avisa por Telegram. Devuelve si el aviso salio."""
+    actualizar_solicitud(
+        id_solicitud, estado="Cancelada", observaciones_admin=motivo.strip(), ts_completado=_ahora_iso()
+    )
+    return notificar_telegram(
+        f"✖ Solicitud cancelada: {local} · {tipo}"
+        + (f" (por {por})" if por else "")
+        + (f"\nMotivo: {motivo.strip()}" if motivo.strip() else "")
+    )

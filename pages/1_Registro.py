@@ -73,6 +73,10 @@ if not _lectura_ok:
         "turno, pero puedes registrar igual (al guardar se vuelve a validar el turno)."
     )
 sh.mostrar_nota_nps(local)
+try:
+    st.page_link("pages/8_Solicitudes.py", label="¿Te falta efectivo o saldo? Solicítalo aquí", icon="💵")
+except Exception:
+    pass  # solo es un atajo: si la pagina no esta registrada, el formulario sigue igual
 if col_salir.button("Cambiar de PIN"):
     st.session_state["local_autenticado"] = None
     st.rerun()

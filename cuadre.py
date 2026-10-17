@@ -919,3 +919,50 @@ def operaciones_por_turno(registros: pd.DataFrame) -> pd.DataFrame:
         .rename(columns={"num_operaciones": "operaciones"})
     )
     return ops.merge(cerrados, on=["local", "fecha", "turno"], how="inner")[COLUMNAS_OPS_TURNO]
+
+
+# ---------------------------------------------------------------------
+# Solicitudes de efectivo / saldo (un local pide, administracion atiende)
+#
+# Una solicitud pasa por: Solicitada -> En proceso (administracion verifico
+# en camara el movimiento fisico) -> Completada. Tambien puede quedar
+# Cancelada. "Activas" son las dos primeras: sirven para no aceptar dos
+# pedidos abiertos del mismo tipo en un local y para la bandeja de pendientes.
+# ---------------------------------------------------------------------
+ESTADOS_SOLICITUD_ACTIVOS = ("Solicitada", "En proceso")
+
+
+def solicitudes_activas(df: pd.DataFrame, local: str | None = None, tipo: str | None = None) -> pd.DataFrame:
+    """Solicitudes todavia abiertas (opcionalmente de un local y/o tipo), las
+    urgentes primero y, dentro de cada grupo, la mas antigua primero."""
+    if df is None or df.empty:
+        return pd.DataFrame() if df is None else df.iloc[0:0]
+    activas = df[df["estado"].isin(ESTADOS_SOLICITUD_ACTIVOS)]
+    if local is not None:
+        activas = activas[activas["local"] == local]
+    if tipo is not None:
+        activas = activas[activas["tipo"] == tipo]
+    return activas.assign(_u=(activas["urgente"].astype(str).str.strip() == "Sí").astype(int)).sort_values(
+        ["_u", "timestamp"], ascending=[False, True]
+    ).drop(columns="_u")
+
+
+def minutos_entre(desde, hasta) -> float | None:
+    """Minutos entre dos marcas de tiempo (None si falta alguna)."""
+    d = pd.to_datetime(desde, errors="coerce")
+    h = pd.to_datetime(hasta, errors="coerce")
+    if pd.isna(d) or pd.isna(h):
+        return None
+    return max((h - d).total_seconds() / 60.0, 0.0)
+
+
+def texto_espera(minutos: float | None) -> str:
+    """'12 min', '1 h 05 min', '2 d 3 h'; vacio si no se conoce."""
+    if minutos is None or pd.isna(minutos):
+        return ""
+    m = int(round(minutos))
+    if m < 60:
+        return f"{m} min"
+    if m < 60 * 24:
+        return f"{m // 60} h {m % 60:02d} min"
+    return f"{m // (60 * 24)} d {(m % (60 * 24)) // 60} h"

@@ -84,6 +84,7 @@ def mostrar_bienvenida():
 
         **Si trabajas en tienda:**
         - **Registro**: registra la Apertura o el Cierre de caja de tu turno.
+        - **Solicitudes**: pide efectivo o saldo a administración cuando te haga falta y mira en qué estado va tu pedido.
         - **Historial**: revisa la línea de tiempo de tu local (cortes y entregas de caja), las diferencias por persona y los registros con sus fotos.
         - **Encuestas**: registra las encuestas NPS calificadas con 9 o 10 (incentivo de S/ 10, sujeto a la nota NPS mensual del local).
         - **Campañas**: revisa las campañas vigentes del BCP.
@@ -107,6 +108,7 @@ def mostrar_bienvenida():
 # ---------------------------------------------------------------------
 pagina_bienvenida = st.Page(mostrar_bienvenida, title="Bienvenida", icon="👋", default=True)
 pagina_registro = st.Page("pages/1_Registro.py", title="Registro", icon="📝")
+pagina_solicitudes = st.Page("pages/8_Solicitudes.py", title="Solicitudes", icon="💵")
 pagina_historial = st.Page("pages/3_Historial.py", title="Historial", icon="🗂️")
 pagina_encuestas = st.Page("pages/4_Encuestas.py", title="Encuestas", icon="⭐")
 pagina_campanas = st.Page("pages/5_Campanas.py", title="Campañas", icon="📢")
@@ -118,6 +120,7 @@ navegacion = st.navigation(
         "": [
             pagina_bienvenida,
             pagina_registro,
+            pagina_solicitudes,
             pagina_historial,
             pagina_encuestas,
             pagina_campanas,

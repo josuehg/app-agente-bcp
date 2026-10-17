@@ -537,3 +537,48 @@ def test_linea_de_tiempo_intercala_cortes_y_entregas():
     assert t.loc[2, "persona"] == "Beto (cerró Cris)"
     assert t.loc[1, "detalle"] == "Entre turnos: Mañana → Tarde"
     assert linea_de_tiempo(None, None, {}).empty
+
+
+# ---------------------------------------------------------------------
+# Solicitudes de efectivo / saldo
+# ---------------------------------------------------------------------
+from cuadre import minutos_entre, solicitudes_activas, texto_espera  # noqa: E402
+
+
+def _solicitudes():
+    return pd.DataFrame(
+        [
+            {"id": "a", "timestamp": pd.Timestamp("2026-10-17 09:00"), "local": "Colon",
+             "tipo": "Falta saldo", "urgente": "", "estado": "Solicitada"},
+            {"id": "b", "timestamp": pd.Timestamp("2026-10-17 10:00"), "local": "Colon",
+             "tipo": "Falta efectivo", "urgente": "Sí", "estado": "En proceso"},
+            {"id": "c", "timestamp": pd.Timestamp("2026-10-17 08:00"), "local": "Zol A",
+             "tipo": "Falta saldo", "urgente": "", "estado": "Completada"},
+            {"id": "d", "timestamp": pd.Timestamp("2026-10-17 08:30"), "local": "Zol A",
+             "tipo": "Falta efectivo", "urgente": "", "estado": "Cancelada"},
+        ]
+    )
+
+
+def test_solicitudes_activas_solo_abiertas_y_urgentes_primero():
+    activas = solicitudes_activas(_solicitudes())
+    assert list(activas["id"]) == ["b", "a"]  # urgente primero
+
+
+def test_solicitudes_activas_filtra_por_local_y_tipo():
+    df = _solicitudes()
+    assert list(solicitudes_activas(df, local="Colon", tipo="Falta saldo")["id"]) == ["a"]
+    assert solicitudes_activas(df, local="Zol A").empty
+
+
+def test_solicitudes_activas_vacio():
+    assert solicitudes_activas(pd.DataFrame()).empty
+
+
+def test_minutos_y_texto_de_espera():
+    assert minutos_entre("2026-10-17 09:00", "2026-10-17 09:12") == 12
+    assert minutos_entre("2026-10-17 09:00", "") is None
+    assert texto_espera(12) == "12 min"
+    assert texto_espera(65) == "1 h 05 min"
+    assert texto_espera(60 * 26) == "1 d 2 h"
+    assert texto_espera(None) == ""

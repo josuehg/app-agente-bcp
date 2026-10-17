@@ -47,6 +47,10 @@ if pin_configurado:
 # ---------------------------------------------------------------------
 df = sh.get_registros_df()
 config_df = sh.get_config_df()
+try:
+    solicitudes_df = sh.get_solicitudes_df()
+except Exception:
+    solicitudes_df = None  # Google ocupado: el resto del Dashboard sigue funcionando
 
 if df.empty:
     st.info("Todavia no hay registros. Apenas se guarde el primero, aparecera aqui.")
@@ -162,11 +166,11 @@ def _comparar_par(row_izq, row_der, label_izq="Apertura", label_der="Cierre"):
 # "Cuadre por turno" calcula `cortes` y "Acumulado por persona" lo usa).
 # ---------------------------------------------------------------------
 (
-    tab_resumen, tab_cuadre, tab_liquidacion, tab_sucursales, tab_operaciones, tab_metas,
+    tab_resumen, tab_solicitudes, tab_cuadre, tab_liquidacion, tab_sucursales, tab_operaciones, tab_metas,
     tab_comisiones, tab_incentivos, tab_registros, tab_personal, tab_respaldo,
 ) = st.tabs(
     [
-        "🏠 Resumen", "🔍 Cuadre", "🧾 Liquidación", "🏪 Sucursales", "📈 Operaciones", "🎯 Metas",
+        "🏠 Resumen", "📨 Solicitudes", "🔍 Cuadre", "🧾 Liquidación", "🏪 Sucursales", "📈 Operaciones", "🎯 Metas",
         "💰 Comisiones", "⭐ Incentivos", "🗂️ Registros", "👥 Personal", "💾 Respaldo",
     ]
 )
@@ -182,6 +186,12 @@ with tab_resumen:
     # no solo el efectivo -- comparar solo efectivo dispararia alertas
     # falsas cuando el fondo simplemente se movio hacia el lado tarjeta.
     # -------------------------------------------------------------
+    _n_sol = 0 if solicitudes_df is None else len(sh.solicitudes_activas(solicitudes_df))
+    if _n_sol:
+        st.warning(
+            f"📨 Hay **{_n_sol}** solicitud(es) de efectivo o saldo pendiente(s). "
+            "Atiéndelas en la pestaña **📨 Solicitudes**."
+        )
     st.subheader("🚨 Alertas de fondo")
 
     # ultimo_registro_por_local: el registro mas reciente de cada local,
@@ -2247,7 +2257,10 @@ with tab_comisiones:
 
 
     ops_por_local["tipo_agente"] = ops_por_local["local"].map(_tipo_comision)
-    ops_por_local["soles_por_operacion"] = ops_por_local["local"].map(_tarifa_comision)
+    # astype(float): sin ningun Cierre en el rango (p. ej. el dia 1 del mes) la tabla
+    # queda vacia y estas columnas salian como texto, lo que rompia la multiplicacion.
+    ops_por_local["operaciones"] = ops_por_local["operaciones"].astype(float)
+    ops_por_local["soles_por_operacion"] = ops_por_local["local"].map(_tarifa_comision).astype(float)
     ops_por_local["comision"] = (
         ops_por_local["operaciones"] * ops_por_local["soles_por_operacion"]
     )
@@ -3046,3 +3059,137 @@ with tab_personal:
                     )
                     st.success("Cambios guardados.")
                     st.rerun()
+
+
+# ---------------------------------------------------------------------
+# 📨 Solicitudes de efectivo / saldo: bandeja para atender los pedidos de los
+# locales. Paso 1: verificar en camara el movimiento fisico -> "En proceso".
+# Paso 2: registrar la referencia de la transferencia/deposito -> "Completada".
+# El total del local (efectivo + tarjeta) no cambia, asi que no toca el cuadre.
+# ---------------------------------------------------------------------
+with tab_solicitudes:
+    st.subheader("📨 Solicitudes de efectivo y saldo")
+    if "dash_sol_msg" in st.session_state:
+        st.success(st.session_state.pop("dash_sol_msg"))
+    if not sh.telegram_configurado():
+        st.warning(
+            "⚠️ El aviso por Telegram **no está configurado**: las solicitudes llegan aquí, pero no te "
+            "suena el celular. Agrega las variables `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` en Railway."
+        )
+    if solicitudes_df is None:
+        st.warning("Google está ocupado y no se pudo leer las solicitudes. Recarga en un momento.")
+    else:
+        _ahora_sol = sh.ahora_local().replace(tzinfo=None)
+        _activas = sh.solicitudes_activas(solicitudes_df)
+
+        _mes_ini = pd.Timestamp(sh.hoy_local().replace(day=1))
+        _del_mes = (
+            solicitudes_df[solicitudes_df["timestamp"] >= _mes_ini] if not solicitudes_df.empty else solicitudes_df
+        )
+        _hechas = _del_mes[_del_mes["estado"] == "Completada"] if not _del_mes.empty else _del_mes
+        _mins = [sh.minutos_entre(a, b) for a, b in zip(_hechas["timestamp"], _hechas["ts_completado"])] if not _hechas.empty else []
+        _mins = [m for m in _mins if m is not None]
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Pendientes ahora", len(_activas))
+        m2.metric("Completadas este mes", len(_hechas))
+        m3.metric("Tiempo promedio de atención", sh.texto_espera(sum(_mins) / len(_mins)) if _mins else "—")
+
+        if _activas.empty:
+            st.success("No hay solicitudes pendientes. 🎉")
+
+        for _, s in _activas.iterrows():
+            pide_efectivo = s["tipo"] == "Falta efectivo"
+            urg = "⚡ URGENTE · " if str(s["urgente"]).strip() == "Sí" else ""
+            with st.container(border=True):
+                st.markdown(f"### {urg}{s['local']} · {s['tipo']} · S/ {float(s['monto']):,.2f}")
+                st.caption(
+                    f"Pidió {s['solicitado_por']} · {s['timestamp']:%d/%m %H:%M} · "
+                    f"hace {sh.texto_espera(sh.minutos_entre(s['timestamp'], _ahora_sol))}"
+                    + (f" · Nota: {s['nota']}" if str(s["nota"]).strip() else "")
+                )
+                try:
+                    if s["estado"] == "Solicitada":
+                        with st.form(f"sol_paso1_{s['id']}"):
+                            st.markdown("**Paso 1 — verificar en cámara**")
+                            st.caption(
+                                "Confirma que el personal de confianza entregó el efectivo de la reserva al cajero."
+                                if pide_efectivo
+                                else "Confirma que el efectivo que le sobraba al local quedó guardado en la reserva."
+                            )
+                            personal_conf = st.text_input("Personal de confianza que intervino")
+                            ok_camara = st.checkbox("Lo verifiqué en cámara")
+                            motivo_cancel = st.text_input("Motivo (solo si la cancelas)")
+                            b1, b2 = st.columns(2)
+                            avanzar = b1.form_submit_button("Marcar en proceso", type="primary", width="stretch")
+                            cancelar = b2.form_submit_button("Cancelar solicitud", width="stretch")
+                        if avanzar:
+                            if not personal_conf.strip() or not ok_camara:
+                                st.error("Anota el personal de confianza y marca que lo verificaste en cámara.")
+                            else:
+                                sh.solicitud_en_proceso(s["id"], personal_conf)
+                                st.session_state["dash_sol_msg"] = f"{s['local']}: en proceso."
+                                st.rerun()
+                        if cancelar:
+                            sh.solicitud_cancelada(s["id"], motivo_cancel, local=s["local"], tipo=s["tipo"])
+                            st.session_state["dash_sol_msg"] = f"{s['local']}: solicitud cancelada."
+                            st.rerun()
+                    else:  # En proceso
+                        st.info(
+                            f"✔ Verificado en cámara a las {s['ts_proceso']:%H:%M} · "
+                            f"Personal de confianza: {s['personal_confianza']}"
+                        )
+                        with st.form(f"sol_paso2_{s['id']}"):
+                            st.markdown(
+                                "**Paso 2 — registrar el depósito**" if pide_efectivo else "**Paso 2 — registrar tu transferencia**"
+                            )
+                            referencia = st.text_input(
+                                "N° de operación del depósito" if pide_efectivo else "N° de operación de tu transferencia"
+                            )
+                            cuenta = (
+                                st.selectbox("Cuenta destino del depósito", sh.CUENTAS_DESTINO)
+                                if pide_efectivo
+                                else ""
+                            )
+                            motivo_cancel2 = st.text_input("Motivo (solo si la cancelas)")
+                            b1, b2 = st.columns(2)
+                            completar = b1.form_submit_button("Completar", type="primary", width="stretch")
+                            cancelar2 = b2.form_submit_button("Cancelar solicitud", width="stretch")
+                        if completar:
+                            if not referencia.strip():
+                                st.error("Escribe el N° de operación (es tu comprobante).")
+                            else:
+                                sh.solicitud_completada(s["id"], referencia, cuenta)
+                                st.session_state["dash_sol_msg"] = f"{s['local']}: solicitud completada."
+                                st.rerun()
+                        if cancelar2:
+                            sh.solicitud_cancelada(s["id"], motivo_cancel2, local=s["local"], tipo=s["tipo"])
+                            st.session_state["dash_sol_msg"] = f"{s['local']}: solicitud cancelada."
+                            st.rerun()
+                except Exception as error:
+                    st.error(f"No se pudo guardar el cambio: {error}")
+
+        if not solicitudes_df.empty:
+            st.subheader("🕘 Historial de solicitudes")
+            _hist = solicitudes_df[~solicitudes_df["estado"].isin(sh.ESTADOS_SOLICITUD_ACTIVOS)].head(60)
+            if _hist.empty:
+                st.caption("Todavía no hay solicitudes cerradas.")
+            else:
+                _tabla_sol = pd.DataFrame(
+                    {
+                        "Fecha": _hist["timestamp"].dt.strftime("%d/%m %H:%M"),
+                        "Local": _hist["local"],
+                        "Tipo": _hist["tipo"],
+                        "Monto (S/)": _hist["monto"],
+                        "Estado": _hist["estado"],
+                        "Pidió": _hist["solicitado_por"],
+                        "Personal de confianza": _hist["personal_confianza"],
+                        "Referencia": _hist["referencia"],
+                        "Cuenta": _hist["cuenta_destino"],
+                        "Tiempo": [
+                            sh.texto_espera(sh.minutos_entre(a, b)) if e == "Completada" else ""
+                            for a, b, e in zip(_hist["timestamp"], _hist["ts_completado"], _hist["estado"])
+                        ],
+                        "Motivo": _hist["observaciones_admin"],
+                    }
+                )
+                st.dataframe(sh.arrow_safe(_tabla_sol), width="stretch", hide_index=True)
