@@ -499,7 +499,7 @@ with tab_resumen:
     # Cierre probablemente ya no sigue en curso -- se quedo sin cerrar por
     # olvido. Esto tambien atrapa turnos abiertos de un dia anterior (las
     # horas transcurridas ya son varias decenas).
-    UMBRAL_HORAS_TURNO_ABIERTO = 9
+    UMBRAL_HORAS_TURNO_ABIERTO = 8
 
     ultimo_por_turno = (
         df[df["local"].isin(locales_sel) & (df["fecha"] >= sh.hoy_local() - timedelta(days=1))]
