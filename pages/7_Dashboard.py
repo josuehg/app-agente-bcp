@@ -209,6 +209,47 @@ with tab_solicitudes:
             "⚠️ El aviso por Telegram **no está configurado**: las solicitudes llegan aquí, pero no te "
             "suena el celular. Abajo, en «⚙️ Configurar Telegram», están los pasos."
         )
+    def _buscar_chats_ui():
+        if st.button("🔎 Buscar mi chat id", key="tg_buscar"):
+            _diag = sh.telegram_diagnostico()
+            _chats = _diag["chats"]
+            if _diag["bot"]:
+                st.info(
+                    f"🤖 Este token es del bot **@{_diag['bot']['usuario']}** ({_diag['bot']['nombre']}). "
+                    "Tienes que escribirle a **ese** bot (búscalo por ese usuario), no a otro."
+                )
+            if _diag["error"]:
+                st.error(
+                    f"{_diag['error']}. "
+                    + (
+                        "Revisa que el token de Railway esté completo y sin espacios."
+                        if "401" in _diag["error"] or "Unauthorized" in _diag["error"]
+                        else ""
+                    )
+                )
+            elif not _chats:
+                st.error(
+                    "El token es válido, pero ese bot todavía no recibió ningún mensaje. Abre "
+                    f"@{_diag['bot']['usuario']} en Telegram, toca Iniciar y escríbele *hola*; luego "
+                    "vuelve a apretar el botón (Telegram solo guarda los últimos ~24 h)."
+                )
+            else:
+                st.success("Estos chats le escribieron al bot. Copia el **id** del tuyo:")
+                st.dataframe(
+                    sh.arrow_safe(
+                        pd.DataFrame(_chats).rename(columns={"id": "Chat id", "nombre": "Nombre", "tipo": "Tipo"})
+                    ),
+                    hide_index=True,
+                )
+                st.markdown(
+                    "**Paso 4.** En Railway → *Variables*, crea `TELEGRAM_CHAT_ID` con el id de quien debe "
+                    "recibir las alertas. Si son **varios** (tu familia), ponlos todos juntos, separados por "
+                    "coma. Los grupos llevan un guion al inicio (por ejemplo `-100123…`): cópialo completo. "
+                    "Si aparece alguien que no debe recibir, quítalo de la lista."
+                )
+                st.caption("Todos los chats de arriba, listos para copiar (borra los que no quieras):")
+                st.code(",".join(str(c["id"]) for c in _chats), language=None)
+
     with st.expander("⚙️ Configurar Telegram", expanded=not _tg_listo):
         if not sh.telegram_token_configurado():
             st.markdown(
@@ -224,51 +265,33 @@ with tab_solicitudes:
                 "(por ejemplo *hola*). Si quieres que las alertas lleguen a un **grupo**, agrega el bot al "
                 "grupo y escribe algo ahí. Luego aprieta el botón."
             )
-            if st.button("🔎 Buscar mi chat id", key="tg_buscar"):
-                _diag = sh.telegram_diagnostico()
-                _chats = _diag["chats"]
-                if _diag["bot"]:
-                    st.info(
-                        f"🤖 Este token es del bot **@{_diag['bot']['usuario']}** ({_diag['bot']['nombre']}). "
-                        "Tienes que escribirle a **ese** bot (búscalo por ese usuario), no a otro."
-                    )
-                if _diag["error"]:
-                    st.error(
-                        f"{_diag['error']}. "
-                        + (
-                            "Revisa que el token de Railway esté completo y sin espacios."
-                            if "401" in _diag["error"] or "Unauthorized" in _diag["error"]
-                            else ""
-                        )
-                    )
-                elif not _chats:
-                    st.error(
-                        "El token es válido, pero ese bot todavía no recibió ningún mensaje. Abre "
-                        f"@{_diag['bot']['usuario']} en Telegram, toca Iniciar y escríbele *hola*; luego "
-                        "vuelve a apretar el botón (Telegram solo guarda los últimos ~24 h)."
-                    )
-                else:
-                    st.success("Estos chats le escribieron al bot. Copia el **id** del tuyo:")
-                    st.dataframe(
-                        sh.arrow_safe(
-                            pd.DataFrame(_chats).rename(columns={"id": "Chat id", "nombre": "Nombre", "tipo": "Tipo"})
-                        ),
-                        hide_index=True,
-                    )
-                    st.markdown(
-                        "**Paso 4.** En Railway → *Variables*, crea `TELEGRAM_CHAT_ID` con ese id "
-                        "(los grupos llevan un guion al inicio, por ejemplo `-100123…`; cópialo completo)."
-                    )
+            _buscar_chats_ui()
         else:
-            st.success("✅ Telegram está configurado.")
+            _n_chats = len(sh.telegram_chat_ids())
+            st.success(f"✅ Telegram está configurado: las alertas se envían a {_n_chats} chat(s).")
             if st.button("📨 Enviar mensaje de prueba", key="tg_prueba"):
-                if sh.notificar_telegram("✅ Prueba: las alertas de Solicitudes llegan a este chat."):
-                    st.success("Mensaje enviado. Revisa tu Telegram.")
+                _llegaron, _fallaron = sh.notificar_telegram_detalle(
+                    "✅ Prueba: las alertas del Agente BCP llegan a este chat."
+                )
+                if _llegaron and not _fallaron:
+                    st.success(f"Mensaje enviado a {len(_llegaron)} de {_n_chats}. Revisa tu Telegram.")
+                elif _llegaron:
+                    st.warning(
+                        f"Llegó a {len(_llegaron)} de {_n_chats}. **No llegó a:** {', '.join(_fallaron)}. "
+                        "Esa persona debe abrir el bot, tocar Iniciar y escribirle *hola* (o el id está mal "
+                        "escrito); si es un grupo, el bot tiene que estar agregado."
+                    )
                 else:
                     st.error(
-                        "Telegram no aceptó el mensaje. Revisa que el token y el chat id sean correctos y que "
-                        "hayas escrito al bot (en un grupo, que el bot esté agregado)."
+                        "Telegram no aceptó el mensaje. Revisa que el token y los chat id sean correctos y que "
+                        "cada persona haya escrito al bot (en un grupo, que el bot esté agregado)."
                     )
+            st.divider()
+            st.caption(
+                "¿Quieres agregar a otra persona? Que abra el bot, toque **Iniciar** y escriba *hola*; luego "
+                "búscala aquí y agrega su id a `TELEGRAM_CHAT_ID`, separado por coma."
+            )
+            _buscar_chats_ui()
     if solicitudes_df is None:
         st.warning("Google está ocupado y no se pudo leer las solicitudes. Recarga en un momento.")
     else:

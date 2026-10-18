@@ -1525,8 +1525,20 @@ def _secreto(nombre_secret: str, nombre_env: str) -> str:
     return str(valor or os.environ.get(nombre_env, "")).strip()
 
 
+def telegram_chat_ids() -> list[str]:
+    """Chats que reciben las alertas: TELEGRAM_CHAT_ID admite uno o varios, separados por
+    coma (o punto y coma / espacio). Sin repetidos y en el mismo orden."""
+    crudo = _secreto("telegram_chat_id", "TELEGRAM_CHAT_ID")
+    vistos: list[str] = []
+    for parte in crudo.replace(";", ",").replace(" ", ",").split(","):
+        parte = parte.strip()
+        if parte and parte not in vistos:
+            vistos.append(parte)
+    return vistos
+
+
 def telegram_configurado() -> bool:
-    return bool(_secreto("telegram_token", "TELEGRAM_BOT_TOKEN") and _secreto("telegram_chat_id", "TELEGRAM_CHAT_ID"))
+    return bool(_secreto("telegram_token", "TELEGRAM_BOT_TOKEN") and telegram_chat_ids())
 
 
 def _enviar_telegram(token: str, chat_id: str, texto: str) -> bool:
@@ -1539,24 +1551,39 @@ def _enviar_telegram(token: str, chat_id: str, texto: str) -> bool:
         return False
 
 
-def notificar_telegram(texto: str) -> bool:
-    """Manda un mensaje al chat de administracion. Devuelve True si Telegram lo
-    acepto. NUNCA lanza error ni muestra el detalle (la URL lleva el token): si
-    falla, la solicitud igual queda guardada y solo se avisa que no hubo alerta."""
+def _enviar_a_todos(token: str, chats: list[str], texto: str) -> tuple[list[str], list[str]]:
+    """Envia a cada chat por separado: si uno falla (bloqueo el bot, no toco Iniciar), los
+    demas lo reciben igual. Devuelve (a quienes llego, a quienes no)."""
+    llegaron, fallaron = [], []
+    for chat in chats:
+        (llegaron if _enviar_telegram(token, chat, texto) else fallaron).append(chat)
+    return llegaron, fallaron
+
+
+def notificar_telegram_detalle(texto: str) -> tuple[list[str], list[str]]:
+    """Como notificar_telegram, pero dice a quienes llego y a quienes no. NUNCA lanza error
+    ni muestra el token."""
     token = _secreto("telegram_token", "TELEGRAM_BOT_TOKEN")
-    chat_id = _secreto("telegram_chat_id", "TELEGRAM_CHAT_ID")
-    if not token or not chat_id:
-        return False
-    return _enviar_telegram(token, chat_id, texto)
+    chats = telegram_chat_ids()
+    if not token or not chats:
+        return [], list(chats)
+    return _enviar_a_todos(token, chats, texto)
+
+
+def notificar_telegram(texto: str) -> bool:
+    """Manda un mensaje a los chats de administracion. True si llego a por lo menos uno.
+    NUNCA lanza error ni muestra el detalle (la URL lleva el token): si falla, el registro
+    o la solicitud igual quedan guardados y solo se avisa que no hubo alerta."""
+    return bool(notificar_telegram_detalle(texto)[0])
 
 
 def notificar_telegram_en_segundo_plano(texto: str) -> None:
     """Igual que notificar_telegram pero sin hacer esperar a quien guarda: se envia desde
     otro hilo (las credenciales se leen aqui, antes de lanzarlo)."""
     token = _secreto("telegram_token", "TELEGRAM_BOT_TOKEN")
-    chat_id = _secreto("telegram_chat_id", "TELEGRAM_CHAT_ID")
-    if token and chat_id:
-        threading.Thread(target=_enviar_telegram, args=(token, chat_id, texto), daemon=True).start()
+    chats = telegram_chat_ids()
+    if token and chats:
+        threading.Thread(target=_enviar_a_todos, args=(token, chats, texto), daemon=True).start()
 
 
 def umbral_alerta_diferencia() -> float:
