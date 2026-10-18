@@ -23,6 +23,7 @@ import io
 import json
 import os
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
@@ -1523,20 +1524,40 @@ def telegram_token_configurado() -> bool:
     return bool(_secreto("telegram_token", "TELEGRAM_BOT_TOKEN"))
 
 
-def telegram_chats_recientes() -> list[dict]:
-    """Chats que le escribieron al bot (para descubrir el chat id sin armar URLs
-    con el token a mano). Devuelve [{'id', 'nombre', 'tipo'}] o [] si no hay token,
-    nadie le escribio todavia (Telegram solo recuerda ~24 h) o falla la consulta."""
+def _telegram_api(metodo: str):
+    """Llama a un metodo de la API de Telegram. Devuelve (resultado, error): uno de los
+    dos es None. El texto del error NUNCA incluye el token."""
     token = _secreto("telegram_token", "TELEGRAM_BOT_TOKEN")
     if not token:
-        return []
+        return None, "Falta el token."
     try:
-        with urllib.request.urlopen(f"https://api.telegram.org/bot{token}/getUpdates", timeout=8) as respuesta:
+        with urllib.request.urlopen(f"https://api.telegram.org/bot{token}/{metodo}", timeout=8) as respuesta:
             datos = json.loads(respuesta.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        try:
+            detalle = json.loads(e.read().decode("utf-8")).get("description", "")
+        except Exception:
+            detalle = ""
+        return None, f"Telegram respondió {e.code}" + (f": {detalle}" if detalle else "")
     except Exception:
-        return []
+        return None, "El servidor no pudo conectarse con Telegram."
+    if not datos.get("ok", True):
+        return None, f"Telegram respondió: {datos.get('description', 'error')}"
+    return datos.get("result"), None
+
+
+def telegram_diagnostico() -> dict:
+    """Para el asistente del Dashboard: a que bot pertenece el token, que chats le
+    escribieron (Telegram guarda ~24 h) y, si algo falla, por que."""
+    info, error = _telegram_api("getMe")
+    if error:
+        return {"bot": None, "chats": [], "error": error}
+    bot = {"usuario": (info or {}).get("username", ""), "nombre": (info or {}).get("first_name", "")}
+    updates, error = _telegram_api("getUpdates")
+    if error:
+        return {"bot": bot, "chats": [], "error": error}
     vistos: dict = {}
-    for upd in datos.get("result", []):
+    for upd in updates or []:
         for clave in ("message", "edited_message", "channel_post", "my_chat_member"):
             chat = (upd.get(clave) or {}).get("chat")
             if chat and chat.get("id") is not None:
@@ -1547,7 +1568,12 @@ def telegram_chats_recientes() -> list[dict]:
                     or ""
                 )
                 vistos[chat["id"]] = {"id": chat["id"], "nombre": nombre, "tipo": chat.get("type", "")}
-    return list(vistos.values())
+    return {"bot": bot, "chats": list(vistos.values()), "error": ""}
+
+
+def telegram_chats_recientes() -> list[dict]:
+    """Solo la lista de chats (ver telegram_diagnostico)."""
+    return telegram_diagnostico()["chats"]
 
 
 def _texto_alerta_solicitud(datos: dict) -> str:

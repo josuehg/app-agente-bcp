@@ -3121,11 +3121,27 @@ with tab_solicitudes:
                 "grupo y escribe algo ahí. Luego aprieta el botón."
             )
             if st.button("🔎 Buscar mi chat id", key="tg_buscar"):
-                _chats = sh.telegram_chats_recientes()
-                if not _chats:
+                _diag = sh.telegram_diagnostico()
+                _chats = _diag["chats"]
+                if _diag["bot"]:
+                    st.info(
+                        f"🤖 Este token es del bot **@{_diag['bot']['usuario']}** ({_diag['bot']['nombre']}). "
+                        "Tienes que escribirle a **ese** bot (búscalo por ese usuario), no a otro."
+                    )
+                if _diag["error"]:
                     st.error(
-                        "No encontré mensajes para el bot. Escríbele otra vez en Telegram (Telegram solo "
-                        "guarda los últimos ~24 h) y vuelve a intentar."
+                        f"{_diag['error']}. "
+                        + (
+                            "Revisa que el token de Railway esté completo y sin espacios."
+                            if "401" in _diag["error"] or "Unauthorized" in _diag["error"]
+                            else ""
+                        )
+                    )
+                elif not _chats:
+                    st.error(
+                        "El token es válido, pero ese bot todavía no recibió ningún mensaje. Abre "
+                        f"@{_diag['bot']['usuario']} en Telegram, toca Iniciar y escríbele *hola*; luego "
+                        "vuelve a apretar el botón (Telegram solo guarda los últimos ~24 h)."
                     )
                 else:
                     st.success("Estos chats le escribieron al bot. Copia el **id** del tuyo:")
