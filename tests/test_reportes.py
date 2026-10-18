@@ -161,7 +161,7 @@ def test_diferencias_corte_y_entre_cierres():
 
 
 def test_ayuda_menciona_todos_los_comandos():
-    for c in ("/fondo", "/corte", "/encuestas", "/operaciones", "/solicitudes", "/diferencias", "/id"):
+    for c in ("/fondo", "/corte", "/encuestas", "/operaciones", "/solicitudes", "/diferencias", "/sucursales", "/ranking", "/resumen", "/id"):
         assert c in rp.AYUDA
 
 
@@ -341,3 +341,44 @@ def test_turnos_sin_cerrar_por_defecto_a_las_8_horas_y_media(monkeypatch):
     reg = pd.DataFrame([_r("a1", "Colon", "2026-10-18", "Tarde", "Apertura", "Ana", "13:00", 3000, 500)])
     assert rp.turnos_sin_cerrar(reg, pd.Timestamp("2026-10-18 21:29")) == []     # 8 h 29 min
     assert len(rp.turnos_sin_cerrar(reg, pd.Timestamp("2026-10-18 21:30"))) == 1  # 8 h 30 min
+
+
+# ---------------------------------------------------------------------
+# /sucursales: balance por sucursal y politica de descuento
+# ---------------------------------------------------------------------
+def test_sucursales_balance_y_politica_de_descuento():
+    txt = rp.reporte_sucursales(_registros(), _config(), _ajustes(), HOY)
+    assert "Balance por sucursal" in txt and "octubre 2026" in txt
+    # Colon: faltaron 20 en un corte; con 62 operaciones la franquicia es 0.62 -> descuento 19.38
+    assert "🔴 <b>Colon-H0715</b>" in txt
+    assert "📉 Faltantes: S/ 20.00" in txt and "⚖️ Neto sin explicar: -20.00" in txt
+    assert "descuento S/ 19.38" in txt and "👤 Ana: S/ 19.38 (100%)" in txt
+    # Zol A: la entrega de 17/10 a 18/10 sube 1,100: es un item grande, se investiga aparte
+    assert "🟢 <b>Zol A-H3582</b>" in txt
+    assert "Ítems grandes (S/ 40 o más): 1 (+1,100.00) — investigar aparte" in txt
+    assert txt.index("Colon-H0715") < txt.index("Zol A-H3582")  # el que mas falto, primero
+    assert "📐 Descuento por política: S/ 19.38" in txt
+
+
+def test_sucursales_lo_autorizado_no_cuenta_y_se_muestra():
+    aj = _ajustes(("x1", "Colon-H0715", dt.date(2026, 10, 18), -20.0, "Mañana", ""))
+    txt = rp.reporte_sucursales(_registros(), _config(), aj, HOY, "mes", "colon")
+    assert "🟢 <b>Colon-H0715</b>" in txt and "⚖️ Neto sin explicar: 0.00" in txt
+    assert "🔷 Autorizado: -20.00" in txt and "descuento S/ 0.00" in txt
+
+
+def test_sucursales_con_un_local_lista_sus_diferencias_y_filtros():
+    txt = rp.reporte_sucursales(_registros(), _config(), _ajustes(), HOY, "mes", "colon")
+    assert "Zol A" not in txt and "Diferencias por revisar:" in txt and "• 18/10 · Corte · Ana: -20.00" in txt
+    assert "No encontré" in rp.reporte_sucursales(_registros(), _config(), _ajustes(), HOY, "mes", "xyz")
+    assert "No hay registros en ese período" in rp.reporte_sucursales(_registros(), _config(), _ajustes(), HOY, "anterior")
+    assert "Todavía no hay registros" in rp.reporte_sucursales(pd.DataFrame(), _config(), _ajustes(), HOY)
+
+
+def test_sucursales_repuesto_suma_solo_ingresos_con_quien_repuso():
+    aj = pd.DataFrame([
+        {"id": "x1", "local": "Colon-H0715", "fecha": dt.date(2026, 10, 18), "monto": 30.0, "turno": "", "salto_id_cierre": "zz", "repuso": "Ana"},
+        {"id": "x2", "local": "Colon-H0715", "fecha": dt.date(2026, 10, 18), "monto": 10.0, "turno": "", "salto_id_cierre": "yy", "repuso": ""},
+    ])
+    txt = rp.reporte_sucursales(_registros(), _config(), aj, HOY, "mes", "colon")
+    assert "↩️ Repuesto: S/ 30.00" in txt and "🔷 Autorizado: +40.00" in txt

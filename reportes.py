@@ -28,10 +28,12 @@ from cuadre import (
     con_estado_nota,
     estado_nota,
     estado_parcial,
+    items_ticket,
     marcar_autorizados,
     minutos_entre,
     nota_vigente,
     operaciones_por_turno,
+    politica_sucursal,
     solicitudes_activas,
     texto_espera,
 )
@@ -59,6 +61,8 @@ AYUDA = (
     "   🏅 Ranking de trabajadores por operaciones, con turnos, meta, encuestas y diferencias\n"
     "\n"
     "⚠️ <b>¿Hay algo que revisar?</b>\n"
+    "/sucursales\n"
+    "   🏪 Balance por sucursal: faltantes, sobrantes, lo autorizado y el descuento según la política\n"
     "/diferencias\n"
     "   🔎 Diferencias de más de S/ {umbral:g} que todavía NO están autorizadas (últimos 7 días)\n"
     "/solicitudes\n"
@@ -76,6 +80,8 @@ AYUDA = (
     "   <code>/diferencias 30</code>\n"
     "• Para incluir también las ya autorizadas:\n"
     "   <code>/diferencias todas</code>\n"
+    "• Balance de otro período (hoy, semana, mes o anterior):\n"
+    "   <code>/sucursales anterior</code>\n"
     "• Ranking de otro período (hoy, semana, mes o anterior):\n"
     "   <code>/ranking semana</code>\n"
     "   <code>/ranking anterior colon</code>\n"
@@ -623,3 +629,124 @@ def resumen_diario(registros, config, encuestas, ajustes, solicitudes, hoy: date
     else:
         partes.append("⭐ Hoy no se registraron encuestas.")
     return "\n\n———————\n\n".join(partes)
+
+
+# ---------------------------------------------------------------------
+# /sucursales: balance de diferencias por sucursal + politica de descuento
+# (lo mismo que la pestaña "🏪 Sucursales" del Dashboard, con los mismos calculos)
+# ---------------------------------------------------------------------
+POL_TASA, POL_PISO, POL_TOPE, POL_GRANDE = 0.01, 0.0, 30.0, 40.0  # los acordados (ver Dashboard)
+
+
+def reporte_sucursales(registros: pd.DataFrame, config: pd.DataFrame, ajustes, hoy: date,
+                       periodo: str = "mes", local_filtro: str = "") -> str:
+    desde, hasta, etiqueta = rango_periodo(periodo, hoy)
+    titulo = (
+        f"🏪 <b>Balance por sucursal</b> — {etiqueta}\n({_dm(desde)} al {_dm(hasta)} · "
+        "lo ya autorizado no cuenta)"
+    )
+    if registros is None or registros.empty:
+        return f"{titulo}\n\nTodavía no hay registros."
+    elegidos = buscar_locales(local_filtro, registros["local"].unique())
+    if not elegidos:
+        return f"No encontré ningún local que se parezca a «{esc(local_filtro)}»."
+
+    base = registros[registros["local"].isin(elegidos)]
+    reg = base[(base["fecha"] >= desde) & (base["fecha"] <= hasta)]
+    if reg.empty:
+        return f"{titulo}\n\nNo hay registros en ese período."
+
+    # cortes del rango y entregas (saltos) cuyo Cierre cae en el rango; sin lo ya autorizado
+    cortes, saltos = marcar_autorizados(
+        calcular_cortes(reg, ["local", "fecha", "turno"]), calcular_saltos(base), ajustes
+    )
+    cortes_acum = cortes[~cortes["_autorizado"]] if not cortes.empty else cortes
+    if not saltos.empty:
+        saltos = saltos[(saltos["fecha_cierre"] >= desde) & (saltos["fecha_cierre"] <= hasta)]
+        saltos_acum = saltos[~saltos["_autorizado"]]
+    else:
+        saltos_acum = saltos
+    items = items_ticket(cortes_acum, saltos_acum, True)
+
+    por_id = reg.assign(_id=reg["id"].astype(str)).drop_duplicates("_id", keep="last").set_index("_id")
+    ops_por_local = {}
+    if not cortes.empty:
+        ops = pd.to_numeric(cortes["id_cierre"].astype(str).map(por_id["num_operaciones"]), errors="coerce").fillna(0)
+        ops_por_local = cortes.assign(_ops=ops).groupby("local")["_ops"].sum().to_dict()
+    pol_suc, pol_rep, pol_grandes = politica_sucursal(items, ops_por_local, POL_TASA, POL_PISO, POL_TOPE, POL_GRANDE)
+
+    aj = pd.DataFrame()
+    if ajustes is not None and not ajustes.empty:
+        aj = ajustes[(ajustes["fecha"] >= desde) & (ajustes["fecha"] <= hasta) & ajustes["local"].isin(elegidos)]
+
+    filas = []
+    for local in elegidos:
+        it = items[items["local"] == local] if not items.empty else items
+        dif = it["diferencia"] if not it.empty else pd.Series(dtype=float)
+        a = aj[aj["local"] == local] if not aj.empty else aj
+        falt = float(abs(dif[dif < 0].sum()))
+        sobr = float(dif[dif > 0].sum())
+        repuesto = 0.0
+        if not a.empty and "repuso" in a.columns:
+            repuesto = float(a.loc[(a["monto"] > 0) & (a["repuso"] != ""), "monto"].sum())
+        p = pol_suc[pol_suc["local"] == local]
+        filas.append({
+            "local": local,
+            "cortes": int((cortes["local"] == local).sum()) if not cortes.empty else 0,
+            "items": int(len(it)),
+            "faltantes": falt, "sobrantes": sobr, "neto": sobr - falt,
+            "autorizado": float(a["monto"].sum()) if not a.empty else 0.0,
+            "repuesto": repuesto,
+            "pol": p.iloc[0].to_dict() if not p.empty else None,
+        })
+    filas.sort(key=lambda f: f["neto"])  # los que mas faltaron, primero
+
+    bloques = []
+    for f in filas:
+        lineas = [
+            f"{'🔴' if f['neto'] < 0 else '🟢'} <b>{esc(f['local'])}</b>",
+            f"✂️ Cortes: {f['cortes']} · Ítems por revisar: {f['items']}",
+            f"📉 Faltantes: {soles(f['faltantes'])}",
+            f"📈 Sobrantes: {soles(f['sobrantes'])}",
+            f"⚖️ Neto sin explicar: {_con_signo(f['neto'])}",
+            f"🔷 Autorizado: {_con_signo(f['autorizado'])}",
+            f"↩️ Repuesto: {soles(f['repuesto'])}",
+        ]
+        p = f["pol"]
+        if p is not None:
+            lineas.append(
+                f"📐 Política: pérdida neta {soles(p['perdida_neta'])} · franquicia {soles(p['franquicia'])} → "
+                f"<b>descuento {soles(p['descuento'])}</b>"
+            )
+            rep = pol_rep[pol_rep["local"] == f["local"]] if not pol_rep.empty else pol_rep
+            for _, r in rep.sort_values("asignado", ascending=False).iterrows():
+                if r["asignado"] > 0:
+                    lineas.append(f"   👤 {esc(r['persona'])}: {soles(r['asignado'])} ({r['participacion'] * 100:.0f}%)")
+            if p["items_grandes"]:
+                lineas.append(
+                    f"🔎 Ítems grandes (S/ {POL_GRANDE:g} o más): {int(p['items_grandes'])} "
+                    f"({_con_signo(p['monto_grandes'])}) — investigar aparte"
+                )
+        bloques.append("\n".join(lineas))
+
+    total = {k: sum(f[k] for f in filas) for k in ("faltantes", "sobrantes", "neto", "autorizado", "repuesto")}
+    desc_total = float(pol_suc["descuento"].sum()) if not pol_suc.empty else 0.0
+    pie = (
+        "\n\n📊 <b>Total</b>\n"
+        f"📉 Faltantes: {soles(total['faltantes'])}\n📈 Sobrantes: {soles(total['sobrantes'])}\n"
+        f"⚖️ Neto sin explicar: {_con_signo(total['neto'])}\n🔷 Autorizado: {_con_signo(total['autorizado'])}\n"
+        f"↩️ Repuesto: {soles(total['repuesto'])}\n📐 Descuento por política: {soles(desc_total)}"
+    ) if len(filas) > 1 else ""
+    detalle = ""
+    if local_filtro.strip() and len(filas) == 1 and not items.empty:  # con un local: las diferencias una por una
+        det = items[items["local"] == filas[0]["local"]].sort_values("fecha", ascending=False).head(10)
+        if len(det):
+            detalle = "\n\n<i>Diferencias por revisar:</i>\n" + "\n".join(
+                f"• {_dm(r['fecha'])} · {esc(r['tipo'])} · {esc(r['persona'])}: {_con_signo(r['diferencia'])}"
+                for _, r in det.iterrows()
+            )
+    nota = (
+        f"\n\nℹ️ Política: franquicia S/ {POL_TASA:g} por operación, techo S/ {POL_TOPE:g} por sucursal, "
+        "el descuento se reparte según lo que le faltó a cada uno."
+    )
+    return f"{titulo}\n\n" + "\n\n".join(bloques) + pie + detalle + nota

@@ -39,6 +39,7 @@ COMANDOS_MENU = [
     ("operaciones", "Operaciones de hoy y del mes vs meta"),
     ("resumen", "El resumen del día completo"),
     ("ranking", "Ranking de trabajadores por operaciones"),
+    ("sucursales", "Balance de diferencias por sucursal"),
     ("solicitudes", "Pedidos de efectivo o saldo pendientes"),
     ("diferencias", "Diferencias grandes sin autorizar"),
     ("ayuda", "Ver todos los comandos"),
@@ -120,6 +121,15 @@ def generar_respuesta(comando: str, argumento: str) -> str:
             sh.get_registros_df, sh.get_config_df, sh.get_encuestas_df, sh.get_ajustes_df
         )
         return rp.reporte_ranking(registros, config, encuestas, ajustes, hoy, periodo, " ".join(filtro))
+    if comando == "sucursales":
+        periodo, filtro = "mes", []
+        for p in argumento.split():
+            if p.lower() in rp.PERIODOS_RANKING:
+                periodo = p.lower()
+            else:
+                filtro.append(p)
+        registros, config, ajustes = _fresco(sh.get_registros_df, sh.get_config_df, sh.get_ajustes_df)
+        return rp.reporte_sucursales(registros, config, ajustes, hoy, periodo, " ".join(filtro))
     if comando == "resumen":
         registros, config, encuestas, ajustes, solicitudes = _fresco(
             sh.get_registros_df, sh.get_config_df, sh.get_encuestas_df, sh.get_ajustes_df, sh.get_solicitudes_df
