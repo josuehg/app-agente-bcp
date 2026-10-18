@@ -190,6 +190,204 @@ def _comparar_par(row_izq, row_der, label_izq="Apertura", label_der="Cierre"):
     ]
 )
 
+# La bandeja de Solicitudes va PRIMERO a proposito: Streamlit dibuja la pagina en el orden del
+# codigo y todas las pestañas se calculan en cada clic. Si estuviera al final, quedaba en
+# blanco hasta que terminara el cuadre, la liquidacion, los graficos, etc.
+# ---------------------------------------------------------------------
+# 📨 Solicitudes de efectivo / saldo: bandeja para atender los pedidos de los
+# locales. Paso 1: verificar en camara el movimiento fisico -> "En proceso".
+# Paso 2: registrar la referencia de la transferencia/deposito -> "Completada".
+# El total del local (efectivo + tarjeta) no cambia, asi que no toca el cuadre.
+# ---------------------------------------------------------------------
+with tab_solicitudes:
+    st.subheader("📨 Solicitudes de efectivo y saldo")
+    if "dash_sol_msg" in st.session_state:
+        st.success(st.session_state.pop("dash_sol_msg"))
+    _tg_listo = sh.telegram_configurado()
+    if not _tg_listo:
+        st.warning(
+            "⚠️ El aviso por Telegram **no está configurado**: las solicitudes llegan aquí, pero no te "
+            "suena el celular. Abajo, en «⚙️ Configurar Telegram», están los pasos."
+        )
+    with st.expander("⚙️ Configurar Telegram", expanded=not _tg_listo):
+        if not sh.telegram_token_configurado():
+            st.markdown(
+                "**Paso 1.** En Telegram abre **@BotFather**, escribe `/newbot`, elige un nombre y copia el "
+                "*token* que te da.\n\n"
+                "**Paso 2.** En Railway → tu servicio → *Variables*, crea `TELEGRAM_BOT_TOKEN` con ese token "
+                "(el servicio se reinicia solo).\n\n"
+                "Luego vuelve aquí."
+            )
+        elif not _tg_listo:
+            st.markdown(
+                "✅ El token ya está. **Paso 3.** Abre tu bot en Telegram y escríbele cualquier mensaje "
+                "(por ejemplo *hola*). Si quieres que las alertas lleguen a un **grupo**, agrega el bot al "
+                "grupo y escribe algo ahí. Luego aprieta el botón."
+            )
+            if st.button("🔎 Buscar mi chat id", key="tg_buscar"):
+                _diag = sh.telegram_diagnostico()
+                _chats = _diag["chats"]
+                if _diag["bot"]:
+                    st.info(
+                        f"🤖 Este token es del bot **@{_diag['bot']['usuario']}** ({_diag['bot']['nombre']}). "
+                        "Tienes que escribirle a **ese** bot (búscalo por ese usuario), no a otro."
+                    )
+                if _diag["error"]:
+                    st.error(
+                        f"{_diag['error']}. "
+                        + (
+                            "Revisa que el token de Railway esté completo y sin espacios."
+                            if "401" in _diag["error"] or "Unauthorized" in _diag["error"]
+                            else ""
+                        )
+                    )
+                elif not _chats:
+                    st.error(
+                        "El token es válido, pero ese bot todavía no recibió ningún mensaje. Abre "
+                        f"@{_diag['bot']['usuario']} en Telegram, toca Iniciar y escríbele *hola*; luego "
+                        "vuelve a apretar el botón (Telegram solo guarda los últimos ~24 h)."
+                    )
+                else:
+                    st.success("Estos chats le escribieron al bot. Copia el **id** del tuyo:")
+                    st.dataframe(
+                        sh.arrow_safe(
+                            pd.DataFrame(_chats).rename(columns={"id": "Chat id", "nombre": "Nombre", "tipo": "Tipo"})
+                        ),
+                        hide_index=True,
+                    )
+                    st.markdown(
+                        "**Paso 4.** En Railway → *Variables*, crea `TELEGRAM_CHAT_ID` con ese id "
+                        "(los grupos llevan un guion al inicio, por ejemplo `-100123…`; cópialo completo)."
+                    )
+        else:
+            st.success("✅ Telegram está configurado.")
+            if st.button("📨 Enviar mensaje de prueba", key="tg_prueba"):
+                if sh.notificar_telegram("✅ Prueba: las alertas de Solicitudes llegan a este chat."):
+                    st.success("Mensaje enviado. Revisa tu Telegram.")
+                else:
+                    st.error(
+                        "Telegram no aceptó el mensaje. Revisa que el token y el chat id sean correctos y que "
+                        "hayas escrito al bot (en un grupo, que el bot esté agregado)."
+                    )
+    if solicitudes_df is None:
+        st.warning("Google está ocupado y no se pudo leer las solicitudes. Recarga en un momento.")
+    else:
+        _ahora_sol = sh.ahora_local().replace(tzinfo=None)
+        _activas = sh.solicitudes_activas(solicitudes_df)
+
+        _mes_ini = pd.Timestamp(sh.hoy_local().replace(day=1))
+        _del_mes = (
+            solicitudes_df[solicitudes_df["timestamp"] >= _mes_ini] if not solicitudes_df.empty else solicitudes_df
+        )
+        _hechas = _del_mes[_del_mes["estado"] == "Completada"] if not _del_mes.empty else _del_mes
+        _mins = [sh.minutos_entre(a, b) for a, b in zip(_hechas["timestamp"], _hechas["ts_completado"])] if not _hechas.empty else []
+        _mins = [m for m in _mins if m is not None]
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Pendientes ahora", len(_activas))
+        m2.metric("Completadas este mes", len(_hechas))
+        m3.metric("Tiempo promedio de atención", sh.texto_espera(sum(_mins) / len(_mins)) if _mins else "—")
+
+        if _activas.empty:
+            st.success("No hay solicitudes pendientes. 🎉")
+
+        for _, s in _activas.iterrows():
+            pide_efectivo = s["tipo"] == "Falta efectivo"
+            urg = "⚡ URGENTE · " if str(s["urgente"]).strip() == "Sí" else ""
+            with st.container(border=True):
+                st.markdown(f"### {urg}{s['local']} · {s['tipo']} · S/ {float(s['monto']):,.2f}")
+                st.caption(
+                    f"Pidió {s['solicitado_por']} · {s['timestamp']:%d/%m %H:%M} · "
+                    f"hace {sh.texto_espera(sh.minutos_entre(s['timestamp'], _ahora_sol))}"
+                    + (f" · Nota: {s['nota']}" if str(s["nota"]).strip() else "")
+                )
+                try:
+                    if s["estado"] == "Solicitada":
+                        with st.form(f"sol_paso1_{s['id']}"):
+                            st.markdown("**Paso 1 — verificar en cámara**")
+                            st.caption(
+                                "Confirma que el personal de confianza entregó el efectivo de la reserva al cajero."
+                                if pide_efectivo
+                                else "Confirma que el efectivo que le sobraba al local quedó guardado en la reserva."
+                            )
+                            personal_conf = st.text_input("Personal de confianza que intervino")
+                            ok_camara = st.checkbox("Lo verifiqué en cámara")
+                            motivo_cancel = st.text_input("Motivo (solo si la cancelas)")
+                            b1, b2 = st.columns(2)
+                            avanzar = b1.form_submit_button("Marcar en proceso", type="primary", width="stretch")
+                            cancelar = b2.form_submit_button("Cancelar solicitud", width="stretch")
+                        if avanzar:
+                            if not personal_conf.strip() or not ok_camara:
+                                st.error("Anota el personal de confianza y marca que lo verificaste en cámara.")
+                            else:
+                                sh.solicitud_en_proceso(s["id"], personal_conf)
+                                st.session_state["dash_sol_msg"] = f"{s['local']}: en proceso."
+                                st.rerun()
+                        if cancelar:
+                            sh.solicitud_cancelada(s["id"], motivo_cancel, local=s["local"], tipo=s["tipo"])
+                            st.session_state["dash_sol_msg"] = f"{s['local']}: solicitud cancelada."
+                            st.rerun()
+                    else:  # En proceso
+                        st.info(
+                            f"✔ Verificado en cámara a las {s['ts_proceso']:%H:%M} · "
+                            f"Personal de confianza: {s['personal_confianza']}"
+                        )
+                        with st.form(f"sol_paso2_{s['id']}"):
+                            st.markdown(
+                                "**Paso 2 — registrar el depósito**" if pide_efectivo else "**Paso 2 — registrar tu transferencia**"
+                            )
+                            referencia = st.text_input(
+                                "N° de operación del depósito" if pide_efectivo else "N° de operación de tu transferencia"
+                            )
+                            cuenta = (
+                                st.selectbox("Cuenta destino del depósito", sh.CUENTAS_DESTINO)
+                                if pide_efectivo
+                                else ""
+                            )
+                            motivo_cancel2 = st.text_input("Motivo (solo si la cancelas)")
+                            b1, b2 = st.columns(2)
+                            completar = b1.form_submit_button("Completar", type="primary", width="stretch")
+                            cancelar2 = b2.form_submit_button("Cancelar solicitud", width="stretch")
+                        if completar:
+                            if not referencia.strip():
+                                st.error("Escribe el N° de operación (es tu comprobante).")
+                            else:
+                                sh.solicitud_completada(s["id"], referencia, cuenta)
+                                st.session_state["dash_sol_msg"] = f"{s['local']}: solicitud completada."
+                                st.rerun()
+                        if cancelar2:
+                            sh.solicitud_cancelada(s["id"], motivo_cancel2, local=s["local"], tipo=s["tipo"])
+                            st.session_state["dash_sol_msg"] = f"{s['local']}: solicitud cancelada."
+                            st.rerun()
+                except Exception as error:
+                    st.error(f"No se pudo guardar el cambio: {error}")
+
+        if not solicitudes_df.empty:
+            st.subheader("🕘 Historial de solicitudes")
+            _hist = solicitudes_df[~solicitudes_df["estado"].isin(sh.ESTADOS_SOLICITUD_ACTIVOS)].head(60)
+            if _hist.empty:
+                st.caption("Todavía no hay solicitudes cerradas.")
+            else:
+                _tabla_sol = pd.DataFrame(
+                    {
+                        "Fecha": _hist["timestamp"].dt.strftime("%d/%m %H:%M"),
+                        "Local": _hist["local"],
+                        "Tipo": _hist["tipo"],
+                        "Monto (S/)": _hist["monto"],
+                        "Estado": _hist["estado"],
+                        "Pidió": _hist["solicitado_por"],
+                        "Personal de confianza": _hist["personal_confianza"],
+                        "Referencia": _hist["referencia"],
+                        "Cuenta": _hist["cuenta_destino"],
+                        "Tiempo": [
+                            sh.texto_espera(sh.minutos_entre(a, b)) if e == "Completada" else ""
+                            for a, b, e in zip(_hist["timestamp"], _hist["ts_completado"], _hist["estado"])
+                        ],
+                        "Motivo": _hist["observaciones_admin"],
+                    }
+                )
+                st.dataframe(sh.arrow_safe(_tabla_sol), width="stretch", hide_index=True)
+
+
 with tab_resumen:
     # -------------------------------------------------------------
     # Alertas de fondo bajo (usa el ULTIMO cierre de cada local, sin
@@ -3087,198 +3285,3 @@ with tab_personal:
                     )
                     st.success("Cambios guardados.")
                     st.rerun()
-
-
-# ---------------------------------------------------------------------
-# 📨 Solicitudes de efectivo / saldo: bandeja para atender los pedidos de los
-# locales. Paso 1: verificar en camara el movimiento fisico -> "En proceso".
-# Paso 2: registrar la referencia de la transferencia/deposito -> "Completada".
-# El total del local (efectivo + tarjeta) no cambia, asi que no toca el cuadre.
-# ---------------------------------------------------------------------
-with tab_solicitudes:
-    st.subheader("📨 Solicitudes de efectivo y saldo")
-    if "dash_sol_msg" in st.session_state:
-        st.success(st.session_state.pop("dash_sol_msg"))
-    _tg_listo = sh.telegram_configurado()
-    if not _tg_listo:
-        st.warning(
-            "⚠️ El aviso por Telegram **no está configurado**: las solicitudes llegan aquí, pero no te "
-            "suena el celular. Abajo, en «⚙️ Configurar Telegram», están los pasos."
-        )
-    with st.expander("⚙️ Configurar Telegram", expanded=not _tg_listo):
-        if not sh.telegram_token_configurado():
-            st.markdown(
-                "**Paso 1.** En Telegram abre **@BotFather**, escribe `/newbot`, elige un nombre y copia el "
-                "*token* que te da.\n\n"
-                "**Paso 2.** En Railway → tu servicio → *Variables*, crea `TELEGRAM_BOT_TOKEN` con ese token "
-                "(el servicio se reinicia solo).\n\n"
-                "Luego vuelve aquí."
-            )
-        elif not _tg_listo:
-            st.markdown(
-                "✅ El token ya está. **Paso 3.** Abre tu bot en Telegram y escríbele cualquier mensaje "
-                "(por ejemplo *hola*). Si quieres que las alertas lleguen a un **grupo**, agrega el bot al "
-                "grupo y escribe algo ahí. Luego aprieta el botón."
-            )
-            if st.button("🔎 Buscar mi chat id", key="tg_buscar"):
-                _diag = sh.telegram_diagnostico()
-                _chats = _diag["chats"]
-                if _diag["bot"]:
-                    st.info(
-                        f"🤖 Este token es del bot **@{_diag['bot']['usuario']}** ({_diag['bot']['nombre']}). "
-                        "Tienes que escribirle a **ese** bot (búscalo por ese usuario), no a otro."
-                    )
-                if _diag["error"]:
-                    st.error(
-                        f"{_diag['error']}. "
-                        + (
-                            "Revisa que el token de Railway esté completo y sin espacios."
-                            if "401" in _diag["error"] or "Unauthorized" in _diag["error"]
-                            else ""
-                        )
-                    )
-                elif not _chats:
-                    st.error(
-                        "El token es válido, pero ese bot todavía no recibió ningún mensaje. Abre "
-                        f"@{_diag['bot']['usuario']} en Telegram, toca Iniciar y escríbele *hola*; luego "
-                        "vuelve a apretar el botón (Telegram solo guarda los últimos ~24 h)."
-                    )
-                else:
-                    st.success("Estos chats le escribieron al bot. Copia el **id** del tuyo:")
-                    st.dataframe(
-                        sh.arrow_safe(
-                            pd.DataFrame(_chats).rename(columns={"id": "Chat id", "nombre": "Nombre", "tipo": "Tipo"})
-                        ),
-                        hide_index=True,
-                    )
-                    st.markdown(
-                        "**Paso 4.** En Railway → *Variables*, crea `TELEGRAM_CHAT_ID` con ese id "
-                        "(los grupos llevan un guion al inicio, por ejemplo `-100123…`; cópialo completo)."
-                    )
-        else:
-            st.success("✅ Telegram está configurado.")
-            if st.button("📨 Enviar mensaje de prueba", key="tg_prueba"):
-                if sh.notificar_telegram("✅ Prueba: las alertas de Solicitudes llegan a este chat."):
-                    st.success("Mensaje enviado. Revisa tu Telegram.")
-                else:
-                    st.error(
-                        "Telegram no aceptó el mensaje. Revisa que el token y el chat id sean correctos y que "
-                        "hayas escrito al bot (en un grupo, que el bot esté agregado)."
-                    )
-    if solicitudes_df is None:
-        st.warning("Google está ocupado y no se pudo leer las solicitudes. Recarga en un momento.")
-    else:
-        _ahora_sol = sh.ahora_local().replace(tzinfo=None)
-        _activas = sh.solicitudes_activas(solicitudes_df)
-
-        _mes_ini = pd.Timestamp(sh.hoy_local().replace(day=1))
-        _del_mes = (
-            solicitudes_df[solicitudes_df["timestamp"] >= _mes_ini] if not solicitudes_df.empty else solicitudes_df
-        )
-        _hechas = _del_mes[_del_mes["estado"] == "Completada"] if not _del_mes.empty else _del_mes
-        _mins = [sh.minutos_entre(a, b) for a, b in zip(_hechas["timestamp"], _hechas["ts_completado"])] if not _hechas.empty else []
-        _mins = [m for m in _mins if m is not None]
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Pendientes ahora", len(_activas))
-        m2.metric("Completadas este mes", len(_hechas))
-        m3.metric("Tiempo promedio de atención", sh.texto_espera(sum(_mins) / len(_mins)) if _mins else "—")
-
-        if _activas.empty:
-            st.success("No hay solicitudes pendientes. 🎉")
-
-        for _, s in _activas.iterrows():
-            pide_efectivo = s["tipo"] == "Falta efectivo"
-            urg = "⚡ URGENTE · " if str(s["urgente"]).strip() == "Sí" else ""
-            with st.container(border=True):
-                st.markdown(f"### {urg}{s['local']} · {s['tipo']} · S/ {float(s['monto']):,.2f}")
-                st.caption(
-                    f"Pidió {s['solicitado_por']} · {s['timestamp']:%d/%m %H:%M} · "
-                    f"hace {sh.texto_espera(sh.minutos_entre(s['timestamp'], _ahora_sol))}"
-                    + (f" · Nota: {s['nota']}" if str(s["nota"]).strip() else "")
-                )
-                try:
-                    if s["estado"] == "Solicitada":
-                        with st.form(f"sol_paso1_{s['id']}"):
-                            st.markdown("**Paso 1 — verificar en cámara**")
-                            st.caption(
-                                "Confirma que el personal de confianza entregó el efectivo de la reserva al cajero."
-                                if pide_efectivo
-                                else "Confirma que el efectivo que le sobraba al local quedó guardado en la reserva."
-                            )
-                            personal_conf = st.text_input("Personal de confianza que intervino")
-                            ok_camara = st.checkbox("Lo verifiqué en cámara")
-                            motivo_cancel = st.text_input("Motivo (solo si la cancelas)")
-                            b1, b2 = st.columns(2)
-                            avanzar = b1.form_submit_button("Marcar en proceso", type="primary", width="stretch")
-                            cancelar = b2.form_submit_button("Cancelar solicitud", width="stretch")
-                        if avanzar:
-                            if not personal_conf.strip() or not ok_camara:
-                                st.error("Anota el personal de confianza y marca que lo verificaste en cámara.")
-                            else:
-                                sh.solicitud_en_proceso(s["id"], personal_conf)
-                                st.session_state["dash_sol_msg"] = f"{s['local']}: en proceso."
-                                st.rerun()
-                        if cancelar:
-                            sh.solicitud_cancelada(s["id"], motivo_cancel, local=s["local"], tipo=s["tipo"])
-                            st.session_state["dash_sol_msg"] = f"{s['local']}: solicitud cancelada."
-                            st.rerun()
-                    else:  # En proceso
-                        st.info(
-                            f"✔ Verificado en cámara a las {s['ts_proceso']:%H:%M} · "
-                            f"Personal de confianza: {s['personal_confianza']}"
-                        )
-                        with st.form(f"sol_paso2_{s['id']}"):
-                            st.markdown(
-                                "**Paso 2 — registrar el depósito**" if pide_efectivo else "**Paso 2 — registrar tu transferencia**"
-                            )
-                            referencia = st.text_input(
-                                "N° de operación del depósito" if pide_efectivo else "N° de operación de tu transferencia"
-                            )
-                            cuenta = (
-                                st.selectbox("Cuenta destino del depósito", sh.CUENTAS_DESTINO)
-                                if pide_efectivo
-                                else ""
-                            )
-                            motivo_cancel2 = st.text_input("Motivo (solo si la cancelas)")
-                            b1, b2 = st.columns(2)
-                            completar = b1.form_submit_button("Completar", type="primary", width="stretch")
-                            cancelar2 = b2.form_submit_button("Cancelar solicitud", width="stretch")
-                        if completar:
-                            if not referencia.strip():
-                                st.error("Escribe el N° de operación (es tu comprobante).")
-                            else:
-                                sh.solicitud_completada(s["id"], referencia, cuenta)
-                                st.session_state["dash_sol_msg"] = f"{s['local']}: solicitud completada."
-                                st.rerun()
-                        if cancelar2:
-                            sh.solicitud_cancelada(s["id"], motivo_cancel2, local=s["local"], tipo=s["tipo"])
-                            st.session_state["dash_sol_msg"] = f"{s['local']}: solicitud cancelada."
-                            st.rerun()
-                except Exception as error:
-                    st.error(f"No se pudo guardar el cambio: {error}")
-
-        if not solicitudes_df.empty:
-            st.subheader("🕘 Historial de solicitudes")
-            _hist = solicitudes_df[~solicitudes_df["estado"].isin(sh.ESTADOS_SOLICITUD_ACTIVOS)].head(60)
-            if _hist.empty:
-                st.caption("Todavía no hay solicitudes cerradas.")
-            else:
-                _tabla_sol = pd.DataFrame(
-                    {
-                        "Fecha": _hist["timestamp"].dt.strftime("%d/%m %H:%M"),
-                        "Local": _hist["local"],
-                        "Tipo": _hist["tipo"],
-                        "Monto (S/)": _hist["monto"],
-                        "Estado": _hist["estado"],
-                        "Pidió": _hist["solicitado_por"],
-                        "Personal de confianza": _hist["personal_confianza"],
-                        "Referencia": _hist["referencia"],
-                        "Cuenta": _hist["cuenta_destino"],
-                        "Tiempo": [
-                            sh.texto_espera(sh.minutos_entre(a, b)) if e == "Completada" else ""
-                            for a, b, e in zip(_hist["timestamp"], _hist["ts_completado"], _hist["estado"])
-                        ],
-                        "Motivo": _hist["observaciones_admin"],
-                    }
-                )
-                st.dataframe(sh.arrow_safe(_tabla_sol), width="stretch", hide_index=True)
