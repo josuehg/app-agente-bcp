@@ -1616,6 +1616,38 @@ def _avisar_diferencia(filas_previas: list[dict], nueva: dict) -> None:
         notificar_telegram_en_segundo_plano(texto_alerta_diferencia(alerta, _enlace_dashboard()))
 
 
+NOMBRE_HOJA_BOT = "Bot"
+COLUMNAS_BOT = ["clave", "valor", "timestamp"]
+
+
+def leer_estado_bot() -> dict:
+    """Lo que el bot ya hizo (resumen enviado, turnos ya avisados), para no repetirlo si se
+    reinicia. Devuelve {clave: [valores]}."""
+    ws = _get_or_create_worksheet(NOMBRE_HOJA_BOT, COLUMNAS_BOT)
+    estado: dict = {}
+    for f in ws.get_all_records(numericise_ignore=["all"]):
+        estado.setdefault(str(f.get("clave", "")).strip(), []).append(str(f.get("valor", "")).strip())
+    return estado
+
+
+def guardar_estado_bot(clave: str, valor, unico: bool = True) -> None:
+    """unico=True: una sola fila por clave (se actualiza). unico=False: una fila nueva cada vez."""
+    ws = _get_or_create_worksheet(NOMBRE_HOJA_BOT, COLUMNAS_BOT)
+    ahora = ahora_local().replace(tzinfo=None).isoformat(timespec="seconds")
+    if unico:
+        try:
+            fila = _fila_de_id(ws, clave, 1)
+        except ValueError:
+            fila = None
+        if fila:
+            _escribir_y_confirmar(ws, [
+                {"range": gspread.utils.rowcol_to_a1(fila, 2), "values": [[str(valor)]]},
+                {"range": gspread.utils.rowcol_to_a1(fila, 3), "values": [[ahora]]},
+            ])
+            return
+    ws.append_row([clave, str(valor), ahora])
+
+
 def telegram_token_configurado() -> bool:
     return bool(_secreto("telegram_token", "TELEGRAM_BOT_TOKEN"))
 

@@ -37,6 +37,8 @@ COMANDOS_MENU = [
     ("corte", "Último corte cerrado de cada local"),
     ("encuestas", "Encuestas del mes, pagos y nota NPS"),
     ("operaciones", "Operaciones de hoy y del mes vs meta"),
+    ("resumen", "El resumen del día completo"),
+    ("ranking", "Ranking de trabajadores por operaciones"),
     ("solicitudes", "Pedidos de efectivo o saldo pendientes"),
     ("diferencias", "Diferencias grandes sin autorizar"),
     ("ayuda", "Ver todos los comandos"),
@@ -107,6 +109,25 @@ def generar_respuesta(comando: str, argumento: str) -> str:
     if comando == "operaciones":
         registros, config = _fresco(sh.get_registros_df, sh.get_config_df)
         return rp.reporte_operaciones(registros, config, hoy, argumento)
+    if comando == "ranking":
+        periodo, filtro = "mes", []
+        for p in argumento.split():
+            if p.lower() in rp.PERIODOS_RANKING:
+                periodo = p.lower()
+            else:
+                filtro.append(p)
+        registros, config, encuestas, ajustes = _fresco(
+            sh.get_registros_df, sh.get_config_df, sh.get_encuestas_df, sh.get_ajustes_df
+        )
+        return rp.reporte_ranking(registros, config, encuestas, ajustes, hoy, periodo, " ".join(filtro))
+    if comando == "resumen":
+        registros, config, encuestas, ajustes, solicitudes = _fresco(
+            sh.get_registros_df, sh.get_config_df, sh.get_encuestas_df, sh.get_ajustes_df, sh.get_solicitudes_df
+        )
+        return rp.resumen_diario(
+            registros, config, encuestas, ajustes, solicitudes, hoy, sh.ahora_local().replace(tzinfo=None),
+            sh.umbral_alerta_diferencia(),
+        )
     if comando == "solicitudes":
         return rp.reporte_solicitudes(_fresco(sh.get_solicitudes_df), sh.ahora_local().replace(tzinfo=None))
     if comando == "diferencias":
@@ -159,6 +180,101 @@ def atender(token: str, update: dict) -> None:
 
 
 # ---------------------------------------------------------------------
+# Avisos programados: resumen de cada noche y turnos sin cerrar
+# ---------------------------------------------------------------------
+REVISION_TURNOS_CADA = 900  # segundos (15 min)
+
+
+def enviar_a_todos(token: str, texto: str) -> None:
+    for chat in sh.telegram_chat_ids():
+        enviar(token, chat, texto)
+
+
+def hora_resumen() -> int | None:
+    """Minutos desde medianoche a los que se manda el resumen (RESUMEN_DIARIO_HORA, 'HH:MM';
+    'off' lo apaga). Por defecto 21:30."""
+    valor = (sh._secreto("resumen_diario_hora", "RESUMEN_DIARIO_HORA") or "21:30").strip().lower()
+    if valor in ("off", "no", "0", "apagado"):
+        return None
+    try:
+        h, m = valor.split(":")
+        return int(h) * 60 + int(m)
+    except ValueError:
+        return 21 * 60 + 30
+
+
+def horas_turno_abierto() -> float:
+    """Horas con la Apertura sin Cierre desde las que se avisa (ALERTA_TURNO_ABIERTO_HORAS; 9, igual
+    que el Dashboard)."""
+    try:
+        return float(sh._secreto("alerta_turno_abierto_horas", "ALERTA_TURNO_ABIERTO_HORAS") or 9)
+    except ValueError:
+        return 9.0
+
+
+class Programador:
+    """Revisa cada vuelta del bot si toca mandar el resumen de la noche o avisar de un turno sin
+    cerrar. Lo ya enviado se guarda en la hoja 'Bot' para que un reinicio no repita avisos."""
+
+    def __init__(self, token: str):
+        self.token = token
+        self.estado: dict | None = None
+        self.proxima_revision_turnos = 0.0
+        self.proximo_intento_resumen = 0.0
+
+    def _cargar(self) -> None:
+        try:
+            self.estado = sh.leer_estado_bot()
+        except Exception as e:
+            log(f"no se pudo leer el estado del bot ({type(e).__name__}); se reintenta")
+            self.estado = None
+
+    def tick(self, ahora=None) -> None:
+        if not sh.telegram_chat_ids():
+            return
+        if self.estado is None:
+            self._cargar()
+            if self.estado is None:
+                return
+        ahora = ahora or sh.ahora_local().replace(tzinfo=None)
+        self._resumen(ahora)
+        self._turnos(ahora)
+
+    def _resumen(self, ahora) -> None:
+        minutos = hora_resumen()
+        hoy = ahora.date().isoformat()
+        if minutos is None or ahora.hour * 60 + ahora.minute < minutos:
+            return
+        if hoy in self.estado.get("ultimo_resumen", []) or time.time() < self.proximo_intento_resumen:
+            return
+        try:
+            enviar_a_todos(self.token, generar_respuesta("resumen", ""))
+            sh.guardar_estado_bot("ultimo_resumen", hoy, unico=True)
+            self.estado["ultimo_resumen"] = [hoy]
+            log("resumen del día enviado")
+        except Exception as e:
+            log(f"resumen del día: {type(e).__name__}: {e}")
+            self.proximo_intento_resumen = time.time() + 600
+
+    def _turnos(self, ahora) -> None:
+        if time.time() < self.proxima_revision_turnos:
+            return
+        self.proxima_revision_turnos = time.time() + REVISION_TURNOS_CADA
+        try:
+            avisados = set(self.estado.get("turno_avisado", []))
+            registros = _fresco(sh.get_registros_df)
+            for t in rp.turnos_sin_cerrar(registros, ahora, horas_turno_abierto()):
+                if t["id"] in avisados:
+                    continue
+                enviar_a_todos(self.token, rp.texto_turno_sin_cerrar(t))
+                sh.guardar_estado_bot("turno_avisado", t["id"], unico=False)
+                self.estado.setdefault("turno_avisado", []).append(t["id"])
+                log(f"aviso de turno sin cerrar: {t['local']} {t['turno']} {t['fecha']}")
+        except Exception as e:
+            log(f"revisión de turnos: {type(e).__name__}: {e}")
+
+
+# ---------------------------------------------------------------------
 # Bucle principal
 # ---------------------------------------------------------------------
 def main() -> None:
@@ -171,7 +287,12 @@ def main() -> None:
     llamar(token, "setMyCommands", {"commands": json.dumps([{"command": c, "description": d} for c, d in COMANDOS_MENU])})
     log("listo, escuchando comandos")
     offset = None
+    programador = Programador(token)
     while True:
+        try:
+            programador.tick()
+        except Exception as e:
+            log(f"avisos programados: {type(e).__name__}: {e}")
         datos = {"timeout": 30, "allowed_updates": json.dumps(["message", "edited_message"])}
         if offset:
             datos["offset"] = offset

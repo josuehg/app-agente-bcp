@@ -262,3 +262,67 @@ def test_corte_en_el_bot_muestra_si_esta_autorizado():
     txt = rp.reporte_corte(_registros(), "colon", aj)
     assert "Diferencia: -20.00 🔷 Autorizada (ajuste -20.00)" in txt
     assert "Diferencia: -20.00 🔴" in rp.reporte_corte(_registros(), "colon", _ajustes())
+
+
+# ---------------------------------------------------------------------
+# Turnos sin cerrar, ranking de trabajadores y resumen del dia
+# ---------------------------------------------------------------------
+def test_turnos_sin_cerrar_solo_los_que_pasan_el_umbral():
+    reg = pd.DataFrame([
+        _r("a1", "Colon", "2026-10-18", "Mañana", "Apertura", "Ana", "08:00", 3000, 500),       # abierto
+        _r("a2", "Zol A", "2026-10-18", "Mañana", "Apertura", "Luis", "08:00", 3000, 500),
+        _r("c2", "Zol A", "2026-10-18", "Mañana", "Cierre", "Luis", "14:00", 3000, 500, ops=10),  # cerrado
+        _r("a3", "Fer", "2026-10-10", "Tarde", "Apertura", "Pedro", "14:00", 100, 0),             # muy viejo: no cuenta
+    ])
+    ahora = pd.Timestamp("2026-10-18 17:30")
+    [t] = rp.turnos_sin_cerrar(reg, ahora, 9)
+    assert t["id"] == "a1" and t["local"] == "Colon" and round(t["horas"], 1) == 9.5
+    assert rp.turnos_sin_cerrar(reg, pd.Timestamp("2026-10-18 12:00"), 9) == []
+    txt = rp.texto_turno_sin_cerrar(t)
+    assert "Turno sin cerrar" in txt and "Abrió: Ana a las 08:00" in txt and "Lleva 9 h 30 min" in txt
+
+
+def test_rango_periodo():
+    assert rp.rango_periodo("hoy", HOY)[:2] == (HOY, HOY)
+    assert rp.rango_periodo("semana", HOY)[:2] == (dt.date(2026, 10, 12), HOY)
+    assert rp.rango_periodo("mes", HOY)[:2] == (dt.date(2026, 10, 1), HOY)
+    assert rp.rango_periodo("anterior", HOY)[:3] == (dt.date(2026, 9, 1), dt.date(2026, 9, 30), "septiembre 2026")
+
+
+def test_ranking_ordena_por_operaciones_y_atribuye_al_que_abrio():
+    txt = rp.reporte_ranking(_registros(), _config(), _encuestas(), _ajustes(), HOY)
+    assert "Ranking de trabajadores" in txt and "octubre 2026" in txt
+    assert txt.index("🥇 <b>Luis</b>") < txt.index("🥈 <b>Ana</b>") < txt.index("🥉 <b>Pedro</b>")
+    assert "🔢 70 operaciones · 2 turno(s)" in txt          # Luis: 40 (hoy) + 30 (ayer)
+    assert "📈 35 por turno" in txt
+    assert "🔢 62 operaciones · 1 turno(s)" in txt          # Ana: su corte de la mañana
+    assert "🎯 Meta cumplida: 1 de 1 turno(s)" in txt       # Ana hizo 62 con meta de 60
+    assert "⭐ Encuestas: 2" in txt                          # Ana
+    assert "Diferencias sin autorizar: -20.00" in txt        # el corte de Ana (-20)
+
+
+def test_ranking_no_cuenta_la_diferencia_ya_autorizada():
+    aj = _ajustes(("x1", "Colon-H0715", dt.date(2026, 10, 18), -20.0, "Mañana", ""))
+    assert "Diferencias sin autorizar" not in rp.reporte_ranking(_registros(), _config(), _encuestas(), aj, HOY, "mes", "colon")
+
+
+def test_ranking_filtros_y_periodos_vacios():
+    colon = rp.reporte_ranking(_registros(), _config(), _encuestas(), _ajustes(), HOY, "mes", "colon")
+    assert "Luis" not in colon and "Ana" in colon
+    assert "No hay registros en ese período" in rp.reporte_ranking(_registros(), _config(), _encuestas(), _ajustes(), HOY, "anterior")
+    assert "No encontré" in rp.reporte_ranking(_registros(), _config(), _encuestas(), _ajustes(), HOY, "mes", "xyz")
+    hoy_solo = rp.reporte_ranking(_registros(), _config(), _encuestas(), _ajustes(), HOY, "hoy")
+    assert "🔢 40 operaciones" in hoy_solo and "🔢 70" not in hoy_solo   # Luis solo con lo de hoy
+
+
+def test_resumen_diario_junta_todas_las_secciones():
+    sol = pd.DataFrame([{"id": "1", "timestamp": pd.Timestamp("2026-10-18 09:00"), "local": "Colon", "tipo": "Falta saldo",
+                         "monto": 500.0, "urgente": "", "solicitado_por": "Ana", "nota": "", "estado": "Solicitada"}])
+    txt = rp.resumen_diario(_registros(), _config(), _encuestas(), _ajustes(), sol, HOY, pd.Timestamp("2026-10-18 22:00"))
+    assert "Resumen del día</b> — domingo 18/10" in txt
+    for seccion in ("Operaciones", "Fondo actual", "Diferencias", "Turnos todavía abiertos", "solicitud(es) pendiente(s)"):
+        assert seccion in txt, seccion
+    assert "Colon-H0715 · Tarde · 18/10" in txt   # el turno Tarde de Colon sigue abierto
+    todo_cerrado = _registros()[lambda d: d["local"] == "Zol A-H3582"]
+    cerrado = rp.resumen_diario(todo_cerrado, _config(), _encuestas().iloc[0:0], _ajustes(), sol.iloc[0:0], HOY, pd.Timestamp("2026-10-18 22:00"))
+    assert "Todos los turnos están cerrados" in cerrado and "Hoy no se registraron encuestas" in cerrado
