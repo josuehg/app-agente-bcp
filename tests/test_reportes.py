@@ -440,3 +440,34 @@ def test_reporte_liquidacion_un_dato_por_linea_y_filtros():
     assert "<b>Luis</b>" in solo_zol and "<b>Ana</b>" not in solo_zol
     assert "No encontré a nadie" in rp.reporte_liquidacion(_registros(), _config(), _encuestas(), _notas(), _ajustes(), _personal(), HOY, "mes", "zzz")
     assert "Todavía no hay registros" in rp.reporte_liquidacion(pd.DataFrame(), _config(), _encuestas(), _notas(), _ajustes(), _personal(), HOY)
+
+
+def test_liquidacion_final_del_mes_anterior_lista_lo_que_sigue_sin_autorizar():
+    hoy = dt.date(2026, 11, 3)
+    txt = rp.reporte_liquidacion(_registros(), _config(), _encuestas(), _notas(), _ajustes(), _personal(), hoy, "anterior")
+    assert "Liquidación FINAL por trabajador</b> — octubre 2026" in txt and "(01/10 al 31/10)" in txt
+    assert "Liquidación definitiva del mes" in txt
+    assert "Diferencias que siguen sin autorizar (2)" in txt
+    assert "• 17/10 · Zol A-H3582 · Entrega de caja · Luis: +1,100.00" in txt
+    assert "• 18/10 · Colon-H0715 · Corte · Ana: -20.00" in txt
+    assert txt.index("Diferencias que siguen sin autorizar") < txt.index("🧾 <b>Ana</b>")   # primero lo pendiente
+    # el mes en curso no es "FINAL" ni lista pendientes
+    mes = rp.reporte_liquidacion(_registros(), _config(), _encuestas(), _notas(), _ajustes(), _personal(), HOY)
+    assert "FINAL" not in mes and "siguen sin autorizar" not in mes
+
+
+def test_liquidacion_final_sin_pendientes_cuando_todo_esta_autorizado():
+    aj = _ajustes(
+        ("x1", "Colon-H0715", dt.date(2026, 10, 18), -20.0, "Mañana", ""),
+        ("x2", "Zol A-H3582", dt.date(2026, 10, 17), 1100.0, "", "c4"),
+    )
+    txt = rp.reporte_liquidacion(_registros(), _config(), _encuestas(), _notas(), aj, _personal(), dt.date(2026, 11, 3), "anterior")
+    assert "No quedan diferencias sin autorizar" in txt and "siguen sin autorizar" not in txt
+
+
+def test_liquidacion_final_de_un_trabajador_o_local_filtra_los_pendientes():
+    hoy = dt.date(2026, 11, 3)
+    ana = rp.reporte_liquidacion(_registros(), _config(), _encuestas(), _notas(), _ajustes(), _personal(), hoy, "anterior", "ana")
+    assert "sin autorizar (1)" in ana and "Luis" not in ana
+    zol = rp.reporte_liquidacion(_registros(), _config(), _encuestas(), _notas(), _ajustes(), _personal(), hoy, "anterior", "zol")
+    assert "sin autorizar (1)" in zol and "Colon" not in zol.split("🧾")[0]

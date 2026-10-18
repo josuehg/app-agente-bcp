@@ -17,6 +17,7 @@ TELEGRAM_CHAT_ID definidos y el secrets.toml de siempre).
 from __future__ import annotations
 
 import calendar
+import datetime as dt
 import json
 import logging
 import re
@@ -244,6 +245,28 @@ def dia_liquidacion() -> int | None:
         return 31
 
 
+def dia_liquidacion_final() -> int | None:
+    """Dia del mes en que se manda la liquidacion DEFINITIVA del mes anterior (LIQUIDACION_FINAL_DIA;
+    3 por defecto; 'off' la apaga)."""
+    valor = (sh._secreto("liquidacion_final_dia", "LIQUIDACION_FINAL_DIA") or "3").strip().lower()
+    if valor in ("off", "no", "0", "apagado"):
+        return None
+    try:
+        return min(max(int(valor), 1), 28)
+    except ValueError:
+        return 3
+
+
+def hora_liquidacion_final() -> int:
+    """Minutos desde medianoche (LIQUIDACION_FINAL_HORA, 'HH:MM'; 10:00 por defecto)."""
+    valor = (sh._secreto("liquidacion_final_hora", "LIQUIDACION_FINAL_HORA") or "10:00").strip()
+    try:
+        h, m = valor.split(":")
+        return int(h) * 60 + int(m)
+    except ValueError:
+        return 10 * 60
+
+
 def hora_liquidacion() -> int:
     """Minutos desde medianoche (LIQUIDACION_HORA, 'HH:MM'; 21:30 por defecto)."""
     valor = (sh._secreto("liquidacion_hora", "LIQUIDACION_HORA") or "21:30").strip()
@@ -273,6 +296,7 @@ class Programador:
         self.proxima_revision_turnos = 0.0
         self.proximo_intento_resumen = 0.0
         self.proximo_intento_liquidacion = 0.0
+        self.proximo_intento_final = 0.0
 
     def _cargar(self) -> None:
         try:
@@ -291,6 +315,7 @@ class Programador:
         ahora = ahora or sh.ahora_local().replace(tzinfo=None)
         self._resumen(ahora)
         self._liquidacion(ahora)
+        self._liquidacion_final(ahora)
         self._turnos(ahora)
 
     def _resumen(self, ahora) -> None:
@@ -329,6 +354,33 @@ class Programador:
         except Exception as e:
             log(f"liquidación del mes: {type(e).__name__}: {e}")
             self.proximo_intento_liquidacion = time.time() + 600
+
+    def _liquidacion_final(self, ahora) -> None:
+        """La liquidacion DEFINITIVA del mes que acaba de cerrar (el dia 3 a las 10:00), ya con las
+        diferencias revisadas y autorizadas, y la lista de lo que sigue sin autorizar. Si el bot estaba
+        apagado, sale al volver, hasta 7 dias despues; luego ya no (seria una sorpresa tardia)."""
+        dia = dia_liquidacion_final()
+        if dia is None or ahora.day < dia or ahora.day > dia + 7:
+            return
+        if ahora.day == dia and ahora.hour * 60 + ahora.minute < hora_liquidacion_final():
+            return
+        anterior = ahora.replace(day=1) - dt.timedelta(days=1)
+        mes = anterior.strftime("%Y-%m")
+        if mes in self.estado.get("ultima_liquidacion_final", []) or time.time() < self.proximo_intento_final:
+            return
+        try:
+            registros = _fresco(sh.get_registros_df)
+            hay_datos = not registros.empty and bool(
+                ((registros["fecha"] >= anterior.replace(day=1).date()) & (registros["fecha"] <= anterior.date())).any()
+            )
+            if hay_datos:
+                enviar_a_todos(self.token, generar_respuesta("liquidacion", "anterior"))
+                log("liquidación final del mes enviada")
+            sh.guardar_estado_bot("ultima_liquidacion_final", mes, unico=True)
+            self.estado["ultima_liquidacion_final"] = [mes]
+        except Exception as e:
+            log(f"liquidación final: {type(e).__name__}: {e}")
+            self.proximo_intento_final = time.time() + 600
 
     def _turnos(self, ahora) -> None:
         if time.time() < self.proxima_revision_turnos:

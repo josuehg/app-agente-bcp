@@ -66,7 +66,8 @@ AYUDA = (
     "/sucursales\n"
     "   🏪 Balance por sucursal: faltantes, sobrantes, lo autorizado y el descuento según la política\n"
     "/liquidacion\n"
-    "   🧾 Liquidación de cada trabajador: faltantes, a descontar, incentivos, operaciones y metas\n"
+    "   🧾 Liquidación de cada trabajador: faltantes, a descontar, incentivos, operaciones y metas "
+    "(con <code>anterior</code>: la definitiva del mes pasado, con lo que sigue sin autorizar)\n"
     "/diferencias\n"
     "   🔎 Diferencias de más de S/ {umbral:g} que todavía NO están autorizadas (últimos 7 días)\n"
     "/solicitudes\n"
@@ -94,7 +95,7 @@ AYUDA = (
     "   <code>/ranking anterior colon</code>\n"
     "\n"
     "🔔 Además te aviso solo: diferencias grandes, pedidos nuevos, turnos sin cerrar, un resumen cada noche "
-    "y la liquidación de todos los trabajadores el último día de cada mes.\n"
+    "la liquidación de todos los trabajadores el último día de cada mes y la definitiva el día 3.\n"
     "🆔 /id — tu número de chat"
 )
 
@@ -861,7 +862,10 @@ def tabla_liquidacion(registros, config, encuestas, notas, ajustes, personal, de
 def reporte_liquidacion(registros, config, encuestas, notas, ajustes, personal, hoy: date,
                         periodo: str = "mes", filtro: str = "") -> str:
     desde, hasta, etiqueta = rango_periodo(periodo, hoy)
-    titulo = f"🧾 <b>Liquidación por trabajador</b> — {etiqueta}\n({_dm(desde)} al {_dm(hasta)})"
+    final = periodo == "anterior"  # el mes ya cerrado: la liquidacion definitiva
+    titulo = (
+        f"🧾 <b>Liquidación {'FINAL ' if final else ''}por trabajador</b> — {etiqueta}\n({_dm(desde)} al {_dm(hasta)})"
+    )
     if registros is None or registros.empty:
         return f"{titulo}\n\nTodavía no hay registros."
     todos = sorted(registros["local"].unique())
@@ -877,7 +881,9 @@ def reporte_liquidacion(registros, config, encuestas, notas, ajustes, personal, 
     if tabla.empty:
         return f"{titulo}\n\nNo hay trabajadores con datos en ese período."
 
-    nota = "ℹ️ Es una ayuda para revisar, no un descuento automático: antes de descontar, revisa cada ítem (puede ser un error al registrar)."
+    nota = (
+        "ℹ️ Liquidación definitiva del mes, con lo autorizado hasta hoy. " if final else "ℹ️ "
+    ) + "Es una ayuda para revisar, no un descuento automático: antes de descontar, revisa cada ítem (puede ser un error al registrar)."
     resumen = (
         f"👥 Trabajadores: {len(tabla)}\n"
         f"💸 A descontar en total: {soles(tabla['A descontar (S/)'].sum())}\n"
@@ -903,4 +909,25 @@ def reporte_liquidacion(registros, config, encuestas, notas, ajustes, personal, 
         if r["Turnos con meta"]:
             lineas.append(f"🎯 Meta cumplida: {r['Meta cumplida']} de {r['Turnos con meta']} turnos")
         bloques.append("\n".join(lineas))
-    return f"{titulo}\n{nota}\n\n{resumen}\n\n———————\n\n" + "\n\n".join(bloques)
+    pendientes = ""
+    if final:  # lo que todavia no se autorizo: cuenta tal cual en la liquidacion
+        items = _base_periodo(registros, ajustes, desde, hasta, locales)["items"]
+        if persona_filtro and not items.empty:
+            items = items[items["persona"].map(_clave).str.contains(_clave(persona_filtro), regex=False)]
+        if items.empty:
+            pendientes = "✅ <b>No quedan diferencias sin autorizar.</b>\n\n———————\n\n"
+        else:
+            items = items.sort_values(["fecha", "local"])
+            lineas = [
+                f"⚠️ <b>Diferencias que siguen sin autorizar ({len(items)})</b>",
+                "(si no se autorizan, cuentan tal cual en la liquidación)",
+            ]
+            for _, it in items.head(25).iterrows():
+                lineas.append(
+                    f"• {_dm(it['fecha'])} · {esc(it['local'])} · {esc(it['tipo'])} · {esc(it['persona'])}: "
+                    f"{_con_signo(it['diferencia'])}"
+                )
+            if len(items) > 25:
+                lineas.append(f"… y {len(items) - 25} más (revísalas en el Dashboard → Cuadre).")
+            pendientes = "\n".join(lineas) + "\n\n———————\n\n"
+    return f"{titulo}\n{nota}\n\n{resumen}\n\n———————\n\n{pendientes}" + "\n\n".join(bloques)
