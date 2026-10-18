@@ -1,7 +1,4 @@
-"""
-Pruebas de reportes.py (lo que responde el bot de Telegram a cada comando) y de la parte del
-bot que decide a quien le responde. No necesitan credenciales ni conexion.
-"""
+"""\nPruebas de reportes.py (lo que responde el bot de Telegram a cada comando) y de la parte del\nbot que decide a quien le responde. No necesitan credenciales ni conexion.\n"""
 
 import datetime as dt
 
@@ -59,7 +56,7 @@ def test_partir_mensaje_respeta_el_limite():
 
 def test_fondo_muestra_efectivo_tarjeta_total_y_marca_el_que_esta_bajo():
     txt = rp.reporte_fondo(_registros(), _config(), HOY)
-    assert "Efectivo S/ 2,900.00 · Tarjeta S/ 580.00 · Total S/ 3,480.00" in txt
+    assert "💵 Efectivo: S/ 2,900.00\n💳 Tarjeta: S/ 580.00\n💰 Total: S/ 3,480.00" in txt  # un monto por linea
     assert "BAJO EL MÍNIMO" in txt
     # el bajo va primero y el total junta los dos locales
     assert txt.index("Colon-H0715") < txt.index("Zol A-H3582")
@@ -71,10 +68,10 @@ def test_fondo_muestra_efectivo_tarjeta_total_y_marca_el_que_esta_bajo():
 def test_corte_ultimo_cerrado_con_operaciones_y_diferencia():
     txt = rp.reporte_corte(_registros(), "colon")
     assert "Mañana, 18/10" in txt
-    assert "Apertura: Efectivo S/ 3,000.00 · Tarjeta S/ 500.00 · Total S/ 3,500.00" in txt
-    assert "Cierre: Efectivo S/ 2,900.00 · Tarjeta S/ 580.00 · Total S/ 3,480.00" in txt
+    assert "🔓 <b>Apertura</b> 08:00\n💵 Efectivo: S/ 3,000.00\n💳 Tarjeta: S/ 500.00\n💰 Total: S/ 3,500.00" in txt
+    assert "🔒 <b>Cierre</b> 14:00\n💵 Efectivo: S/ 2,900.00\n💳 Tarjeta: S/ 580.00\n💰 Total: S/ 3,480.00" in txt
     assert "Diferencia: -20.00 🔴" in txt
-    assert "Operaciones de este cierre: 62" in txt
+    assert "Operaciones: 62" in txt
     assert "faltaron 20" in txt
     assert "turno Tarde abierto por Pedro desde 14:30" in txt  # lo que esta en curso ahora
 
@@ -113,26 +110,25 @@ def _notas():
 def test_encuestas_del_mes_por_local_con_nota_nps():
     txt = rp.reporte_encuestas(_encuestas(), _notas(), HOY)
     assert "octubre 2026" in txt
-    assert "Colon-H0715</b> — 3 encuesta(s) · S/ 30.00" in txt
-    assert "Pagadas 1 (S/ 10.00) · Por pagar 2 (S/ 20.00)" in txt
+    assert "Colon-H0715</b>\n📋 Encuestas: 3 (S/ 30.00)\n✅ Pagadas: 1 (S/ 10.00)\n💸 Por pagar: 2 (S/ 20.00)" in txt
     assert "NPS final 60 ✅ aprobada" in txt
     assert "NPS: avance 40" in txt and "por debajo" in txt
-    assert "<b>Total:</b> 4 encuesta(s)" in txt
+    assert "📋 Encuestas: 4 (S/ 40.00)" in txt and "💸 Por pagar: S/ 20.00" in txt
 
 
 def test_encuestas_con_local_lista_las_ultimas_y_sin_datos():
     txt = rp.reporte_encuestas(_encuestas(), _notas(), HOY, "colon")
-    assert "Últimas:" in txt and "Ana" in txt and "Zol A" not in txt
+    assert "Últimas encuestas:" in txt and "Ana" in txt and "Zol A" not in txt
     assert "Todavía no hay encuestas" in rp.reporte_encuestas(pd.DataFrame(), _notas(), HOY)
 
 
 def test_operaciones_hoy_mes_y_meta():
     txt = rp.reporte_operaciones(_registros(), _config(), HOY)
-    assert "Mañana 62/60 ✅" in txt          # Colon cumplio la meta de la mañana
-    assert "Tarde en curso (meta 40)" in txt  # y la tarde sigue abierta
-    assert "Hoy: 62" in txt and "Hoy: 40" in txt
+    assert "🌅 Mañana: 62/60 ✅" in txt          # Colon cumplio la meta de la mañana
+    assert "🌇 Tarde: en curso (meta 40)" in txt  # y la tarde sigue abierta
+    assert "📅 Hoy: 62" in txt and "📅 Hoy: 40" in txt
     assert "Mes: 62 en 1 turno(s)" in txt and "Mes: 70 en 2 turno(s)" in txt  # Colon; Zol A (hoy 40 + ayer 30)
-    assert "<b>Total:</b> hoy 102 · mes 132" in txt
+    assert "📅 Hoy: 102\n🗓 Mes: 132" in txt
 
 
 def test_solicitudes_pendientes_y_vacio():
@@ -143,7 +139,8 @@ def test_solicitudes_pendientes_y_vacio():
          "monto": 100.0, "urgente": "", "solicitado_por": "Luis", "nota": "", "estado": "Completada"},
     ])
     txt = rp.reporte_solicitudes(s, pd.Timestamp("2026-10-18 09:12"))
-    assert "1 solicitud(es) pendiente(s)" in txt and "URGENTE" in txt and "hace 12 min" in txt and "Zol A" not in txt
+    assert "1 solicitud(es) pendiente(s)" in txt and "URGENTE" in txt and "Hace 12 min" in txt and "Zol A" not in txt
+    assert "💰 Monto: S/ 500.00" in txt and "👤 Pidió: Ana" in txt
     assert "No hay solicitudes pendientes" in rp.reporte_solicitudes(s.iloc[1:], pd.Timestamp("2026-10-18 09:12"))
 
 
@@ -155,8 +152,9 @@ def test_diferencias_corte_y_entre_cierres():
         _r("c2", "Colon", "2026-10-18", "Mañana", "Cierre", "Ana", "14:00", 2903, 500, ops=40),     # +3 (no avisa)
     ])
     txt = rp.reporte_diferencias(reg, HOY, 7, 6)
-    assert "🔴 17/10" in txt and "-20.00" in txt
-    assert "🟠 18/10" in txt and "-80.00" in txt and "Pedro → Ana" in txt
+    assert "🔴 <b>Colon</b> · 17/10" in txt and "Diferencia: -20.00" in txt
+    assert "🟠 <b>Colon</b> · 18/10" in txt and "Diferencia: -80.00" in txt
+    assert "Cerró: Pedro" in txt and "Abrió: Ana" in txt
     assert "+3.00" not in txt and "Total: 2" in txt
     assert "No hay diferencias" in rp.reporte_diferencias(reg, HOY, 7, 100)
     assert "-20.00" not in rp.reporte_diferencias(reg, HOY, 1, 6)  # solo hoy

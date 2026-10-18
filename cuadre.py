@@ -1048,28 +1048,33 @@ def _dia(fecha) -> str:
 
 
 def texto_alerta_diferencia(a: dict, enlace: str = "") -> str:
-    """Mensaje de Telegram para una alerta de alertas_de_registro()."""
+    """Mensaje de Telegram para una alerta de alertas_de_registro(): un dato por linea."""
     dif = a["diferencia"]
     cuanto = f"{'Faltante' if dif < 0 else 'Sobrante'} S/ {abs(dif):,.2f}"
     if a["clase"] == "corte":
         lineas = [
-            f"🔴 Diferencia en el CIERRE — {a['local']} ({a['turno']}, {_dia(a['fecha'])})",
+            "🔴 Diferencia en el CIERRE",
+            f"🏪 {a['local']} · {a['turno']} · {_dia(a['fecha'])}",
             f"💸 {cuanto}",
-            f"👤 Responsable (abrió): {a['responsable'] or '—'} · cerró: {a['nombre_cierre'] or '—'}",
-            f"Apertura {a['hora_apertura']} S/ {a['apertura']:,.2f} → Cierre {a['hora_cierre']} S/ {a['cierre']:,.2f}",
+            f"👤 Responsable (abrió): {a['responsable'] or '—'}",
+            f"👤 Cerró: {a['nombre_cierre'] or '—'}",
+            f"🔓 Apertura {a['hora_apertura']}: S/ {a['apertura']:,.2f}",
+            f"🔒 Cierre {a['hora_cierre']}: S/ {a['cierre']:,.2f}",
         ]
     else:
         lineas = [
-            f"🟠 Diferencia ENTRE CIERRE Y APERTURA — {a['local']}",
+            "🟠 Diferencia ENTRE CIERRE Y APERTURA",
+            f"🏪 {a['local']}",
             f"💸 {cuanto}",
-            f"Cerró {a['nombre_cierre'] or '—'} ({a['turno_cierre']}, {_dia(a['fecha_cierre'])} {a['hora_cierre']}): "
+            f"🔒 Cerró {a['nombre_cierre'] or '—'} ({a['turno_cierre']}, {_dia(a['fecha_cierre'])} {a['hora_cierre']}): "
             f"S/ {a['cierre']:,.2f}",
-            f"Abrió {a['nombre_apertura'] or '—'} ({a['turno_apertura']}, {_dia(a['fecha_apertura'])} {a['hora_apertura']}): "
+            f"🔓 Abrió {a['nombre_apertura'] or '—'} ({a['turno_apertura']}, {_dia(a['fecha_apertura'])} {a['hora_apertura']}): "
             f"S/ {a['apertura']:,.2f}",
-            "Si fue un retiro o ingreso autorizado, regístralo en Dashboard → Cuadre.",
+            "ℹ️ Si fue un retiro o ingreso autorizado, regístralo en Dashboard → Cuadre.",
         ]
-    if str(a.get("observaciones", "")).strip():
-        lineas.append(f"📝 {str(a['observaciones']).strip()}")
+    for parte in str(a.get("observaciones", "") or "").strip().split(" | "):
+        if parte.strip():
+            lineas.append(f"📝 {parte.strip()}")
     if enlace:
-        lineas.append(f"Revisar: {enlace}")
+        lineas.append(f"🔗 Revisar: {enlace}")
     return "\n".join(lineas)

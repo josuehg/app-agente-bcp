@@ -126,8 +126,9 @@ def _con_signo(x) -> str:
     return "0.00" if abs(x) < 0.005 else f"{x:+,.2f}"
 
 
-def _fondo(ef, ta, total) -> str:
-    return f"Efectivo {soles(ef)} · Tarjeta {soles(ta)} · Total {soles(total)}"
+def _montos(ef, ta, total) -> list[str]:
+    """Cada monto en su propia linea (se lee mejor en el celular)."""
+    return [f"💵 Efectivo: {soles(ef)}", f"💳 Tarjeta: {soles(ta)}", f"💰 Total: {soles(total)}"]
 
 
 # ---------------------------------------------------------------------
@@ -151,17 +152,18 @@ def reporte_fondo(registros: pd.DataFrame, config: pd.DataFrame, hoy: date, loca
         minimo = minimos.get(local, 0.0)
         bajo = minimo > 0 and total < minimo
         cuando = f"{r['tipo']} {_hhmm(r['timestamp'])}" + ("" if r["fecha"] == hoy else f" del {_dm(r['fecha'])}")
-        texto = (
-            f"{'🔴' if bajo else '✅'} <b>{esc(local)}</b> — {esc(cuando)} ({esc(r['nombre'] or '—')})\n"
-            f"   {_fondo(_num(r['efectivo']), _num(r['tarjeta']), total)}"
-            + (f"\n   Mínimo {soles(minimo)}" + (" ⚠️ BAJO EL MÍNIMO" if bajo else "") if minimo > 0 else "")
-        )
-        filas.append((not bajo, local, texto, total))
-    filas.sort(key=lambda x: (x[0], x[1]))
-    total_todos = sum(f[3] for f in filas)
+        lineas = [
+            f"{'🔴' if bajo else '✅'} <b>{esc(local)}</b>",
+            f"🕒 {esc(cuando)} · {esc(r['nombre'] or '—')}",
+            *_montos(_num(r["efectivo"]), _num(r["tarjeta"]), total),
+        ]
+        if minimo > 0:
+            lineas.append(f"⚠️ Mínimo {soles(minimo)} — BAJO EL MÍNIMO" if bajo else f"✔️ Mínimo {soles(minimo)}")
+        filas.append((not bajo, local, "\n".join(lineas), total))
+    filas.sort(key=lambda x: (x[0], x[1]))  # los que estan bajo el minimo, primero
     cuerpo = "\n\n".join(f[2] for f in filas)
-    pie = f"\n\n<b>Total de {len(filas)} local(es):</b> {soles(total_todos)}" if len(filas) > 1 else ""
-    return f"🏦 <b>Fondo actual</b> (último registro de cada local)\n\n{cuerpo}{pie}"
+    pie = f"\n\n💰 <b>Total de {len(filas)} locales:</b> {soles(sum(f[3] for f in filas))}" if len(filas) > 1 else ""
+    return f"🏦 <b>Fondo actual</b>\n(último registro de cada local)\n\n{cuerpo}{pie}"
 
 
 # ---------------------------------------------------------------------
@@ -188,28 +190,29 @@ def reporte_corte(registros: pd.DataFrame, local_filtro: str = "") -> str:
         ci = por_id.loc[str(c["id_cierre"])]
         ap = por_id.loc[str(c["id_apertura"])] if str(c["id_apertura"]) in por_id.index else None
         dif = c["diferencia"]
-        lineas = [f"✂️ <b>{esc(local)}</b> — {esc(c['turno'])}, {_dm(c['fecha'])}"]
-        lineas.append(
-            f"👤 Abrió {esc(c['nombre'] or '—')} {esc(c['hora_apertura'])} · cerró {esc(c['nombre_cierre'] or '—')} {esc(c['hora_cierre'])}"
-        )
+        lineas = [
+            f"✂️ <b>{esc(local)}</b> — {esc(c['turno'])}, {_dm(c['fecha'])}",
+            f"👤 Abrió: {esc(c['nombre'] or '—')}",
+            f"👤 Cerró: {esc(c['nombre_cierre'] or '—')}",
+        ]
         if ap is not None:
-            lineas.append(f"Apertura: {_fondo(_num(ap['efectivo']), _num(ap['tarjeta']), _num(ap['total']))}")
-        lineas.append(f"Cierre: {_fondo(_num(ci['efectivo']), _num(ci['tarjeta']), _num(ci['total']))}")
+            lineas += ["", f"🔓 <b>Apertura</b> {esc(c['hora_apertura'])}",
+                       *_montos(_num(ap["efectivo"]), _num(ap["tarjeta"]), _num(ap["total"]))]
+        lineas += ["", f"🔒 <b>Cierre</b> {esc(c['hora_cierre'])}",
+                   *_montos(_num(ci["efectivo"]), _num(ci["tarjeta"]), _num(ci["total"])), ""]
         if pd.notna(dif):
             icono = "✅" if abs(float(dif)) <= UMBRAL_VERDE else "🔴"
-            lineas.append(f"Diferencia: {_con_signo(dif)} {icono}")
-        lineas.append(f"Operaciones de este cierre: {int(_num(ci['num_operaciones']))}")
+            lineas.append(f"📊 Diferencia: {_con_signo(dif)} {icono}")
+        lineas.append(f"🔢 Operaciones: {int(_num(ci['num_operaciones']))}")
         obs = str(c.get("observaciones", "") or "").strip()
-        if obs:
-            lineas.append(f"📝 {esc(obs)}")
+        for parte in (obs.split(" | ") if obs else []):  # Apertura y Cierre, cada una en su linea
+            lineas.append(f"📝 {esc(parte)}")
         ultimo = sub.sort_values("timestamp").iloc[-1]
         if str(ultimo["tipo"]).strip() == "Apertura":
-            lineas.append(
-                f"⏳ Ahora: turno {esc(ultimo['turno'])} abierto por {esc(ultimo['nombre'] or '—')} desde "
-                f"{_hhmm(ultimo['timestamp'])} ({soles(_num(ultimo['total']))})"
-            )
+            lineas += ["", f"⏳ Ahora: turno {esc(ultimo['turno'])} abierto por {esc(ultimo['nombre'] or '—')} desde "
+                           f"{_hhmm(ultimo['timestamp'])} ({soles(_num(ultimo['total']))})"]
         bloques.append("\n".join(lineas))
-    return "\n\n".join(bloques)
+    return "\n\n———————\n\n".join(bloques)
 
 
 # ---------------------------------------------------------------------
@@ -236,28 +239,31 @@ def reporte_encuestas(encuestas: pd.DataFrame, notas: pd.DataFrame, hoy: date, l
         no_abona = e[e["estado_visible"] == ESTADO_NO_SE_ABONA]
         vigente, _ultimo_final = nota_vigente(notas, local)
         if vigente is None:
-            nps = "NPS: sin nota cargada"
+            nps = "⭐ NPS: sin nota cargada"
         else:
             nota = float(vigente["nota"])
             if str(vigente.get("tipo", "")).strip().lower() == "parcial":
-                nps = f"NPS: avance {nota:g}" + (f" al {esc(vigente['fecha_corte'])}" if str(vigente.get("fecha_corte", "")).strip() else "")
+                nps = f"⭐ NPS: avance {nota:g}" + (f" al {esc(vigente['fecha_corte'])}" if str(vigente.get("fecha_corte", "")).strip() else "")
                 nps += " ✅ en camino" if estado_parcial(nota) == "En camino" else " ⚠️ por debajo"
             else:
-                nps = f"NPS final {nota:g} " + ("✅ aprobada" if estado_nota(nota) == "Aprobado" else "🔴 no aprobada")
+                nps = f"⭐ NPS final {nota:g} " + ("✅ aprobada" if estado_nota(nota) == "Aprobado" else "🔴 no aprobada")
         lineas = [
-            f"<b>{esc(local)}</b> — {len(e)} encuesta(s) · {soles(e['incentivo'].sum())}",
-            f"   Pagadas {len(pagadas)} ({soles(pagadas['incentivo'].sum())}) · Por pagar {len(por_pagar)} "
-            f"({soles(por_pagar['incentivo'].sum())})",
+            f"🏪 <b>{esc(local)}</b>",
+            f"📋 Encuestas: {len(e)} ({soles(e['incentivo'].sum())})",
+            f"✅ Pagadas: {len(pagadas)} ({soles(pagadas['incentivo'].sum())})",
+            f"💸 Por pagar: {len(por_pagar)} ({soles(por_pagar['incentivo'].sum())})",
         ]
-        if len(espera) or len(no_abona):
-            lineas.append(f"   En espera de la nota {len(espera)} · No se abona {len(no_abona)}")
-        lineas.append(f"   {nps}")
+        if len(espera):
+            lineas.append(f"⏳ En espera de la nota: {len(espera)} ({soles(espera['incentivo'].sum())})")
+        if len(no_abona):
+            lineas.append(f"🚫 No se abona: {len(no_abona)}")
+        lineas.append(nps)
         if local_filtro.strip() and not e.empty:  # con un local: las ultimas encuestas
-            lineas.append("   <i>Últimas:</i>")
+            lineas += ["", "<i>Últimas encuestas:</i>"]
             for _, r in e.sort_values("timestamp", ascending=False).head(10).iterrows():
+                lineas.append(f"• {_dm(r['fecha'])} · {esc(r['nombre'])} · nota {int(_num(r['nota']))}")
                 lineas.append(
-                    f"   • {_dm(r['fecha'])} {esc(r['nombre'])} · nota {int(_num(r['nota']))} · "
-                    f"{esc(r['estado_visible'])}" + (f" · {esc(r['medio_pago'])}" if str(r["medio_pago"]).strip() else "")
+                    f"   {esc(r['estado_visible'])}" + (f" · {esc(r['medio_pago'])}" if str(r["medio_pago"]).strip() else "")
                 )
         bloques.append("\n".join(lineas))
         tot_n += len(e)
@@ -265,7 +271,9 @@ def reporte_encuestas(encuestas: pd.DataFrame, notas: pd.DataFrame, hoy: date, l
         tot_por_pagar += float(por_pagar["incentivo"].sum())
     pie = ""
     if len(elegidos) > 1:
-        pie = f"\n\n<b>Total:</b> {tot_n} encuesta(s) · {soles(tot_monto)} · por pagar {soles(tot_por_pagar)}"
+        pie = (
+            f"\n\n📊 <b>Total</b>\n📋 Encuestas: {tot_n} ({soles(tot_monto)})\n💸 Por pagar: {soles(tot_por_pagar)}"
+        )
     return f"{titulo}\n\n" + "\n\n".join(bloques) + pie
 
 
@@ -290,28 +298,29 @@ def reporte_operaciones(registros: pd.DataFrame, config: pd.DataFrame, hoy: date
         o = ops[ops["local"] == local]
         hoy_l = o[o["fecha"] == hoy]
         mes_l = o[(o["fecha"] >= inicio_mes) & (o["fecha"] <= hoy)]
-        partes = []
-        for turno in ("Mañana", "Tarde"):
+        turnos = []
+        for turno, icono in (("Mañana", "🌅"), ("Tarde", "🌇")):
             meta = metas.get(local, {}).get(turno, 0)
             fila = hoy_l[hoy_l["turno"] == turno]
             if not fila.empty:
                 n = int(fila["operaciones"].iloc[0])
                 if meta:
-                    partes.append(f"{turno} {n}/{meta} " + ("✅" if n >= meta else f"(faltaron {meta - n})"))
+                    estado = f"{n}/{meta} " + ("✅" if n >= meta else f"(faltaron {meta - n})")
                 else:
-                    partes.append(f"{turno} {n}")
+                    estado = f"{n}"
             else:
                 abierto = registros[(registros["local"] == local) & (registros["fecha"] == hoy) & (registros["turno"] == turno)]
-                partes.append(f"{turno} " + ("en curso" if not abierto.empty else "—") + (f" (meta {meta})" if meta else ""))
+                estado = ("en curso" if not abierto.empty else "—") + (f" (meta {meta})" if meta else "")
+            turnos.append(f"   {icono} {turno}: {estado}")
         n_hoy = int(hoy_l["operaciones"].sum())
         n_mes = int(mes_l["operaciones"].sum())
         prom = f" · promedio {n_mes / len(mes_l):.0f} por turno" if len(mes_l) else ""
         bloques.append(
-            f"<b>{esc(local)}</b>\n   Hoy: {n_hoy} ({' · '.join(partes)})\n   Mes: {n_mes:,} en {len(mes_l)} turno(s){prom}"
+            "\n".join([f"🏪 <b>{esc(local)}</b>", f"📅 Hoy: {n_hoy}", *turnos, f"🗓 Mes: {n_mes:,} en {len(mes_l)} turno(s){prom}"])
         )
         tot_hoy += n_hoy
         tot_mes += n_mes
-    pie = f"\n\n<b>Total:</b> hoy {tot_hoy:,} · mes {tot_mes:,}" if len(elegidos) > 1 else ""
+    pie = f"\n\n📊 <b>Total</b>\n📅 Hoy: {tot_hoy:,}\n🗓 Mes: {tot_mes:,}" if len(elegidos) > 1 else ""
     return f"{titulo}\n(solo turnos ya cerrados)\n\n" + "\n\n".join(bloques) + pie
 
 
@@ -322,16 +331,21 @@ def reporte_solicitudes(solicitudes: pd.DataFrame, ahora) -> str:
     activas = solicitudes_activas(solicitudes)
     if activas is None or activas.empty:
         return "📨 No hay solicitudes pendientes. 🎉"
-    lineas = [f"📨 <b>{len(activas)} solicitud(es) pendiente(s)</b>\n"]
+    bloques = []
     for _, s in activas.iterrows():
         urg = " ⚡ URGENTE" if str(s["urgente"]).strip() == "Sí" else ""
-        espera = texto_espera(minutos_entre(s["timestamp"], ahora))
-        lineas.append(
-            f"🔔 <b>{esc(s['local'])}</b> · {esc(s['tipo'])} · {soles(s['monto'])}{urg}\n"
-            f"   Pidió {esc(s['solicitado_por'])} · hace {espera} · {esc(s['estado'])}"
-            + (f"\n   📝 {esc(s['nota'])}" if str(s["nota"]).strip() else "")
-        )
-    return "\n".join(lineas)
+        lineas = [
+            f"🔔 <b>{esc(s['local'])}</b>{urg}",
+            f"📌 {esc(s['tipo'])}",
+            f"💰 Monto: {soles(s['monto'])}",
+            f"👤 Pidió: {esc(s['solicitado_por'])}",
+            f"🕒 Hace {texto_espera(minutos_entre(s['timestamp'], ahora))}",
+            f"🔄 Estado: {esc(s['estado'])}",
+        ]
+        if str(s["nota"]).strip():
+            lineas.append(f"📝 {esc(s['nota'])}")
+        bloques.append("\n".join(lineas))
+    return f"📨 <b>{len(activas)} solicitud(es) pendiente(s)</b>\n\n" + "\n\n".join(bloques)
 
 
 # ---------------------------------------------------------------------
@@ -353,27 +367,29 @@ def reporte_diferencias(registros: pd.DataFrame, hoy: date, dias: int = 7, umbra
     if not cortes.empty:
         for _, c in cortes[cortes["diferencia"].notna()].iterrows():
             if c["fecha"] >= desde and abs(float(c["diferencia"])) > umbral:
-                items.append((c["fecha"], _hhmm_str(c["hora_cierre"]), "🔴",
-                              f"{_dm(c['fecha'])} <b>{esc(c['local'])}</b> {esc(c['turno'])} · corte de {esc(c['nombre'] or '—')}: "
-                              f"{_con_signo(c['diferencia'])}"))
+                items.append((c["fecha"], str(c["hora_cierre"] or ""), "\n".join([
+                    f"🔴 <b>{esc(c['local'])}</b> · {_dm(c['fecha'])} · {esc(c['turno'])}",
+                    "   Corte (Apertura → Cierre)",
+                    f"   👤 {esc(c['nombre'] or '—')}",
+                    f"   📊 Diferencia: {_con_signo(c['diferencia'])}",
+                ])))
     saltos = calcular_saltos(base)
     if not saltos.empty:
         for _, s in saltos[saltos["diferencia"].notna()].iterrows():
             if s["fecha_apertura"] >= desde and abs(float(s["diferencia"])) > umbral:
-                items.append((s["fecha_apertura"], _hhmm_str(s["hora_apertura"]), "🟠",
-                              f"{_dm(s['fecha_apertura'])} <b>{esc(s['local'])}</b> entre cierre y apertura "
-                              f"({esc(s['nombre_cierre'] or '—')} → {esc(s['nombre_apertura'] or '—')}): "
-                              f"{_con_signo(s['diferencia'])}"))
+                items.append((s["fecha_apertura"], str(s["hora_apertura"] or ""), "\n".join([
+                    f"🟠 <b>{esc(s['local'])}</b> · {_dm(s['fecha_apertura'])}",
+                    "   Entre cierre y apertura",
+                    f"   🔒 Cerró: {esc(s['nombre_cierre'] or '—')}",
+                    f"   🔓 Abrió: {esc(s['nombre_apertura'] or '—')}",
+                    f"   📊 Diferencia: {_con_signo(s['diferencia'])}",
+                ])))
     if not items:
         return f"{titulo}\n\n✅ No hay diferencias de ese tamaño."
     items.sort(key=lambda x: (x[0], x[1]), reverse=True)
-    lineas = [f"{icono} {texto}" for _, _, icono, texto in items[:20]]
-    mas = f"\n… y {len(items) - 20} más (míralas en el Dashboard)." if len(items) > 20 else ""
+    cuerpo = "\n\n".join(texto for _, _, texto in items[:20])
+    mas = f"\n\n… y {len(items) - 20} más (míralas en el Dashboard)." if len(items) > 20 else ""
     return (
-        f"{titulo}\n(sin descontar lo ya autorizado en el Dashboard)\n\n" + "\n".join(lineas) + mas
-        + f"\n\n🔴 corte (Apertura→Cierre) · 🟠 entre cierre y apertura. Total: {len(items)}."
+        f"{titulo}\n(sin descontar lo ya autorizado en el Dashboard)\n\n{cuerpo}{mas}"
+        f"\n\n🔴 corte · 🟠 entre cierre y apertura\n📊 Total: {len(items)}"
     )
-
-
-def _hhmm_str(x) -> str:
-    return str(x or "")
