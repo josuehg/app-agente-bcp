@@ -3099,11 +3099,56 @@ with tab_solicitudes:
     st.subheader("📨 Solicitudes de efectivo y saldo")
     if "dash_sol_msg" in st.session_state:
         st.success(st.session_state.pop("dash_sol_msg"))
-    if not sh.telegram_configurado():
+    _tg_listo = sh.telegram_configurado()
+    if not _tg_listo:
         st.warning(
             "⚠️ El aviso por Telegram **no está configurado**: las solicitudes llegan aquí, pero no te "
-            "suena el celular. Agrega las variables `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` en Railway."
+            "suena el celular. Abajo, en «⚙️ Configurar Telegram», están los pasos."
         )
+    with st.expander("⚙️ Configurar Telegram", expanded=not _tg_listo):
+        if not sh.telegram_token_configurado():
+            st.markdown(
+                "**Paso 1.** En Telegram abre **@BotFather**, escribe `/newbot`, elige un nombre y copia el "
+                "*token* que te da.\n\n"
+                "**Paso 2.** En Railway → tu servicio → *Variables*, crea `TELEGRAM_BOT_TOKEN` con ese token "
+                "(el servicio se reinicia solo).\n\n"
+                "Luego vuelve aquí."
+            )
+        elif not _tg_listo:
+            st.markdown(
+                "✅ El token ya está. **Paso 3.** Abre tu bot en Telegram y escríbele cualquier mensaje "
+                "(por ejemplo *hola*). Si quieres que las alertas lleguen a un **grupo**, agrega el bot al "
+                "grupo y escribe algo ahí. Luego aprieta el botón."
+            )
+            if st.button("🔎 Buscar mi chat id", key="tg_buscar"):
+                _chats = sh.telegram_chats_recientes()
+                if not _chats:
+                    st.error(
+                        "No encontré mensajes para el bot. Escríbele otra vez en Telegram (Telegram solo "
+                        "guarda los últimos ~24 h) y vuelve a intentar."
+                    )
+                else:
+                    st.success("Estos chats le escribieron al bot. Copia el **id** del tuyo:")
+                    st.dataframe(
+                        sh.arrow_safe(
+                            pd.DataFrame(_chats).rename(columns={"id": "Chat id", "nombre": "Nombre", "tipo": "Tipo"})
+                        ),
+                        hide_index=True,
+                    )
+                    st.markdown(
+                        "**Paso 4.** En Railway → *Variables*, crea `TELEGRAM_CHAT_ID` con ese id "
+                        "(los grupos llevan un guion al inicio, por ejemplo `-100123…`; cópialo completo)."
+                    )
+        else:
+            st.success("✅ Telegram está configurado.")
+            if st.button("📨 Enviar mensaje de prueba", key="tg_prueba"):
+                if sh.notificar_telegram("✅ Prueba: las alertas de Solicitudes llegan a este chat."):
+                    st.success("Mensaje enviado. Revisa tu Telegram.")
+                else:
+                    st.error(
+                        "Telegram no aceptó el mensaje. Revisa que el token y el chat id sean correctos y que "
+                        "hayas escrito al bot (en un grupo, que el bot esté agregado)."
+                    )
     if solicitudes_df is None:
         st.warning("Google está ocupado y no se pudo leer las solicitudes. Recarga en un momento.")
     else:

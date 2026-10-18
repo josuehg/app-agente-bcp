@@ -20,6 +20,7 @@ CONCEPTOS NUEVOS QUE VAS A VER AQUI:
 from __future__ import annotations
 
 import io
+import json
 import os
 import time
 import urllib.parse
@@ -1516,6 +1517,37 @@ def notificar_telegram(texto: str) -> bool:
             return 200 <= respuesta.status < 300
     except Exception:
         return False
+
+
+def telegram_token_configurado() -> bool:
+    return bool(_secreto("telegram_token", "TELEGRAM_BOT_TOKEN"))
+
+
+def telegram_chats_recientes() -> list[dict]:
+    """Chats que le escribieron al bot (para descubrir el chat id sin armar URLs
+    con el token a mano). Devuelve [{'id', 'nombre', 'tipo'}] o [] si no hay token,
+    nadie le escribio todavia (Telegram solo recuerda ~24 h) o falla la consulta."""
+    token = _secreto("telegram_token", "TELEGRAM_BOT_TOKEN")
+    if not token:
+        return []
+    try:
+        with urllib.request.urlopen(f"https://api.telegram.org/bot{token}/getUpdates", timeout=8) as respuesta:
+            datos = json.loads(respuesta.read().decode("utf-8"))
+    except Exception:
+        return []
+    vistos: dict = {}
+    for upd in datos.get("result", []):
+        for clave in ("message", "edited_message", "channel_post", "my_chat_member"):
+            chat = (upd.get(clave) or {}).get("chat")
+            if chat and chat.get("id") is not None:
+                nombre = (
+                    chat.get("title")
+                    or " ".join(x for x in (chat.get("first_name"), chat.get("last_name")) if x)
+                    or chat.get("username")
+                    or ""
+                )
+                vistos[chat["id"]] = {"id": chat["id"], "nombre": nombre, "tipo": chat.get("type", "")}
+    return list(vistos.values())
 
 
 def _texto_alerta_solicitud(datos: dict) -> str:
