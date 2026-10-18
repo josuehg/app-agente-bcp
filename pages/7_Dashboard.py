@@ -224,7 +224,12 @@ with tab_solicitudes:
                     + (
                         "Revisa que el token de Railway esté completo y sin espacios."
                         if "401" in _diag["error"] or "Unauthorized" in _diag["error"]
-                        else ""
+                        else (
+                            "El bot ya está en marcha y atiende los mensajes, por eso esta búsqueda no puede "
+                            "leerlos: escríbele **/id** al bot en Telegram y te responde tu chat id."
+                            if "409" in _diag["error"]
+                            else ""
+                        )
                     )
                 )
             elif not _chats:
@@ -269,6 +274,7 @@ with tab_solicitudes:
         else:
             _n_chats = len(sh.telegram_chat_ids())
             st.success(f"✅ Telegram está configurado: las alertas se envían a {_n_chats} chat(s).")
+            st.caption("Esos mismos chats pueden escribirle comandos al bot: **/ayuda** muestra todos (fondo, corte, encuestas, operaciones, solicitudes, diferencias).")
             if st.button("📨 Enviar mensaje de prueba", key="tg_prueba"):
                 _llegaron, _fallaron = sh.notificar_telegram_detalle(
                     "✅ Prueba: las alertas del Agente BCP llegan a este chat."

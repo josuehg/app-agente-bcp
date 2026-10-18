@@ -14,6 +14,10 @@ if [ -n "$STREAMLIT_SECRETS" ]; then
     printf '%s' "$STREAMLIT_SECRETS" > .streamlit/secrets.toml
 fi
 
+# Bot de Telegram con comandos (/fondo, /corte, ...): un proceso aparte que escucha a Telegram.
+# Si se cae, se vuelve a levantar solo; si todavia no hay TELEGRAM_BOT_TOKEN, queda en espera.
+( while true; do python bot_telegram.py; sleep 10; done ) &
+
 exec streamlit run Bienvenida.py \
     --server.port="${PORT:-8080}" \
     --server.address=0.0.0.0 \
