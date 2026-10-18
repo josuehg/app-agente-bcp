@@ -26,6 +26,7 @@ from cuadre import (
     calcular_cortes,
     calcular_saltos,
     con_estado_nota,
+    creditos_repuso,
     estado_nota,
     estado_parcial,
     items_ticket,
@@ -36,6 +37,7 @@ from cuadre import (
     politica_sucursal,
     solicitudes_activas,
     texto_espera,
+    totales_ticket,
 )
 
 _MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
@@ -63,6 +65,8 @@ AYUDA = (
     "⚠️ <b>¿Hay algo que revisar?</b>\n"
     "/sucursales\n"
     "   🏪 Balance por sucursal: faltantes, sobrantes, lo autorizado y el descuento según la política\n"
+    "/liquidacion\n"
+    "   🧾 Liquidación de cada trabajador: faltantes, a descontar, incentivos, operaciones y metas\n"
     "/diferencias\n"
     "   🔎 Diferencias de más de S/ {umbral:g} que todavía NO están autorizadas (últimos 7 días)\n"
     "/solicitudes\n"
@@ -80,13 +84,17 @@ AYUDA = (
     "   <code>/diferencias 30</code>\n"
     "• Para incluir también las ya autorizadas:\n"
     "   <code>/diferencias todas</code>\n"
+    "• La liquidación de un trabajador o de un local:\n"
+    "   <code>/liquidacion ana</code>\n"
+    "   <code>/liquidacion anterior colon</code>\n"
     "• Balance de otro período (hoy, semana, mes o anterior):\n"
     "   <code>/sucursales anterior</code>\n"
     "• Ranking de otro período (hoy, semana, mes o anterior):\n"
     "   <code>/ranking semana</code>\n"
     "   <code>/ranking anterior colon</code>\n"
     "\n"
-    "🔔 Además te aviso solo: diferencias grandes, pedidos nuevos, turnos sin cerrar y un resumen cada noche.\n"
+    "🔔 Además te aviso solo: diferencias grandes, pedidos nuevos, turnos sin cerrar, un resumen cada noche "
+    "y la liquidación de todos los trabajadores el día 30.\n"
     "🆔 /id — tu número de chat"
 )
 
@@ -652,27 +660,12 @@ def reporte_sucursales(registros: pd.DataFrame, config: pd.DataFrame, ajustes, h
         return f"No encontré ningún local que se parezca a «{esc(local_filtro)}»."
 
     base = registros[registros["local"].isin(elegidos)]
-    reg = base[(base["fecha"] >= desde) & (base["fecha"] <= hasta)]
-    if reg.empty:
+    if base[(base["fecha"] >= desde) & (base["fecha"] <= hasta)].empty:
         return f"{titulo}\n\nNo hay registros en ese período."
 
     # cortes del rango y entregas (saltos) cuyo Cierre cae en el rango; sin lo ya autorizado
-    cortes, saltos = marcar_autorizados(
-        calcular_cortes(reg, ["local", "fecha", "turno"]), calcular_saltos(base), ajustes
-    )
-    cortes_acum = cortes[~cortes["_autorizado"]] if not cortes.empty else cortes
-    if not saltos.empty:
-        saltos = saltos[(saltos["fecha_cierre"] >= desde) & (saltos["fecha_cierre"] <= hasta)]
-        saltos_acum = saltos[~saltos["_autorizado"]]
-    else:
-        saltos_acum = saltos
-    items = items_ticket(cortes_acum, saltos_acum, True)
-
-    por_id = reg.assign(_id=reg["id"].astype(str)).drop_duplicates("_id", keep="last").set_index("_id")
-    ops_por_local = {}
-    if not cortes.empty:
-        ops = pd.to_numeric(cortes["id_cierre"].astype(str).map(por_id["num_operaciones"]), errors="coerce").fillna(0)
-        ops_por_local = cortes.assign(_ops=ops).groupby("local")["_ops"].sum().to_dict()
+    b = _base_periodo(registros, ajustes, desde, hasta, elegidos)
+    cortes, items, ops_por_local = b["cortes"], b["items"], b["ops_por_local"]
     pol_suc, pol_rep, pol_grandes = politica_sucursal(items, ops_por_local, POL_TASA, POL_PISO, POL_TOPE, POL_GRANDE)
 
     aj = pd.DataFrame()
@@ -750,3 +743,164 @@ def reporte_sucursales(registros: pd.DataFrame, config: pd.DataFrame, ajustes, h
         "el descuento se reparte según lo que le faltó a cada uno."
     )
     return f"{titulo}\n\n" + "\n\n".join(bloques) + pie + detalle + nota
+
+
+# ---------------------------------------------------------------------
+# Base comun de /sucursales y /liquidacion: cortes y entregas del periodo SIN lo autorizado
+# ---------------------------------------------------------------------
+def _base_periodo(registros: pd.DataFrame, ajustes, desde: date, hasta: date, locales) -> dict:
+    base = registros[registros["local"].isin(locales)]
+    reg = base[(base["fecha"] >= desde) & (base["fecha"] <= hasta)]
+    cortes, saltos = marcar_autorizados(
+        calcular_cortes(reg, ["local", "fecha", "turno"]), calcular_saltos(base), ajustes
+    )
+    cortes_acum = cortes[~cortes["_autorizado"]] if not cortes.empty else cortes
+    if not saltos.empty:
+        saltos = saltos[(saltos["fecha_cierre"] >= desde) & (saltos["fecha_cierre"] <= hasta)]
+        saltos_acum = saltos[~saltos["_autorizado"]]
+    else:
+        saltos_acum = saltos
+    por_id = reg.assign(_id=reg["id"].astype(str)).drop_duplicates("_id", keep="last").set_index("_id")
+    ops_cierre = pd.Series(dtype=float)
+    ops_por_local: dict = {}
+    if not cortes.empty:
+        ops_cierre = pd.to_numeric(cortes["id_cierre"].astype(str).map(por_id["num_operaciones"]), errors="coerce").fillna(0)
+        ops_por_local = cortes.assign(_ops=ops_cierre).groupby("local")["_ops"].sum().to_dict()
+    return {
+        "reg": reg, "cortes": cortes, "cortes_acum": cortes_acum, "saltos_acum": saltos_acum,
+        "items": items_ticket(cortes_acum, saltos_acum, True), "ops_cierre": ops_cierre, "ops_por_local": ops_por_local,
+    }
+
+
+# ---------------------------------------------------------------------
+# /liquidacion: lo mismo que la pestaña "🧾 Liquidación" del Dashboard
+# ---------------------------------------------------------------------
+COLUMNAS_LIQUIDACION = [
+    "Persona", "Ítems", "Faltantes (S/)", "Sobrantes (S/)", "Neto (S/)", "A revisar (S/)", "A favor (S/)",
+    "Descuento asignado (S/)", "A descontar (S/)", "Incentivo a pagar (S/)", "Operaciones", "Encuestas llenadas",
+    "Turnos trabajados", "Turnos con meta", "Meta cumplida", "Local",
+]
+
+
+def tabla_liquidacion(registros, config, encuestas, notas, ajustes, personal, desde: date, hasta: date, locales,
+                      compensar: bool = True, incluir_entregas: bool = True) -> pd.DataFrame:
+    """Una fila por trabajador (todos los que trabajaron en el periodo y el personal activo, aunque
+    tengan 0 diferencias), con las mismas columnas y reglas que la Liquidacion del Dashboard."""
+    b = _base_periodo(registros, ajustes, desde, hasta, locales)
+    reg, cortes = b["reg"], b["cortes"]
+    items = items_ticket(b["cortes_acum"], b["saltos_acum"], incluir_entregas)
+    _, pol_rep, _ = politica_sucursal(b["items"], b["ops_por_local"], POL_TASA, POL_PISO, POL_TOPE, POL_GRANDE)
+    creditos = creditos_repuso(ajustes, desde, hasta, list(locales))
+
+    enc = pd.DataFrame()
+    if encuestas is not None and not encuestas.empty:
+        enc = con_estado_nota(encuestas, notas)
+        enc = enc[enc["fecha"].between(desde, hasta) & enc["local"].isin(locales) & (enc["estado_pago"] != "No válido")]
+
+    trabajadores = set(reg["nombre"].dropna().astype(str)) - {""}
+    if personal is not None and not personal.empty:
+        activos = personal[
+            (personal["nombre"] != "")
+            & ~personal["activo"].str.lower().isin({"no", "false", "0"})
+            & personal["local"].isin(locales)
+        ]
+        trabajadores |= set(activos["nombre"])
+    personas = sorted(
+        set(items["persona"]) | set(creditos["persona"]) | (set(enc["nombre"]) if not enc.empty else set()) | trabajadores
+    )
+
+    metas = {}
+    if config is not None and not config.empty:
+        for _, r in config.iterrows():
+            metas[(str(r["local"]), "Mañana")] = int(_num(r.get("meta_ops_manana")))
+            metas[(str(r["local"]), "Tarde")] = int(_num(r.get("meta_ops_tarde")))
+    tp = reg[["local", "fecha", "turno", "nombre"]].drop_duplicates().merge(
+        operaciones_por_turno(reg)[["local", "fecha", "turno", "operaciones"]], on=["local", "fecha", "turno"], how="left"
+    )
+    tp["meta"] = [metas.get((str(l), t), 0) for l, t in zip(tp["local"], tp["turno"])]
+    tp["con_meta"] = (tp["meta"] > 0) & tp["operaciones"].notna()
+    tp["cumple"] = tp["con_meta"] & (tp["operaciones"] >= tp["meta"])
+    stats = tp.groupby("nombre").agg(trabajados=("turno", "size"), con_meta=("con_meta", "sum"), cumplidos=("cumple", "sum"))
+    locales_p = tp.groupby("nombre")["local"].agg(lambda s: ", ".join(sorted(set(s))))
+    n_enc = enc.groupby("nombre").size().to_dict() if not enc.empty else {}
+    ops_p = (
+        cortes.assign(_ops=b["ops_cierre"]).groupby("nombre")["_ops"].sum() if not cortes.empty else pd.Series(dtype=float)
+    )
+
+    filas = []
+    for p in personas:
+        t = totales_ticket(items[items["persona"] == p], compensar)
+        a_favor = float(creditos.loc[creditos["persona"] == p, "monto"].sum())
+        asignado = float(pol_rep.loc[pol_rep["persona"] == p, "asignado"].sum()) if not pol_rep.empty else 0.0
+        pagar = 0.0
+        if not enc.empty:
+            e = enc[(enc["nombre"] == p) & (enc["estado_pago"] == "Pendiente")]
+            pagar = float(e.loc[e["estado_nota"] == "Aprobado", "incentivo"].sum())
+        st_p = stats.loc[p] if p in stats.index else None
+        filas.append({
+            "Persona": p,
+            "Ítems": int((items["persona"] == p).sum()),
+            "Faltantes (S/)": t["faltantes"], "Sobrantes (S/)": t["sobrantes"], "Neto (S/)": t["neto"],
+            "A revisar (S/)": t["a_revisar"], "A favor (S/)": a_favor,
+            "Descuento asignado (S/)": asignado, "A descontar (S/)": max(0.0, asignado - a_favor),
+            "Incentivo a pagar (S/)": pagar,
+            "Operaciones": int(ops_p.get(p, 0)),
+            "Encuestas llenadas": int(n_enc.get(p, 0)),
+            "Turnos trabajados": int(st_p["trabajados"]) if st_p is not None else 0,
+            "Turnos con meta": int(st_p["con_meta"]) if st_p is not None else 0,
+            "Meta cumplida": int(st_p["cumplidos"]) if st_p is not None else 0,
+            "Local": locales_p.get(p, ""),
+        })
+    if not filas:
+        return pd.DataFrame(columns=COLUMNAS_LIQUIDACION)
+    return pd.DataFrame(filas, columns=COLUMNAS_LIQUIDACION).sort_values(
+        ["A descontar (S/)", "A revisar (S/)"], ascending=False, kind="stable"
+    ).reset_index(drop=True)
+
+
+def reporte_liquidacion(registros, config, encuestas, notas, ajustes, personal, hoy: date,
+                        periodo: str = "mes", filtro: str = "") -> str:
+    desde, hasta, etiqueta = rango_periodo(periodo, hoy)
+    titulo = f"🧾 <b>Liquidación por trabajador</b> — {etiqueta}\n({_dm(desde)} al {_dm(hasta)})"
+    if registros is None or registros.empty:
+        return f"{titulo}\n\nTodavía no hay registros."
+    todos = sorted(registros["local"].unique())
+    locales = buscar_locales(filtro, todos) if filtro.strip() else todos
+    persona_filtro = ""
+    if filtro.strip() and not locales:  # no es un local: se busca como nombre de trabajador
+        persona_filtro, locales = filtro.strip(), todos
+    tabla = tabla_liquidacion(registros, config, encuestas, notas, ajustes, personal, desde, hasta, locales)
+    if persona_filtro:
+        tabla = tabla[tabla["Persona"].map(_clave).str.contains(_clave(persona_filtro), regex=False)]
+        if tabla.empty:
+            return f"No encontré a nadie que se parezca a «{esc(persona_filtro)}»."
+    if tabla.empty:
+        return f"{titulo}\n\nNo hay trabajadores con datos en ese período."
+
+    nota = "ℹ️ Es una ayuda para revisar, no un descuento automático: antes de descontar, revisa cada ítem (puede ser un error al registrar)."
+    resumen = (
+        f"👥 Trabajadores: {len(tabla)}\n"
+        f"💸 A descontar en total: {soles(tabla['A descontar (S/)'].sum())}\n"
+        f"⭐ Incentivos a pagar: {soles(tabla['Incentivo a pagar (S/)'].sum())}"
+    )
+    bloques = []
+    for _, r in tabla.iterrows():
+        con_dif = (r["Ítems"] or r["A favor (S/)"] or r["Descuento asignado (S/)"])
+        encabezado = f"<b>{esc(r['Persona'])}</b> · {esc(r['Local'])}".rstrip(" ·")
+        lineas = [f"🧾 {encabezado}" if con_dif else f"✅ {encabezado} — sin diferencias"]
+        if con_dif:
+            lineas += [
+                f"📉 Faltantes: {soles(r['Faltantes (S/)'])}",
+                f"📈 Sobrantes: {soles(r['Sobrantes (S/)'])}",
+                f"⚖️ Neto: {_con_signo(r['Neto (S/)'])}",
+                f"🔎 A revisar: {soles(r['A revisar (S/)'])}",
+                f"↩️ A favor (repuso): {soles(r['A favor (S/)'])}",
+                f"📐 Descuento asignado: {soles(r['Descuento asignado (S/)'])}",
+                f"💸 <b>A descontar: {soles(r['A descontar (S/)'])}</b>",
+            ]
+        lineas.append(f"⭐ Incentivo a pagar: {soles(r['Incentivo a pagar (S/)'])} · Encuestas: {r['Encuestas llenadas']}")
+        lineas.append(f"🔢 Operaciones: {r['Operaciones']:,} · Turnos: {r['Turnos trabajados']}")
+        if r["Turnos con meta"]:
+            lineas.append(f"🎯 Meta cumplida: {r['Meta cumplida']} de {r['Turnos con meta']} turnos")
+        bloques.append("\n".join(lineas))
+    return f"{titulo}\n{nota}\n\n{resumen}\n\n———————\n\n" + "\n\n".join(bloques)

@@ -382,3 +382,61 @@ def test_sucursales_repuesto_suma_solo_ingresos_con_quien_repuso():
     ])
     txt = rp.reporte_sucursales(_registros(), _config(), aj, HOY, "mes", "colon")
     assert "↩️ Repuesto: S/ 30.00" in txt and "🔷 Autorizado: +40.00" in txt
+
+
+# ---------------------------------------------------------------------
+# /liquidacion: la liquidacion de cada trabajador (misma tabla que el Dashboard)
+# ---------------------------------------------------------------------
+def _personal():
+    return pd.DataFrame([
+        {"nombre": "Maria", "local": "Colon-H0715", "alias": "", "activo": "si"},
+        {"nombre": "Rosa", "local": "Colon-H0715", "alias": "", "activo": "no"},
+    ])
+
+
+def _tabla_liq(ajustes=None):
+    return rp.tabla_liquidacion(
+        _registros(), _config(), _encuestas(), _notas(), _ajustes() if ajustes is None else ajustes, _personal(),
+        dt.date(2026, 10, 1), HOY, ["Colon-H0715", "Zol A-H3582"],
+    ).set_index("Persona")
+
+
+def test_tabla_liquidacion_incluye_a_todos_y_calcula_cada_columna():
+    t = _tabla_liq()
+    assert list(t.index) == ["Ana", "Luis", "Maria", "Pedro"]  # Rosa esta inactiva; Maria no tuvo registros
+    ana = t.loc["Ana"]
+    assert (ana["Faltantes (S/)"], ana["Neto (S/)"], ana["A revisar (S/)"]) == (20.0, -20.0, 20.0)
+    assert round(ana["Descuento asignado (S/)"], 2) == 19.38 and round(ana["A descontar (S/)"], 2) == 19.38
+    assert ana["Incentivo a pagar (S/)"] == 20.0 and ana["Encuestas llenadas"] == 2   # nota de Colon aprobada
+    assert (ana["Operaciones"], ana["Turnos trabajados"], ana["Turnos con meta"], ana["Meta cumplida"]) == (62, 1, 1, 1)
+    luis = t.loc["Luis"]   # la entrega de +1100 es un item grande: se ve en su neto, pero no entra al reparto
+    assert luis["Sobrantes (S/)"] == 1100.0 and luis["A revisar (S/)"] == 0.0 and luis["A descontar (S/)"] == 0.0
+    assert luis["Operaciones"] == 70 and luis["Turnos trabajados"] == 2 and luis["Incentivo a pagar (S/)"] == 0.0  # nota sin cierre
+    maria = t.loc["Maria"]
+    assert maria["Ítems"] == 0 and maria["Operaciones"] == 0 and maria["Turnos trabajados"] == 0
+    assert t.loc["Pedro", "Incentivo a pagar (S/)"] == 0.0 and t.loc["Pedro", "Encuestas llenadas"] == 1  # ya pagada
+
+
+def test_liquidacion_lo_autorizado_y_lo_repuesto_cambian_el_descuento():
+    aut = _ajustes(("x1", "Colon-H0715", dt.date(2026, 10, 18), -20.0, "Mañana", ""))
+    assert _tabla_liq(aut).loc["Ana", "A descontar (S/)"] == 0.0 and _tabla_liq(aut).loc["Ana", "Faltantes (S/)"] == 0.0
+    repuso = pd.DataFrame([{"id": "x2", "local": "Colon-H0715", "fecha": dt.date(2026, 10, 18), "monto": 15.0, "turno": "",
+                            "salto_id_cierre": "zz", "repuso": "Ana", "motivo": "repuso"}])
+    ana = _tabla_liq(repuso).loc["Ana"]
+    assert ana["A favor (S/)"] == 15.0 and round(ana["A descontar (S/)"], 2) == 4.38  # 19.38 - 15
+
+
+def test_reporte_liquidacion_un_dato_por_linea_y_filtros():
+    txt = rp.reporte_liquidacion(_registros(), _config(), _encuestas(), _notas(), _ajustes(), _personal(), HOY)
+    assert "Liquidación por trabajador</b> — octubre 2026" in txt and "no un descuento automático" in txt
+    assert "💸 A descontar en total: S/ 19.38" in txt and "⭐ Incentivos a pagar: S/ 20.00" in txt and "👥 Trabajadores: 4" in txt
+    assert "🧾 <b>Ana</b> · Colon-H0715\n📉 Faltantes: S/ 20.00" in txt
+    assert "💸 <b>A descontar: S/ 19.38</b>" in txt and "🎯 Meta cumplida: 1 de 1 turnos" in txt
+    assert "✅ <b>Maria</b> — sin diferencias" in txt           # los que no tuvieron nada tambien salen
+    assert txt.index("<b>Ana</b>") < txt.index("<b>Luis</b>")    # primero a quien hay que descontar
+    solo_ana = rp.reporte_liquidacion(_registros(), _config(), _encuestas(), _notas(), _ajustes(), _personal(), HOY, "mes", "ana")
+    assert "<b>Ana</b>" in solo_ana and "<b>Luis</b>" not in solo_ana
+    solo_zol = rp.reporte_liquidacion(_registros(), _config(), _encuestas(), _notas(), _ajustes(), _personal(), HOY, "mes", "zol")
+    assert "<b>Luis</b>" in solo_zol and "<b>Ana</b>" not in solo_zol
+    assert "No encontré a nadie" in rp.reporte_liquidacion(_registros(), _config(), _encuestas(), _notas(), _ajustes(), _personal(), HOY, "mes", "zzz")
+    assert "Todavía no hay registros" in rp.reporte_liquidacion(pd.DataFrame(), _config(), _encuestas(), _notas(), _ajustes(), _personal(), HOY)

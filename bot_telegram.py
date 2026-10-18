@@ -16,6 +16,7 @@ TELEGRAM_CHAT_ID definidos y el secrets.toml de siempre).
 
 from __future__ import annotations
 
+import calendar
 import json
 import logging
 import re
@@ -40,6 +41,7 @@ COMANDOS_MENU = [
     ("resumen", "El resumen del día completo"),
     ("ranking", "Ranking de trabajadores por operaciones"),
     ("sucursales", "Balance de diferencias por sucursal"),
+    ("liquidacion", "Liquidación de los trabajadores"),
     ("solicitudes", "Pedidos de efectivo o saldo pendientes"),
     ("diferencias", "Diferencias grandes sin autorizar"),
     ("ayuda", "Ver todos los comandos"),
@@ -121,6 +123,20 @@ def generar_respuesta(comando: str, argumento: str) -> str:
             sh.get_registros_df, sh.get_config_df, sh.get_encuestas_df, sh.get_ajustes_df
         )
         return rp.reporte_ranking(registros, config, encuestas, ajustes, hoy, periodo, " ".join(filtro))
+    if comando == "liquidacion":
+        periodo, filtro = "mes", []
+        for p in argumento.split():
+            if p.lower() in rp.PERIODOS_RANKING:
+                periodo = p.lower()
+            else:
+                filtro.append(p)
+        registros, config, encuestas, notas, ajustes, personal = _fresco(
+            sh.get_registros_df, sh.get_config_df, sh.get_encuestas_df, sh.get_notas_df, sh.get_ajustes_df,
+            sh.get_personal_df,
+        )
+        return rp.reporte_liquidacion(
+            registros, config, encuestas, notas, ajustes, personal, hoy, periodo, " ".join(filtro)
+        )
     if comando == "sucursales":
         periodo, filtro = "mes", []
         for p in argumento.split():
@@ -213,6 +229,28 @@ def hora_resumen() -> int | None:
         return 22 * 60
 
 
+def dia_liquidacion() -> int | None:
+    """Dia del mes en que se manda la liquidacion de todos (LIQUIDACION_DIA; 30 por defecto; 'off' la
+    apaga). En un mes mas corto (febrero) sale el ultimo dia."""
+    valor = (sh._secreto("liquidacion_dia", "LIQUIDACION_DIA") or "30").strip().lower()
+    if valor in ("off", "no", "0", "apagado"):
+        return None
+    try:
+        return min(max(int(valor), 1), 31)
+    except ValueError:
+        return 30
+
+
+def hora_liquidacion() -> int:
+    """Minutos desde medianoche (LIQUIDACION_HORA, 'HH:MM'; 21:30 por defecto)."""
+    valor = (sh._secreto("liquidacion_hora", "LIQUIDACION_HORA") or "21:30").strip()
+    try:
+        h, m = valor.split(":")
+        return int(h) * 60 + int(m)
+    except ValueError:
+        return 21 * 60 + 30
+
+
 def horas_turno_abierto() -> float:
     """Horas con la Apertura sin Cierre desde las que se avisa (ALERTA_TURNO_ABIERTO_HORAS; 8.5, igual
     que el Dashboard)."""
@@ -231,6 +269,7 @@ class Programador:
         self.estado: dict | None = None
         self.proxima_revision_turnos = 0.0
         self.proximo_intento_resumen = 0.0
+        self.proximo_intento_liquidacion = 0.0
 
     def _cargar(self) -> None:
         try:
@@ -248,6 +287,7 @@ class Programador:
                 return
         ahora = ahora or sh.ahora_local().replace(tzinfo=None)
         self._resumen(ahora)
+        self._liquidacion(ahora)
         self._turnos(ahora)
 
     def _resumen(self, ahora) -> None:
@@ -265,6 +305,27 @@ class Programador:
         except Exception as e:
             log(f"resumen del día: {type(e).__name__}: {e}")
             self.proximo_intento_resumen = time.time() + 600
+
+    def _liquidacion(self, ahora) -> None:
+        """La liquidacion de todos los trabajadores, una vez al mes (el dia 30 a las 21:30). Si el bot
+        estaba apagado ese dia, sale en cuanto vuelve, siempre dentro del mismo mes."""
+        dia = dia_liquidacion()
+        if dia is None:
+            return
+        objetivo = min(dia, calendar.monthrange(ahora.year, ahora.month)[1])
+        if ahora.day < objetivo or (ahora.day == objetivo and ahora.hour * 60 + ahora.minute < hora_liquidacion()):
+            return
+        mes = ahora.strftime("%Y-%m")
+        if mes in self.estado.get("ultima_liquidacion", []) or time.time() < self.proximo_intento_liquidacion:
+            return
+        try:
+            enviar_a_todos(self.token, generar_respuesta("liquidacion", ""))
+            sh.guardar_estado_bot("ultima_liquidacion", mes, unico=True)
+            self.estado["ultima_liquidacion"] = [mes]
+            log("liquidación del mes enviada")
+        except Exception as e:
+            log(f"liquidación del mes: {type(e).__name__}: {e}")
+            self.proximo_intento_liquidacion = time.time() + 600
 
     def _turnos(self, ahora) -> None:
         if time.time() < self.proxima_revision_turnos:
