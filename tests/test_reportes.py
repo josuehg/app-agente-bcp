@@ -542,3 +542,55 @@ def test_liquidacion_final_marca_cada_diferencia_con_su_conformidad():
     assert "Entrega de caja · Luis: +1,100.00 ❌ no aceptó" in txt
     sin = rp.reporte_liquidacion(_registros(), _config(), _encuestas(), _notas(), _ajustes(), _personal(), dt.date(2026, 11, 3), "anterior")
     assert "Con conformidad del trabajador: 0 de 2" in sin and "aceptó" not in sin.split("Diferencias que siguen")[1].split("———")[0]
+
+
+# ---------------------------------------------------------------------
+# Por que el descuento asignado sale 0
+# ---------------------------------------------------------------------
+def _liq_con(registros):
+    t = rp.tabla_liquidacion(
+        registros, _config(), _encuestas().iloc[0:0], _notas(), _ajustes(), _personal().iloc[0:0],
+        dt.date(2026, 10, 1), HOY, ["Colon-H0715"],
+    ).set_index("Persona")
+    txt = rp.reporte_liquidacion(registros, _config(), _encuestas().iloc[0:0], _notas(), _ajustes(), _personal().iloc[0:0], HOY, "mes", "colon")
+    return t, txt
+
+
+def _corte(id_, nombre, hora_a, hora_c, apertura, cierre, ops=500, turno="Mañana", dia="2026-10-18"):
+    return [
+        _r(f"a{id_}", "Colon-H0715", dia, turno, "Apertura", nombre, hora_a, apertura, 500),
+        _r(f"c{id_}", "Colon-H0715", dia, turno, "Cierre", nombre, hora_c, cierre, 500, ops=ops),
+    ]
+
+
+def test_sin_descuento_porque_la_perdida_no_pasa_la_franquicia():
+    reg = pd.DataFrame(_corte(1, "Maria", "08:00", "14:00", 3000, 2997))   # falto 3; franquicia 0.01 x 500 = 5
+    t, txt = _liq_con(reg)
+    assert t.loc["Maria", "Faltantes (S/)"] == 3.0 and t.loc["Maria", "Descuento asignado (S/)"] == 0.0
+    assert "la pérdida neta de Colon-H0715 (S/ 3.00) no pasa la franquicia (S/ 5.00)" in t.loc["Maria", "Motivo sin descuento"]
+    assert "ℹ️ Sin descuento: la pérdida neta de Colon-H0715 (S/ 3.00) no pasa la franquicia (S/ 5.00)" in txt
+
+
+def test_sin_descuento_porque_los_sobrantes_compensan():
+    reg = pd.DataFrame(
+        _corte(1, "Maria", "08:00", "14:00", 3000, 2970, ops=3000)            # falto 30
+        + _corte(2, "Pedro", "14:30", "20:30", 2970, 3000, ops=3000, turno="Tarde")  # abre con lo que cerro Maria y sobra 30
+    )
+    t, txt = _liq_con(reg)
+    assert "compensan los faltantes" in t.loc["Maria", "Motivo sin descuento"]
+    assert "los sobrantes de Colon-H0715 (S/ 30.00) compensan los faltantes (S/ 30.00)" in txt
+
+
+def test_sin_descuento_porque_es_un_item_grande_o_porque_no_tuvo_faltantes():
+    reg = pd.DataFrame(
+        _corte(1, "Maria", "08:00", "14:00", 3000, 2950, ops=100)             # falto 50: item grande (>= 40)
+        + _corte(2, "Pedro", "14:30", "20:30", 2950, 2950, ops=100, turno="Tarde")
+    )
+    t, _ = _liq_con(reg)
+    assert "ítems grandes" in t.loc["Maria", "Motivo sin descuento"]
+    assert t.loc["Pedro", "Motivo sin descuento"].startswith("no tuvo faltantes")
+
+
+def test_con_descuento_no_hay_motivo():
+    t = _tabla_liq()
+    assert t.loc["Ana", "Descuento asignado (S/)"] > 0 and t.loc["Ana", "Motivo sin descuento"] == ""

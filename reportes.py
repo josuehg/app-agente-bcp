@@ -780,8 +780,34 @@ def _base_periodo(registros: pd.DataFrame, ajustes, desde: date, hasta: date, lo
 COLUMNAS_LIQUIDACION = [
     "Persona", "Ítems", "Faltantes (S/)", "Sobrantes (S/)", "Neto (S/)", "A revisar (S/)", "A favor (S/)",
     "Descuento asignado (S/)", "A descontar (S/)", "Incentivo a pagar (S/)", "Operaciones", "Encuestas llenadas",
-    "Turnos trabajados", "Turnos con meta", "Meta cumplida", "Local", "Conformes",
+    "Turnos trabajados", "Turnos con meta", "Meta cumplida", "Local", "Conformes", "Motivo sin descuento",
 ]
+
+
+def _motivo_sin_descuento(persona: str, items: pd.DataFrame, pol_suc: pd.DataFrame) -> str:
+    """Por que el descuento asignado de esa persona es 0 (para explicarselo a quien lee el reporte)."""
+    mios = items[(items["persona"] == persona) & (items["diferencia"] < 0)] if not items.empty else items
+    if mios.empty:
+        return "no tuvo faltantes (el descuento solo se reparte entre quienes tuvieron faltantes)"
+    grande = mios["diferencia"].abs() >= POL_GRANDE
+    if grande.all():
+        return (f"sus faltantes son ítems grandes (S/ {POL_GRANDE:g} o más): se investigan aparte y no entran "
+                "al reparto")
+    motivos = []
+    for local in sorted(set(mios.loc[~grande, "local"])):
+        p = pol_suc[pol_suc["local"] == local]
+        if p.empty:
+            continue
+        p = p.iloc[0]
+        if p["faltantes"] <= p["sobrantes"]:
+            motivos.append(
+                f"los sobrantes de {local} ({soles(p['sobrantes'])}) compensan los faltantes ({soles(p['faltantes'])})"
+            )
+        elif p["exceso"] <= 0:
+            motivos.append(
+                f"la pérdida neta de {local} ({soles(p['perdida_neta'])}) no pasa la franquicia ({soles(p['franquicia'])})"
+            )
+    return "; ".join(motivos)
 
 
 def tabla_liquidacion(registros, config, encuestas, notas, ajustes, personal, desde: date, hasta: date, locales,
@@ -792,7 +818,7 @@ def tabla_liquidacion(registros, config, encuestas, notas, ajustes, personal, de
     reg, cortes = b["reg"], b["cortes"]
     items = items_ticket(b["cortes_acum"], b["saltos_acum"], incluir_entregas)
     items_c = con_conformidad(items, conformidades)
-    _, pol_rep, _ = politica_sucursal(b["items"], b["ops_por_local"], POL_TASA, POL_PISO, POL_TOPE, POL_GRANDE)
+    pol_suc, pol_rep, _ = politica_sucursal(b["items"], b["ops_por_local"], POL_TASA, POL_PISO, POL_TOPE, POL_GRANDE)
     creditos = creditos_repuso(ajustes, desde, hasta, list(locales))
 
     enc = pd.DataFrame()
@@ -854,6 +880,7 @@ def tabla_liquidacion(registros, config, encuestas, notas, ajustes, personal, de
             "Meta cumplida": int(st_p["cumplidos"]) if st_p is not None else 0,
             "Local": locales_p.get(p, ""),
             "Conformes": int(((items_c["persona"] == p) & (items_c["conformidad"] == "Aceptó")).sum()),
+            "Motivo sin descuento": "" if asignado > 0 else _motivo_sin_descuento(p, b["items"], pol_suc),
         })
     if not filas:
         return pd.DataFrame(columns=COLUMNAS_LIQUIDACION)
@@ -907,8 +934,10 @@ def reporte_liquidacion(registros, config, encuestas, notas, ajustes, personal, 
                 f"🔎 A revisar: {soles(r['A revisar (S/)'])}",
                 f"↩️ A favor (repuso): {soles(r['A favor (S/)'])}",
                 f"📐 Descuento asignado: {soles(r['Descuento asignado (S/)'])}",
-                f"💸 <b>A descontar: {soles(r['A descontar (S/)'])}</b>",
             ]
+            if r["Motivo sin descuento"]:
+                lineas.append(f"   ℹ️ Sin descuento: {esc(r['Motivo sin descuento'])}")
+            lineas.append(f"💸 <b>A descontar: {soles(r['A descontar (S/)'])}</b>")
         if r["Ítems"]:
             lineas.append(f"✍️ Conformidad del trabajador: {r['Conformes']} de {r['Ítems']} aceptadas")
         lineas.append(f"⭐ Incentivo a pagar: {soles(r['Incentivo a pagar (S/)'])} · Encuestas: {r['Encuestas llenadas']}")
