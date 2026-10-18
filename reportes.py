@@ -781,6 +781,7 @@ COLUMNAS_LIQUIDACION = [
     "Persona", "Ítems", "Faltantes (S/)", "Sobrantes (S/)", "Neto (S/)", "A revisar (S/)", "A favor (S/)",
     "Descuento asignado (S/)", "A descontar (S/)", "Incentivo a pagar (S/)", "Operaciones", "Encuestas llenadas",
     "Turnos trabajados", "Turnos con meta", "Meta cumplida", "Local", "Conformes", "Motivo sin descuento",
+    "Ítems grandes", "Monto ítems grandes (S/)",
 ]
 
 
@@ -818,7 +819,7 @@ def tabla_liquidacion(registros, config, encuestas, notas, ajustes, personal, de
     reg, cortes = b["reg"], b["cortes"]
     items = items_ticket(b["cortes_acum"], b["saltos_acum"], incluir_entregas)
     items_c = con_conformidad(items, conformidades)
-    pol_suc, pol_rep, _ = politica_sucursal(b["items"], b["ops_por_local"], POL_TASA, POL_PISO, POL_TOPE, POL_GRANDE)
+    pol_suc, pol_rep, pol_grandes = politica_sucursal(b["items"], b["ops_por_local"], POL_TASA, POL_PISO, POL_TOPE, POL_GRANDE)
     creditos = creditos_repuso(ajustes, desde, hasta, list(locales))
 
     enc = pd.DataFrame()
@@ -881,6 +882,9 @@ def tabla_liquidacion(registros, config, encuestas, notas, ajustes, personal, de
             "Local": locales_p.get(p, ""),
             "Conformes": int(((items_c["persona"] == p) & (items_c["conformidad"] == "Aceptó")).sum()),
             "Motivo sin descuento": "" if asignado > 0 else _motivo_sin_descuento(p, b["items"], pol_suc),
+            "Ítems grandes": int((pol_grandes["persona"] == p).sum()) if not pol_grandes.empty else 0,
+            "Monto ítems grandes (S/)": float(pol_grandes.loc[pol_grandes["persona"] == p, "diferencia"].sum())
+            if not pol_grandes.empty else 0.0,
         })
     if not filas:
         return pd.DataFrame(columns=COLUMNAS_LIQUIDACION)
@@ -937,6 +941,11 @@ def reporte_liquidacion(registros, config, encuestas, notas, ajustes, personal, 
             ]
             if r["Motivo sin descuento"]:
                 lineas.append(f"   ℹ️ Sin descuento: {esc(r['Motivo sin descuento'])}")
+            if r["Ítems grandes"]:
+                lineas.append(
+                    f"🔎 A investigar aparte: {r['Ítems grandes']} ítem(s) grande(s) ({_con_signo(r['Monto ítems grandes (S/)'])}) "
+                    "— no entran al reparto; revísalos en Dashboard → Cuadre"
+                )
             lineas.append(f"💸 <b>A descontar: {soles(r['A descontar (S/)'])}</b>")
         if r["Ítems"]:
             lineas.append(f"✍️ Conformidad del trabajador: {r['Conformes']} de {r['Ítems']} aceptadas")

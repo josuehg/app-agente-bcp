@@ -586,9 +586,12 @@ def test_sin_descuento_porque_es_un_item_grande_o_porque_no_tuvo_faltantes():
         _corte(1, "Maria", "08:00", "14:00", 3000, 2950, ops=100)             # falto 50: item grande (>= 40)
         + _corte(2, "Pedro", "14:30", "20:30", 2950, 2950, ops=100, turno="Tarde")
     )
-    t, _ = _liq_con(reg)
+    t, txt = _liq_con(reg)
     assert "ítems grandes" in t.loc["Maria", "Motivo sin descuento"]
     assert t.loc["Pedro", "Motivo sin descuento"].startswith("no tuvo faltantes")
+    assert (t.loc["Maria", "Ítems grandes"], t.loc["Maria", "Monto ítems grandes (S/)"]) == (1, -50.0)
+    assert t.loc["Pedro", "Ítems grandes"] == 0
+    assert "🔎 A investigar aparte: 1 ítem(s) grande(s) (-50.00)" in txt
 
 
 def test_con_descuento_no_hay_motivo():
