@@ -28,6 +28,7 @@ from cuadre import (
     con_estado_nota,
     estado_nota,
     estado_parcial,
+    marcar_autorizados,
     minutos_entre,
     nota_vigente,
     operaciones_por_turno,
@@ -45,10 +46,10 @@ AYUDA = (
     "/encuestas — encuestas del mes, pagos y nota NPS\n"
     "/operaciones — operaciones de hoy y del mes frente a la meta\n"
     "/solicitudes — pedidos de efectivo o saldo pendientes\n"
-    "/diferencias — diferencias mayores a S/ {umbral:g} de los últimos 7 días\n"
+    "/diferencias — diferencias mayores a S/ {umbral:g} que siguen SIN autorizar (7 días)\n"
     "/id — tu chat id\n\n"
     "Puedes filtrar por local: <code>/corte colon</code>, <code>/encuestas zol</code>. "
-    "En /diferencias puedes poner los días: <code>/diferencias 30</code>."
+    "En /diferencias puedes poner los días (<code>/diferencias 30</code>) o <code>todas</code> para incluir las ya autorizadas."
 )
 
 
@@ -169,7 +170,7 @@ def reporte_fondo(registros: pd.DataFrame, config: pd.DataFrame, hoy: date, loca
 # ---------------------------------------------------------------------
 # /corte: ultimo corte cerrado de cada local
 # ---------------------------------------------------------------------
-def reporte_corte(registros: pd.DataFrame, local_filtro: str = "") -> str:
+def reporte_corte(registros: pd.DataFrame, local_filtro: str = "", ajustes: pd.DataFrame | None = None) -> str:
     if registros is None or registros.empty:
         return "Todavía no hay registros."
     elegidos = buscar_locales(local_filtro, registros["local"].unique())
@@ -180,7 +181,7 @@ def reporte_corte(registros: pd.DataFrame, local_filtro: str = "") -> str:
     bloques = []
     for local in elegidos:
         sub = registros[registros["local"] == local]
-        cortes = calcular_cortes(sub, ["local", "fecha", "turno"])
+        cortes, _ = marcar_autorizados(calcular_cortes(sub, ["local", "fecha", "turno"]), None, ajustes)
         cerrados = cortes[cortes["id_cierre"].astype(str).isin(por_id.index) & cortes["cierre"].notna()].copy() if not cortes.empty else cortes
         if cerrados is None or cerrados.empty:
             bloques.append(f"✂️ <b>{esc(local)}</b>\nTodavía no tiene cortes cerrados.")
@@ -201,8 +202,15 @@ def reporte_corte(registros: pd.DataFrame, local_filtro: str = "") -> str:
         lineas += ["", f"🔒 <b>Cierre</b> {esc(c['hora_cierre'])}",
                    *_montos(_num(ci["efectivo"]), _num(ci["tarjeta"]), _num(ci["total"])), ""]
         if pd.notna(dif):
-            icono = "✅" if abs(float(dif)) <= UMBRAL_VERDE else "🔴"
-            lineas.append(f"📊 Diferencia: {_con_signo(dif)} {icono}")
+            if bool(c["_autorizado"]):
+                lineas.append(f"📊 Diferencia: {_con_signo(dif)} 🔷 Autorizada (ajuste {_con_signo(c['_ajuste'])})")
+            else:
+                icono = "✅" if abs(float(dif)) <= UMBRAL_VERDE else "🔴"
+                lineas.append(f"📊 Diferencia: {_con_signo(dif)} {icono}")
+                if c["_ajuste"] != 0:
+                    lineas.append(
+                        f"ℹ️ Ajuste parcial del turno {_con_signo(c['_ajuste'])} · sin explicar {_con_signo(c['_restante'])}"
+                    )
         lineas.append(f"🔢 Operaciones: {int(_num(ci['num_operaciones']))}")
         obs = str(c.get("observaciones", "") or "").strip()
         for parte in (obs.split(" | ") if obs else []):  # Apertura y Cierre, cada una en su linea
@@ -352,7 +360,10 @@ def reporte_solicitudes(solicitudes: pd.DataFrame, ahora) -> str:
 # /diferencias: cortes y saltos (entre cierres) con diferencia grande
 # ---------------------------------------------------------------------
 def reporte_diferencias(registros: pd.DataFrame, hoy: date, dias: int = 7, umbral: float = UMBRAL_ALERTA_DIFERENCIA,
-                        local_filtro: str = "") -> str:
+                        local_filtro: str = "", ajustes: pd.DataFrame | None = None,
+                        incluir_autorizadas: bool = False) -> str:
+    """Diferencias grandes de los ultimos dias. Las que administracion YA autorizo en el
+    Dashboard no se muestran (salvo incluir_autorizadas): se descuentan igual que alla."""
     dias = max(1, min(int(dias), 90))
     titulo = f"🔎 <b>Diferencias mayores a S/ {umbral:g}</b> — últimos {dias} día(s)"
     if registros is None or registros.empty:
@@ -362,34 +373,54 @@ def reporte_diferencias(registros: pd.DataFrame, hoy: date, dias: int = 7, umbra
         return f"No encontré ningún local que se parezca a «{esc(local_filtro)}»."
     desde = hoy - timedelta(days=dias - 1)
     base = registros[registros["local"].isin(elegidos)]
-    items = []
-    cortes = calcular_cortes(base, ["local", "fecha", "turno"])
-    if not cortes.empty:
-        for _, c in cortes[cortes["diferencia"].notna()].iterrows():
-            if c["fecha"] >= desde and abs(float(c["diferencia"])) > umbral:
-                items.append((c["fecha"], str(c["hora_cierre"] or ""), "\n".join([
-                    f"🔴 <b>{esc(c['local'])}</b> · {_dm(c['fecha'])} · {esc(c['turno'])}",
-                    "   Corte (Apertura → Cierre)",
-                    f"   👤 {esc(c['nombre'] or '—')}",
-                    f"   📊 Diferencia: {_con_signo(c['diferencia'])}",
-                ])))
-    saltos = calcular_saltos(base)
-    if not saltos.empty:
-        for _, s in saltos[saltos["diferencia"].notna()].iterrows():
-            if s["fecha_apertura"] >= desde and abs(float(s["diferencia"])) > umbral:
-                items.append((s["fecha_apertura"], str(s["hora_apertura"] or ""), "\n".join([
-                    f"🟠 <b>{esc(s['local'])}</b> · {_dm(s['fecha_apertura'])}",
-                    "   Entre cierre y apertura",
-                    f"   🔒 Cerró: {esc(s['nombre_cierre'] or '—')}",
-                    f"   🔓 Abrió: {esc(s['nombre_apertura'] or '—')}",
-                    f"   📊 Diferencia: {_con_signo(s['diferencia'])}",
-                ])))
+    cortes, saltos = marcar_autorizados(calcular_cortes(base, ["local", "fecha", "turno"]), calcular_saltos(base), ajustes)
+    items, n_aut = [], 0
+    for _, c in cortes[cortes["diferencia"].notna()].iterrows():
+        if c["fecha"] < desde or abs(float(c["diferencia"])) <= umbral:
+            continue
+        aut = bool(c["_autorizado"])
+        if aut and not incluir_autorizadas:
+            n_aut += 1
+            continue
+        lineas = [
+            f"{'🔷' if aut else '🔴'} <b>{esc(c['local'])}</b> · {_dm(c['fecha'])} · {esc(c['turno'])}",
+            "   Corte (Apertura → Cierre)",
+            f"   👤 {esc(c['nombre'] or '—')}",
+            f"   📊 Diferencia: {_con_signo(c['diferencia'])}",
+        ]
+        if aut:
+            lineas.append(f"   🔷 Autorizada (ajuste {_con_signo(c['_ajuste'])})")
+        elif c["_ajuste"] != 0:
+            lineas.append(f"   ℹ️ Ajuste parcial del turno {_con_signo(c['_ajuste'])} · sin explicar {_con_signo(c['_restante'])}")
+        items.append((c["fecha"], str(c["hora_cierre"] or ""), "\n".join(lineas)))
+    for _, s in saltos[saltos["diferencia"].notna()].iterrows():
+        if s["fecha_apertura"] < desde or abs(float(s["diferencia"])) <= umbral:
+            continue
+        aut = bool(s["_autorizado"])
+        if aut and not incluir_autorizadas:
+            n_aut += 1
+            continue
+        lineas = [
+            f"{'🔷' if aut else '🟠'} <b>{esc(s['local'])}</b> · {_dm(s['fecha_apertura'])}",
+            "   Entre cierre y apertura",
+            f"   🔒 Cerró: {esc(s['nombre_cierre'] or '—')}",
+            f"   🔓 Abrió: {esc(s['nombre_apertura'] or '—')}",
+            f"   📊 Diferencia: {_con_signo(s['diferencia'])}",
+        ]
+        if aut:
+            lineas.append(f"   🔷 Autorizada (ajuste {_con_signo(s['_ajuste'])})")
+        elif s["_ajuste"] != 0:
+            lineas.append(f"   ℹ️ Ajuste parcial {_con_signo(s['_ajuste'])} · sin explicar {_con_signo(s['_restante'])}")
+        items.append((s["fecha_apertura"], str(s["hora_apertura"] or ""), "\n".join(lineas)))
+
+    nota = "(incluye las autorizadas 🔷)" if incluir_autorizadas else "(las ya autorizadas en el Dashboard no se muestran)"
+    pie_aut = f"\n\n🔷 {n_aut} ya autorizada(s) no se muestran. Escribe /diferencias todas para verlas." if n_aut else ""
     if not items:
-        return f"{titulo}\n\n✅ No hay diferencias de ese tamaño."
+        return f"{titulo}\n{nota}\n\n✅ No hay diferencias pendientes de ese tamaño.{pie_aut}"
     items.sort(key=lambda x: (x[0], x[1]), reverse=True)
     cuerpo = "\n\n".join(texto for _, _, texto in items[:20])
     mas = f"\n\n… y {len(items) - 20} más (míralas en el Dashboard)." if len(items) > 20 else ""
     return (
-        f"{titulo}\n(sin descontar lo ya autorizado en el Dashboard)\n\n{cuerpo}{mas}"
-        f"\n\n🔴 corte · 🟠 entre cierre y apertura\n📊 Total: {len(items)}"
+        f"{titulo}\n{nota}\n\n{cuerpo}{mas}"
+        f"\n\n🔴 corte · 🟠 entre cierre y apertura\n📊 Total: {len(items)}{pie_aut}"
     )

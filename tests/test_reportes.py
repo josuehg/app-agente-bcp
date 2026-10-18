@@ -183,3 +183,82 @@ def test_bot_solo_da_datos_a_chats_autorizados():
     assert "/fondo" in bot.procesar_mensaje(-100222, "/ayuda@mi_bot", permitidos)  # grupo, con @bot
     assert "No conozco ese comando" in bot.procesar_mensaje(111, "/xyz", permitidos)
     assert "/ayuda" in bot.procesar_mensaje(111, "hola", permitidos)
+
+
+# ---------------------------------------------------------------------
+# Lo ya AUTORIZADO en el Dashboard no se vuelve a mostrar como diferencia pendiente
+# ---------------------------------------------------------------------
+from cuadre import calcular_cortes, calcular_saltos, marcar_autorizados  # noqa: E402
+
+
+def _ajustes(*filas):
+    cols = ["id", "local", "fecha", "monto", "turno", "salto_id_cierre"]
+    return pd.DataFrame([dict(zip(cols, f)) for f in filas], columns=cols)
+
+
+def _reg_dif():
+    # 17/10 Tarde: corte -20 ; entre cierre (17/10) y apertura (18/10): -80 ; 18/10 Mañana: corte +3
+    return pd.DataFrame([
+        _r("a1", "Colon", "2026-10-17", "Tarde", "Apertura", "Pedro", "14:30", 3000, 500),
+        _r("c1", "Colon", "2026-10-17", "Tarde", "Cierre", "Pedro", "21:00", 2980, 500, ops=30),
+        _r("a2", "Colon", "2026-10-18", "Mañana", "Apertura", "Ana", "08:00", 2900, 500),
+        _r("c2", "Colon", "2026-10-18", "Mañana", "Cierre", "Ana", "14:00", 2903, 500, ops=40),
+    ])
+
+
+def test_diferencias_sin_ajustes_muestra_todo():
+    txt = rp.reporte_diferencias(_reg_dif(), HOY, 7, 6, ajustes=_ajustes())
+    assert "Diferencia: -20.00" in txt and "Diferencia: -80.00" in txt and "Total: 2" in txt
+    assert "autorizada" not in txt.lower().replace("(las ya autorizadas en el dashboard no se muestran)", "")
+
+
+def test_corte_autorizado_por_turno_no_se_muestra_pero_con_todas_si():
+    aj = _ajustes(("x1", "Colon", dt.date(2026, 10, 17), -20.0, "Tarde", ""))
+    txt = rp.reporte_diferencias(_reg_dif(), HOY, 7, 6, ajustes=aj)
+    assert "Diferencia: -20.00" not in txt and "Diferencia: -80.00" in txt
+    assert "1 ya autorizada(s) no se muestran" in txt and "/diferencias todas" in txt
+    todas = rp.reporte_diferencias(_reg_dif(), HOY, 7, 6, ajustes=aj, incluir_autorizadas=True)
+    assert "🔷 <b>Colon</b> · 17/10 · Tarde" in todas and "Autorizada (ajuste -20.00)" in todas
+
+
+def test_salto_autorizado_por_id_del_cierre():
+    aj = _ajustes(("x1", "Colon", dt.date(2026, 10, 17), -80.0, "", "c1"))
+    txt = rp.reporte_diferencias(_reg_dif(), HOY, 7, 6, ajustes=aj)
+    assert "Diferencia: -80.00" not in txt and "Diferencia: -20.00" in txt
+
+
+def test_ajuste_viejo_por_local_y_fecha_solo_explica_saltos_entre_dias():
+    aj = _ajustes(("x1", "Colon", dt.date(2026, 10, 17), -80.0, "", ""))  # esquema viejo: local + fecha del cierre
+    txt = rp.reporte_diferencias(_reg_dif(), HOY, 7, 6, ajustes=aj)
+    assert "Diferencia: -80.00" not in txt  # el salto 17/10 -> 18/10 es "Entre días"
+
+
+def test_ajuste_parcial_sigue_apareciendo_con_lo_que_falta_explicar():
+    aj = _ajustes(("x1", "Colon", dt.date(2026, 10, 17), -5.0, "Tarde", ""))
+    txt = rp.reporte_diferencias(_reg_dif(), HOY, 7, 6, ajustes=aj)
+    assert "Diferencia: -20.00" in txt
+    assert "Ajuste parcial del turno -5.00 · sin explicar -15.00" in txt
+
+
+def test_ajuste_que_deja_hasta_un_sol_sin_explicar_cuenta_como_autorizado():
+    aj = _ajustes(("x1", "Colon", dt.date(2026, 10, 17), -19.5, "Tarde", ""))  # queda -0.50 (<= S/ 1)
+    cortes, _ = marcar_autorizados(calcular_cortes(_reg_dif(), ["local", "fecha", "turno"]), None, aj)
+    assert bool(cortes.loc[cortes["id_cierre"] == "c1", "_autorizado"].iloc[0])
+
+
+def test_marcar_autorizados_no_toca_el_estado_de_secuencia_ni_lo_cuadrado():
+    reg = pd.DataFrame([
+        _r("a1", "Colon", "2026-10-17", "Tarde", "Apertura", "Pedro", "14:30", 3000, 500),
+        _r("c1", "Colon", "2026-10-17", "Tarde", "Cierre", "Pedro", "21:00", 3000, 500, ops=30),  # cuadrado
+    ])
+    aj = _ajustes(("x1", "Colon", dt.date(2026, 10, 17), 50.0, "Tarde", ""))
+    cortes, saltos = marcar_autorizados(calcular_cortes(reg, ["local", "fecha", "turno"]), calcular_saltos(reg), aj)
+    assert not cortes["_autorizado"].any()  # ya estaba cuadrado: no se marca como autorizado
+    assert saltos.empty and "_autorizado" in saltos.columns
+
+
+def test_corte_en_el_bot_muestra_si_esta_autorizado():
+    aj = _ajustes(("x1", "Colon-H0715", dt.date(2026, 10, 18), -20.0, "Mañana", ""))
+    txt = rp.reporte_corte(_registros(), "colon", aj)
+    assert "Diferencia: -20.00 🔷 Autorizada (ajuste -20.00)" in txt
+    assert "Diferencia: -20.00 🔴" in rp.reporte_corte(_registros(), "colon", _ajustes())

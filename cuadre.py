@@ -1078,3 +1078,56 @@ def texto_alerta_diferencia(a: dict, enlace: str = "") -> str:
     if enlace:
         lineas.append(f"🔗 Revisar: {enlace}")
     return "\n".join(lineas)
+
+
+# ---------------------------------------------------------------------
+# Diferencias ya AUTORIZADAS por administracion (los retiros/ingresos que se registran en
+# el Dashboard). Misma regla que usa el Dashboard:
+#  - Corte: el ajuste del TURNO (local + fecha + turno) se resta de la suma de las diferencias
+#    de ese turno; si lo que queda es de S/ UMBRAL_VERDE o menos, el turno esta autorizado y sus
+#    cortes en "Diferencia" (o "Cerro otro nombre" con diferencia real) pasan a autorizados.
+#  - Salto (entre cierres): el ajuste de ESE salto (por id del Cierre) -- y, para los "Entre
+#    dias", los ajustes viejos por local + fecha -- se resta de su diferencia.
+# ---------------------------------------------------------------------
+def marcar_autorizados(cortes, saltos, ajustes):
+    """Devuelve (cortes, saltos) con columnas extra: `_ajuste` (lo autorizado), `_restante`
+    (lo que sigue sin explicar) y `_autorizado` (bool). `ajustes` puede ser None o vacio."""
+    cortes = pd.DataFrame() if cortes is None else cortes.copy()
+    saltos = pd.DataFrame() if saltos is None else saltos.copy()
+    por_turno: dict = {}
+    por_salto: dict = {}
+    viejo: dict = {}
+    if ajustes is not None and not ajustes.empty:
+        por_turno = ajustes[ajustes["turno"] != ""].groupby(["local", "fecha", "turno"])["monto"].sum().to_dict()
+        por_salto = ajustes[ajustes["salto_id_cierre"] != ""].groupby("salto_id_cierre")["monto"].sum().to_dict()
+        sin_clave = ajustes[(ajustes["turno"] == "") & (ajustes["salto_id_cierre"] == "")]
+        viejo = sin_clave.groupby(["local", "fecha"])["monto"].sum().to_dict()
+
+    if cortes.empty:
+        for col, vacio in (("_ajuste", float), ("_restante", float), ("_autorizado", bool)):
+            cortes[col] = pd.Series(dtype=vacio)
+    else:
+        total_turno = cortes.groupby(["local", "fecha", "turno"])["diferencia"].sum().to_dict()
+        llaves = list(zip(cortes["local"], cortes["fecha"], cortes["turno"]))
+        cortes["_ajuste"] = [float(por_turno.get(k, 0.0)) for k in llaves]
+        cortes["_restante"] = [float(total_turno.get(k, 0.0)) - a for k, a in zip(llaves, cortes["_ajuste"])]
+        dif = cortes["diferencia"].fillna(0).abs()
+        explicado = (cortes["_ajuste"] != 0) & (cortes["_restante"].abs() <= UMBRAL_VERDE)
+        cortes["_autorizado"] = explicado & (
+            (cortes["estado"] == ESTADO_GRANDE) | ((cortes["estado"] == ESTADO_NOMBRE_DISTINTO) & (dif > UMBRAL_VERDE))
+        )
+
+    if saltos.empty:
+        for col, vacio in (("_ajuste", float), ("_restante", float), ("_autorizado", bool)):
+            saltos[col] = pd.Series(dtype=vacio)
+    else:
+        ajuste = []
+        for _, s in saltos.iterrows():
+            a = float(por_salto.get(s["id_cierre"], 0.0))
+            if s["tipo_salto"] == "Entre días":
+                a += float(viejo.get((s["local"], s["fecha_cierre"]), 0.0))
+            ajuste.append(a)
+        saltos["_ajuste"] = ajuste
+        saltos["_restante"] = saltos["diferencia"].fillna(0) - saltos["_ajuste"]
+        saltos["_autorizado"] = (saltos["_ajuste"] != 0) & (saltos["_restante"].abs() <= UMBRAL_VERDE) & saltos["diferencia"].notna()
+    return cortes, saltos

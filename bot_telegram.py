@@ -38,7 +38,7 @@ COMANDOS_MENU = [
     ("encuestas", "Encuestas del mes, pagos y nota NPS"),
     ("operaciones", "Operaciones de hoy y del mes vs meta"),
     ("solicitudes", "Pedidos de efectivo o saldo pendientes"),
-    ("diferencias", "Diferencias grandes de los últimos días"),
+    ("diferencias", "Diferencias grandes sin autorizar"),
     ("ayuda", "Ver todos los comandos"),
     ("id", "Ver tu chat id"),
 ]
@@ -99,7 +99,8 @@ def generar_respuesta(comando: str, argumento: str) -> str:
         registros, config = _fresco(sh.get_registros_df, sh.get_config_df)
         return rp.reporte_fondo(registros, config, hoy, argumento)
     if comando == "corte":
-        return rp.reporte_corte(_fresco(sh.get_registros_df), argumento)
+        registros, ajustes = _fresco(sh.get_registros_df, sh.get_ajustes_df)
+        return rp.reporte_corte(registros, argumento, ajustes)
     if comando == "encuestas":
         encuestas, notas = _fresco(sh.get_encuestas_df, sh.get_notas_df)
         return rp.reporte_encuestas(encuestas, notas, hoy, argumento)
@@ -109,15 +110,18 @@ def generar_respuesta(comando: str, argumento: str) -> str:
     if comando == "solicitudes":
         return rp.reporte_solicitudes(_fresco(sh.get_solicitudes_df), sh.ahora_local().replace(tzinfo=None))
     if comando == "diferencias":
-        partes = argumento.split()
-        dias = 7
-        filtro = []
-        for p in partes:
+        dias, filtro, todas = 7, [], False
+        for p in argumento.split():
             if p.isdigit():
                 dias = int(p)
+            elif p.lower() in ("todas", "todo", "todos"):
+                todas = True  # incluye tambien las que ya estan autorizadas
             else:
                 filtro.append(p)
-        return rp.reporte_diferencias(_fresco(sh.get_registros_df), hoy, dias, sh.umbral_alerta_diferencia(), " ".join(filtro))
+        registros, ajustes = _fresco(sh.get_registros_df, sh.get_ajustes_df)
+        return rp.reporte_diferencias(
+            registros, hoy, dias, sh.umbral_alerta_diferencia(), " ".join(filtro), ajustes, todas
+        )
     return "No conozco ese comando. Escribe /ayuda para ver los que hay."
 
 
