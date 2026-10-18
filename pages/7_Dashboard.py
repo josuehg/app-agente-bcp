@@ -528,6 +528,868 @@ with tab_resumen:
         int(df_filtrado["num_operaciones"].fillna(0).sum()),
     )
 
+# Las pestañas que NO dependen de los calculos de Cuadre/Operaciones/Liquidacion van antes que
+# ellos a proposito: Streamlit dibuja la pagina en el orden del codigo y todas las pestañas se
+# calculan en cada clic; asi Personal, Incentivos, Comisiones, Registros y Respaldo no esperan a
+# que termine el cuadre.
+
+with tab_comisiones:
+    # -------------------------------------------------------------
+    # Comisiones estimadas (antes pages/8_Comisiones.py, movido acá
+    # como pestaña para no tener una pagina de administracion aparte).
+    #
+    # Estima cuanto genera cada local en comision, a partir del numero
+    # de operaciones registradas en los Cierres, multiplicado por una
+    # tarifa PROMEDIO por operacion (configurable por local en la hoja
+    # 'Config', columna 'soles_por_operacion'). La comision real del
+    # BCP varia por tipo de operacion y por contrato, asi que esto es
+    # un ESTIMADO, para tener una idea del mes, no el numero exacto.
+    #
+    # Usa los mismos filtros de Locales / Rango de fechas del sidebar
+    # que el resto del Dashboard (no un sidebar aparte, para no
+    # duplicar los mismos widgets dos veces en la misma pagina).
+    # -------------------------------------------------------------
+    st.subheader("💰 Comisiones estimadas")
+
+    cierres_comision = df[
+        (df["tipo"] == "Cierre")
+        & (df["local"].isin(locales_sel))
+        & (df["fecha"].between(desde, hasta))
+    ].copy()
+    cierres_comision["num_operaciones"] = pd.to_numeric(
+        cierres_comision["num_operaciones"], errors="coerce"
+    ).fillna(0)
+
+    ops_por_local = (
+        cierres_comision.groupby("local")["num_operaciones"].sum().rename("operaciones").reset_index()
+    )
+
+    cfg = config_df.drop_duplicates("local").set_index("local")
+    # Tolerante a que Config todavia no tenga las columnas nuevas (caché vieja
+    # tras un deploy): si faltan, se cae al tipo por nombre y la tarifa default.
+    tipo_por_local = cfg["tipo_agente"].to_dict() if "tipo_agente" in cfg.columns else {}
+    tarifa_por_local = (
+        pd.to_numeric(cfg["soles_por_operacion"], errors="coerce").to_dict()
+        if "soles_por_operacion" in cfg.columns
+        else {}
+    )
+
+
+    def _tipo_comision(local):
+        return tipo_por_local.get(local) or sh._tipo_agente_por_nombre(local)
+
+
+    def _tarifa_comision(local):
+        valor = tarifa_por_local.get(local)
+        if valor is None or pd.isna(valor) or valor <= 0:
+            return sh.TARIFA_DEFAULT.get(_tipo_comision(local), sh.TARIFA_DEFAULT["normal"])
+        return float(valor)
+
+
+    ops_por_local["tipo_agente"] = ops_por_local["local"].map(_tipo_comision)
+    # astype(float): sin ningun Cierre en el rango (p. ej. el dia 1 del mes) la tabla
+    # queda vacia y estas columnas salian como texto, lo que rompia la multiplicacion.
+    ops_por_local["operaciones"] = ops_por_local["operaciones"].astype(float)
+    ops_por_local["soles_por_operacion"] = ops_por_local["local"].map(_tarifa_comision).astype(float)
+    ops_por_local["comision"] = (
+        ops_por_local["operaciones"] * ops_por_local["soles_por_operacion"]
+    )
+    ops_por_local = ops_por_local.sort_values("comision", ascending=False)
+
+    st.caption(
+        f"Rango: **{desde}** a **{hasta}**. Comisión = operaciones × tarifa promedio por "
+        "operación (configurable por local en la hoja `Config`, columna "
+        "`soles_por_operacion`). Es un **estimado**."
+    )
+
+    # --- KPIs ---
+    total_ops_comision = int(ops_por_local["operaciones"].sum())
+    total_comision = float(ops_por_local["comision"].sum())
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Operaciones totales", f"{total_ops_comision:,}")
+    col2.metric("Comisión estimada total", f"S/ {total_comision:,.2f}")
+    dias_rango = max((hasta - desde).days + 1, 1)
+    col3.metric("Promedio por día", f"S/ {total_comision / dias_rango:,.2f}")
+
+    # --- Por tipo de agente ---
+    por_tipo = (
+        ops_por_local.groupby("tipo_agente")
+        .agg(operaciones=("operaciones", "sum"), comision=("comision", "sum"))
+        .reset_index()
+    )
+    st.markdown("**Por tipo de agente**")
+    st.dataframe(
+        sh.arrow_safe(
+            por_tipo.rename(
+                columns={
+                    "tipo_agente": "Tipo",
+                    "operaciones": "Operaciones",
+                    "comision": "Comisión estimada (S/)",
+                }
+            )
+        ),
+        width="stretch",
+        hide_index=True,
+    )
+
+    # --- Por local ---
+    st.markdown("**Por local**")
+    st.dataframe(
+        sh.arrow_safe(
+            ops_por_local.rename(
+                columns={
+                    "local": "Local",
+                    "tipo_agente": "Tipo",
+                    "soles_por_operacion": "Tarifa (S/ x op)",
+                    "operaciones": "Operaciones",
+                    "comision": "Comisión estimada (S/)",
+                }
+            )
+        ),
+        width="stretch",
+        hide_index=True,
+    )
+
+    if not ops_por_local.empty:
+        fig_comision = px.bar(
+            ops_por_local,
+            x="local",
+            y="comision",
+            color="tipo_agente",
+            labels={"local": "Local", "comision": "Comisión estimada (S/)", "tipo_agente": "Tipo"},
+        )
+        st.plotly_chart(fig_comision, width="stretch")
+
+    st.caption(
+        "Para ajustar una tarifa: en la hoja `Config` del Google Sheet, escribe el "
+        "valor en la columna `soles_por_operacion` de ese local (y `tipo_agente` = "
+        "superagente / normal). Si lo dejas vacío, se usa el promedio por defecto "
+        f"(superagente S/ {sh.TARIFA_DEFAULT['superagente']:.3f}, normal "
+        f"S/ {sh.TARIFA_DEFAULT['normal']:.3f})."
+    )
+
+    st.divider()
+    st.subheader("🧮 Calibrar la tarifa real por local")
+    st.caption(
+        "El banco no da el detalle, así que se calibra con lo que sí tienes: lo que te pagó de "
+        "comisión y las operaciones que registra la app (las de los Cierres). "
+        "**Pon el rango de fechas de la izquierda igual al mes de esa comisión** (por ejemplo, el "
+        "mes pasado completo)."
+    )
+    _cierres_cal = df_filtrado[df_filtrado["tipo"] == "Cierre"].copy()
+    _cierres_cal["num_operaciones"] = pd.to_numeric(_cierres_cal["num_operaciones"], errors="coerce").fillna(0)
+    _ops_app = _cierres_cal.groupby("local")["num_operaciones"].sum()
+    base_cal = config_df[["local", "tipo_agente", "soles_por_operacion"]].rename(
+        columns={"local": "Local", "tipo_agente": "Tipo", "soles_por_operacion": "Tarifa vigente (S/)"}
+    )
+    base_cal["Operaciones en la app"] = base_cal["Local"].map(_ops_app).fillna(0).astype(int)
+    base_cal["Comisión estimada hoy (S/)"] = base_cal["Operaciones en la app"] * base_cal["Tarifa vigente (S/)"]
+
+    modo_cal = st.radio(
+        "¿Qué dato tienes?",
+        ["Solo el total de la comisión (todos los locales)", "La comisión de cada local"],
+        horizontal=True,
+        key="cal_modo",
+    )
+    cal_resultado = None   # DataFrame con Local y Tarifa nueva
+    if modo_cal.startswith("Solo el total"):
+        total_pagado = st.number_input(
+            "Comisión total que te pagó BCP en ese mes (S/)", min_value=0.0, value=0.0, step=100.0,
+            key="cal_total",
+        )
+        estimada = float(base_cal["Comisión estimada hoy (S/)"].sum())
+        st.caption(
+            f"Con las tarifas vigentes, la app estima **S/ {estimada:,.2f}** para este rango. "
+            "Se escala la tarifa de todos los locales por igual (respetando su diferencia entre "
+            "superagente y normal) para que la suma coincida con lo que realmente te pagaron."
+        )
+        if total_pagado > 0 and estimada > 0:
+            factor_cal = total_pagado / estimada
+            cal_resultado = base_cal.assign(**{"Tarifa nueva (S/)": base_cal["Tarifa vigente (S/)"] * factor_cal})
+            st.metric("Ajuste a las tarifas", f"{(factor_cal - 1) * 100:+.1f}%", f"S/ {total_pagado:,.2f} reales vs S/ {estimada:,.2f} estimados")
+    else:
+        por_local = base_cal.copy()
+        por_local["Comisión pagada (S/)"] = 0.0
+        cal_editado = st.data_editor(
+            por_local[["Local", "Tipo", "Tarifa vigente (S/)", "Operaciones en la app", "Comisión pagada (S/)"]],
+            hide_index=True,
+            width="stretch",
+            disabled=["Local", "Tipo", "Tarifa vigente (S/)", "Operaciones en la app"],
+            column_config={
+                "Tarifa vigente (S/)": st.column_config.NumberColumn(format="%.3f"),
+                "Comisión pagada (S/)": st.column_config.NumberColumn(min_value=0.0, step=10.0, format="%.2f"),
+            },
+            key="cal_tarifas_editor",
+        )
+        validas = cal_editado[
+            (cal_editado["Comisión pagada (S/)"] > 0) & (cal_editado["Operaciones en la app"] > 0)
+        ]
+        if validas.empty:
+            st.caption("Escribe la comisión pagada de al menos un local (con operaciones en el rango).")
+        else:
+            cal_resultado = validas.assign(
+                **{"Tarifa nueva (S/)": validas["Comisión pagada (S/)"] / validas["Operaciones en la app"]}
+            )
+
+    if cal_resultado is not None and not cal_resultado.empty:
+        cal_resultado = cal_resultado.assign(
+            **{"Cambio (%)": (cal_resultado["Tarifa nueva (S/)"] / cal_resultado["Tarifa vigente (S/)"] - 1) * 100}
+        )
+        st.dataframe(
+            sh.arrow_safe(cal_resultado[["Local", "Tipo", "Tarifa vigente (S/)", "Tarifa nueva (S/)", "Cambio (%)"]]),
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Tarifa vigente (S/)": st.column_config.NumberColumn(format="%.3f"),
+                "Tarifa nueva (S/)": st.column_config.NumberColumn(format="%.3f"),
+                "Cambio (%)": st.column_config.NumberColumn(format="%+.1f%%"),
+            },
+        )
+        st.caption(
+            "La tarifa se calcula sobre las operaciones que registra la app: es justo la que usan las "
+            "proyecciones, así que quedan en la misma vara. Si el personal anota de menos o de más, "
+            "la tarifa compensa (por eso es una tarifa «efectiva»)."
+        )
+        if st.button("💾 Guardar estas tarifas en Config", key="cal_guardar"):
+            try:
+                sh.guardar_tarifas(dict(zip(cal_resultado["Local"], cal_resultado["Tarifa nueva (S/)"])))
+                st.success("Tarifas guardadas en la hoja Config. Comisiones y Metas ya las usan.")
+            except (ValueError, RuntimeError) as error:
+                st.error(f"No se guardaron las tarifas: {error}")
+
+with tab_registros:
+    # -------------------------------------------------------------
+    # Tabla consolidada
+    # -------------------------------------------------------------
+    st.subheader("🗂️ Registros")
+    columnas_fotos = [c for c in df_filtrado.columns if c.startswith("foto_")]
+    st.dataframe(
+        sh.arrow_safe(df_filtrado.drop(columns=columnas_fotos)),
+        width="stretch",
+        hide_index=True,
+    )
+
+    with st.expander("Ver links de fotos de un registro"):
+        if not df_filtrado.empty:
+            id_elegido = st.selectbox("ID de registro", df_filtrado["id"])
+            fila = df_filtrado[df_filtrado["id"] == id_elegido].iloc[0]
+            for col in columnas_fotos:
+                if fila[col]:
+                    st.markdown(f"- [{col}]({fila[col]})")
+
+with tab_respaldo:
+    # -------------------------------------------------------------
+    # Respaldo: una copia del Google Sheet en Drive (con fecha y hora) y/o un
+    # ZIP de CSV para guardar en tu computador. Se hace a pedido, para no gastar
+    # lecturas de Google Sheets en cada recarga.
+    # -------------------------------------------------------------
+    st.subheader("💾 Respaldo de los datos")
+    st.caption(
+        "Haz una copia antes de cambios grandes y, como hábito, al cerrar cada mes. "
+        "El respaldo en Drive es una copia completa del Google Sheet; el ZIP trae los registros, "
+        "ajustes, encuestas, notas y personal en CSV (no incluye los PIN de los locales)."
+    )
+    rb1, rb2 = st.columns(2)
+    if rb1.button("Crear respaldo en Drive ahora", key="respaldo_drive"):
+        try:
+            with st.spinner("Copiando el Google Sheet…"):
+                _copia = sh.crear_respaldo_drive()
+            st.success(f"Respaldo creado: {_copia['name']}")
+            if _copia.get("webViewLink"):
+                st.markdown(f"[Abrir el respaldo]({_copia['webViewLink']})")
+        except Exception as error:
+            st.error(f"No se pudo crear el respaldo: {error}")
+    if rb2.button("Preparar descarga (ZIP de CSV)", key="respaldo_zip"):
+        try:
+            with st.spinner("Armando el ZIP…"):
+                st.session_state["respaldo_zip_bytes"] = sh.respaldo_zip_csv()
+        except Exception as error:
+            st.error(f"No se pudo preparar el ZIP: {error}")
+    if "respaldo_zip_bytes" in st.session_state:
+        st.download_button(
+            "Descargar respaldo (ZIP)",
+            data=st.session_state["respaldo_zip_bytes"],
+            file_name=f"respaldo_agente_bcp_{sh.hoy_local()}.zip",
+            mime="application/zip",
+        )
+
+
+with tab_incentivos:
+    # -------------------------------------------------------------
+    # Incentivos por encuestas NPS (S/ 10 por encuesta calificada 9 o 10)
+    #
+    # Viene del incentivo interno del negocio: reemplaza el Google Form
+    # aparte que se usaba para esto. El personal registra cada encuesta
+    # desde pages/4_Encuestas.py (con el PIN de su local); cambiar el
+    # estado de pago SOLO se hace aca, protegido con tu PIN de dueno, para
+    # que nadie pueda marcar su propio incentivo como pagado (o invalidarlo)
+    # sin que tu lo hayas revisado.
+    # -------------------------------------------------------------
+    st.subheader("⭐ Incentivos por encuestas NPS (S/ 10 c/u)")
+    if "msg_enc_guardada" in st.session_state:
+        st.toast(st.session_state.pop("msg_enc_guardada"), icon="✅")
+
+    ESTADOS_PAGO_ENCUESTA = ["Pendiente", "Pagada", "No válido"]
+
+    encuestas_df = sh.get_encuestas_df()
+    notas_df = sh.get_notas_df()
+    encuestas_df = sh.con_estado_nota(encuestas_df, notas_df)
+
+    # El incentivo solo se paga si la nota del LOCAL en ese mes (la manda el
+    # ejecutivo de BCP al cerrar el mes) es de UMBRAL_NOTA_LOCAL o mas.
+    st.markdown(
+        f"**Nota mensual de cada local (BCP)** — el incentivo se paga solo si es de {sh.UMBRAL_NOTA_LOCAL} o más (nota mínima)"
+    )
+    _mes_actual = sh.hoy_local().strftime("%Y-%m")
+    meses_nota = sorted(
+        ({_mes_actual} | set(encuestas_df["mes"].dropna())) if not encuestas_df.empty else {_mes_actual},
+        reverse=True,
+    )
+    st.caption(
+        "Una nota **Parcial** (avance del mes que te da BCP) solo informa al personal: no habilita "
+        "pagos. La **Final** (al cerrar el mes) es la que decide el incentivo. Cargar de nuevo el "
+        "mismo mes y local reemplaza la anterior del mismo tipo."
+    )
+    with st.form("form_nota_local", clear_on_submit=True):
+        n1, n2, n3 = st.columns(3)
+        tipo_nota = n1.selectbox("Tipo", ["Final", "Parcial"])
+        mes_nota = n2.selectbox("Mes", meses_nota)
+        local_nota = n3.selectbox("Local", config_df["local"].tolist())
+        n4, n5, n6 = st.columns(3)
+        valor_nota = n4.number_input("Nota", min_value=0.0, max_value=100.0, value=0.0, step=1.0)
+        fecha_corte_nota = n5.date_input("Al (solo para Parcial)", value=sh.hoy_local())
+        quien_nota = n6.text_input("Cargado por")
+        if st.form_submit_button("Guardar nota"):
+            if not quien_nota.strip():
+                st.error("Escribe quién carga la nota.")
+            else:
+                sh.guardar_nota(
+                    {
+                        "mes": mes_nota,
+                        "local": local_nota,
+                        "nota": valor_nota,
+                        "cargado_por": quien_nota.strip(),
+                        "timestamp": sh.ahora_local().replace(tzinfo=None).isoformat(timespec="seconds"),
+                        "tipo": tipo_nota,
+                        "fecha_corte": fecha_corte_nota.strftime("%d/%m") if tipo_nota == "Parcial" else "",
+                    }
+                )
+                st.success("Nota guardada.")
+                st.rerun()
+    if notas_df.empty:
+        st.caption("Todavía no hay notas cargadas: los incentivos quedan «Condicionados».")
+    else:
+        notas_vista = notas_df.sort_values(["mes", "local"], ascending=[False, True]).copy()
+        notas_vista["Estado"] = [
+            sh.estado_parcial(n) if t == "Parcial" else sh.estado_nota(n)
+            for n, t in zip(notas_vista["nota"], notas_vista["tipo"])
+        ]
+        st.dataframe(
+            sh.arrow_safe(
+                notas_vista[["mes", "local", "tipo", "nota", "Estado", "fecha_corte", "cargado_por"]].rename(
+                    columns={"mes": "Mes", "local": "Local", "tipo": "Tipo", "nota": "Nota",
+                             "fecha_corte": "Al", "cargado_por": "Cargado por"}
+                )
+            ),
+            width="stretch",
+            hide_index=True,
+        )
+
+    if encuestas_df.empty:
+        st.caption("Todavia no se ha registrado ninguna encuesta NPS.")
+    else:
+        pendientes_todas_df = encuestas_df[encuestas_df["estado_pago"] == "Pendiente"]
+        pendientes_df = pendientes_todas_df[pendientes_todas_df["estado_nota"] == "Aprobado"]
+        condicionadas_df = pendientes_todas_df[pendientes_todas_df["estado_nota"] == "Condicionado"]
+        no_aprobadas_df = pendientes_todas_df[pendientes_todas_df["estado_nota"] == "No aprobado"]
+        pagadas_df = encuestas_df[encuestas_df["estado_pago"] == "Pagada"]
+        no_validas_df = encuestas_df[encuestas_df["estado_pago"] == "No válido"]
+
+        colA, colB, colC, colD = st.columns(4)
+        colA.metric("Encuestas totales", len(encuestas_df))
+        colB.metric(
+            "Por pagar (local aprobado)",
+            f"{len(pendientes_df)} (S/ {pendientes_df['incentivo'].sum():,.2f})",
+        )
+        colC.metric(
+            "Ya pagadas",
+            f"{len(pagadas_df)} (S/ {pagadas_df['incentivo'].sum():,.2f})",
+        )
+        colD.metric("No validas", len(no_validas_df))
+        colE, colF = st.columns(2)
+        colE.metric(
+            "Condicionadas (falta la nota del local)",
+            f"{len(condicionadas_df)} (S/ {condicionadas_df['incentivo'].sum():,.2f})",
+        )
+        colF.metric(
+            "No se pagan (nota del local no aprobada)",
+            f"{len(no_aprobadas_df)} (S/ {no_aprobadas_df['incentivo'].sum():,.2f})",
+        )
+
+        st.caption("Cuanto se le debe a cada trabajador (solo lo pendiente y con local aprobado):")
+        if pendientes_df.empty:
+            st.success("No hay incentivos por pagar ahora. 👍")
+        else:
+            resumen_por_nombre = (
+                pendientes_df.assign(medio_pago=pendientes_df["medio_pago"].replace("", "Sin definir"))
+                .groupby(["local", "nombre", "medio_pago"])["incentivo"]
+                .agg(["count", "sum"])
+                .reset_index()
+                .rename(
+                    columns={
+                        "local": "Local",
+                        "nombre": "Nombre",
+                        "medio_pago": "Forma de pago",
+                        "count": "Encuestas pendientes",
+                        "sum": "Monto pendiente (S/)",
+                    }
+                )
+                .sort_values("Monto pendiente (S/)", ascending=False)
+            )
+            st.dataframe(sh.arrow_safe(resumen_por_nombre), width="stretch", hide_index=True)
+
+        st.markdown("**Detalle de encuestas (ver capturas y cambiar estado):**")
+        for _, fila_encuesta in encuestas_df.sort_values("timestamp", ascending=False).iterrows():
+            _sube = fila_encuesta["timestamp"]
+            _otro_mes = pd.notna(_sube) and (_sube.year, _sube.month) != (
+                fila_encuesta["fecha"].year, fila_encuesta["fecha"].month
+            )
+            titulo_encuesta = (
+                f"{'⚠️ ' if _otro_mes else ''}{fila_encuesta['fecha']} · {fila_encuesta['local']} · "
+                f"{fila_encuesta['nombre']} "
+                f"· Nota {fila_encuesta['nota']} · {fila_encuesta['estado_visible']} "
+                f"· {fila_encuesta['medio_pago'] or 'Sin forma de pago'}"
+            )
+            with st.expander(titulo_encuesta):
+                # Chicas por defecto; con el check se ven a ancho completo. Las
+                # sirve la app (no un link de Drive), asi funciona aunque la
+                # carpeta de Drive no este compartida.
+                id_enc = fila_encuesta["id"]
+                for campo, etiqueta in [
+                    ("captura_correo", "Correo"),
+                    ("captura_mensaje_exito", "Mensaje de éxito"),
+                ]:
+                    imagen = sh.descargar_imagen_drive(fila_encuesta[campo])
+                    if imagen:
+                        grande = st.checkbox(
+                            f"🔍 Ver «{etiqueta}» más grande", key=f"zoom_{id_enc}_{campo}"
+                        )
+                        sh.mostrar_imagen(
+                            imagen, ancho_px=None if grande else 260, caption=etiqueta
+                        )
+                    else:
+                        st.caption(f"{etiqueta}: no se pudo cargar.")
+
+                st.caption(
+                    f"Fecha de la encuesta (la que declaró quien la subió): **{fila_encuesta['fecha']}** · "
+                    f"subida el {_sube:%Y-%m-%d %H:%M}"
+                    + (
+                        " · ⚠️ **es de un mes distinto al de la subida: verifícala con la captura del correo**"
+                        if _otro_mes
+                        else ""
+                    )
+                )
+                medios_opc = ["Sin definir"] + sh.MEDIOS_PAGO_ENCUESTA
+                medio_actual = fila_encuesta["medio_pago"] or "Sin definir"
+                estado_actual = fila_encuesta["estado_pago"]
+                if estado_actual not in ESTADOS_PAGO_ENCUESTA:
+                    estado_actual = "Pendiente"
+
+                # Los dos campos se guardan JUNTOS con un solo boton: asi cambiar
+                # uno no recarga toda la pagina (ni vuelve a leer Google Sheets)
+                # antes de poder cambiar el otro.
+                with st.form(f"form_enc_{fila_encuesta['id']}"):
+                    nueva_fecha = st.date_input(
+                        "Fecha de la encuesta",
+                        value=fila_encuesta["fecha"],
+                        max_value=sh.hoy_local(),
+                        key=f"fecha_{fila_encuesta['id']}",
+                        help="Corrígela si quien subió la encuesta puso la fecha de subida en vez de la fecha real "
+                        "del correo: de ella depende a qué mes y a qué nota NPS pertenece.",
+                    )
+                    nuevo_medio = st.selectbox(
+                        "Forma de pago",
+                        medios_opc,
+                        index=medios_opc.index(medio_actual) if medio_actual in medios_opc else 0,
+                        key=f"medio_{fila_encuesta['id']}",
+                    )
+                    nuevo_estado = st.selectbox(
+                        "Estado",
+                        ESTADOS_PAGO_ENCUESTA,
+                        index=ESTADOS_PAGO_ENCUESTA.index(estado_actual),
+                        key=f"estado_{fila_encuesta['id']}",
+                    )
+                    guardar_enc = st.form_submit_button("Guardar cambios")
+                if guardar_enc:
+                    cambio_medio = nuevo_medio != medio_actual and nuevo_medio != "Sin definir"
+                    cambio_estado = nuevo_estado != estado_actual
+                    cambio_fecha = nueva_fecha != fila_encuesta["fecha"]
+                    # Si se corrige la fecha, el pago se evalua con la nota del mes NUEVO.
+                    _estado_nota_nuevo = (
+                        sh.con_estado_nota(
+                            pd.DataFrame([{"fecha": nueva_fecha, "local": fila_encuesta["local"]}]),
+                            notas_df,
+                        )["estado_nota"].iloc[0]
+                        if cambio_fecha
+                        else fila_encuesta["estado_nota"]
+                    )
+                    if nuevo_estado == "Pagada" and (cambio_estado or cambio_fecha) and _estado_nota_nuevo != "Aprobado":
+                        st.error(
+                            "No se puede marcar como pagada: la nota del local en "
+                            f"{nueva_fecha:%Y-%m} está «{_estado_nota_nuevo}» "
+                            f"(la nota mínima para pagar es {sh.UMBRAL_NOTA_LOCAL})."
+                        )
+                    elif cambio_medio or cambio_estado or cambio_fecha:
+                        try:
+                            sh.actualizar_encuesta(
+                                fila_encuesta["id"],
+                                estado_pago=nuevo_estado if cambio_estado else None,
+                                medio_pago=nuevo_medio if cambio_medio else None,
+                                fecha=nueva_fecha.isoformat() if cambio_fecha else None,
+                                observaciones=(
+                                    (str(fila_encuesta["observaciones"] or "").strip() + " | ").lstrip(" |")
+                                    + f"Fecha corregida por administración de {fila_encuesta['fecha']} a {nueva_fecha}"
+                                    if cambio_fecha
+                                    else None
+                                ),
+                            )
+                        except (ValueError, RuntimeError) as error:
+                            st.error(f"No se guardó: {error}")
+                        else:
+                            _partes = []
+                            if cambio_medio:
+                                _partes.append(f"forma de pago: {nuevo_medio}")
+                            if cambio_estado:
+                                _partes.append(f"estado: {nuevo_estado}")
+                            if cambio_fecha:
+                                _partes.append(f"fecha: {nueva_fecha}")
+                            st.session_state["msg_enc_guardada"] = (
+                                f"Guardado y confirmado en la hoja ({', '.join(_partes)})."
+                            )
+                            st.rerun()
+                    else:
+                        st.info("No hay cambios para guardar.")
+
+
+with tab_personal:
+    # -------------------------------------------------------------
+    # Personal: une las distintas formas en que alguien firmo su nombre y
+    # desambigua nombres repetidos por local (p. ej. "Ana" en Colon es una
+    # persona y en Fer213 otra). Lo que se cargue aca se aplica a TODOS los
+    # reportes (Cuadre, Liquidacion, Historial...).
+    # -------------------------------------------------------------
+    st.subheader("👥 Personal")
+    st.caption(
+        "Cada persona tiene un nombre oficial, su local habitual y los nombres con los que "
+        "firmó antes (alias). Los registros se unifican por alias; si un alias lo comparten "
+        "dos personas (p. ej. «Ana»), se usa el local del registro para decidir cuál es."
+    )
+
+    personal_df = sh.get_personal_df()
+    if personal_df.empty:
+        st.info("Todavía no hay personal cargado. Agrega a la primera persona abajo.")
+    else:
+        st.dataframe(
+            sh.arrow_safe(
+                personal_df.rename(
+                    columns={"nombre": "Nombre oficial", "local": "Local habitual",
+                             "alias": "Alias (separados por |)", "activo": "Activo"}
+                )
+            ),
+            width="stretch",
+            hide_index=True,
+        )
+        st.caption("Para editar o desactivar a alguien, cambia su fila directo en la hoja «Personal» del Google Sheet.")
+
+    _conflictos = sh.conflictos_alias(personal_df)
+    if _conflictos:
+        st.error(
+            "Hay nombres que apuntan a más de una persona y la app no puede decidir cuál es "
+            "(por eso a veces salen separados en Liquidación). Usa «Fusionar personas duplicadas» "
+            "o «Reasignar un nombre registrado» para dejar una sola:"
+        )
+        for c in _conflictos:
+            st.markdown(f"- **{c['nombre']}** → " + " · ".join(c["personas"]))
+
+    # Todos los nombres que aparecen en la app, de DONDE vengan: registros de
+    # caja, encuestas y reposiciones (campo "Repuso" de los ajustes). Una
+    # persona puede estar solo en las encuestas, y de ahi sale "otra persona"
+    # en Liquidacion aunque no tenga registros de caja.
+    _fuentes_nombres = [
+        df[["nombre_original", "local", "nombre", "fecha"]].assign(Origen="Registros")
+    ]
+    _enc_nombres = sh.get_encuestas_df()
+    if not _enc_nombres.empty:
+        _fuentes_nombres.append(
+            _enc_nombres[["nombre_original", "local", "nombre", "fecha"]].assign(Origen="Encuestas")
+        )
+    _aj_nombres = sh.get_ajustes_df()
+    if not _aj_nombres.empty and (_aj_nombres["repuso_original"] != "").any():
+        _aj_rep = _aj_nombres[_aj_nombres["repuso_original"] != ""]
+        _fuentes_nombres.append(
+            _aj_rep[["repuso_original", "local", "repuso", "fecha"]]
+            .rename(columns={"repuso_original": "nombre_original", "repuso": "nombre"})
+            .assign(Origen="Reposiciones")
+        )
+    todos_nombres = pd.concat(_fuentes_nombres, ignore_index=True)
+
+    # Nombres que NO coinciden con ninguna persona/alias de la hoja Personal:
+    # son los que hacen aparecer "mas nombres" en Liquidacion y los reportes.
+    _mapa_pers = sh.mapa_alias(personal_df)
+    sin_asignar = (
+        todos_nombres.groupby(["nombre_original", "local"])
+        .agg(Apariciones=("nombre", "size"), Origen=("Origen", lambda s: ", ".join(sorted(set(s)))))
+        .reset_index()
+    )
+    sin_asignar = sin_asignar[
+        [sh.clave_alias(n) not in _mapa_pers for n in sin_asignar["nombre_original"]]
+    ]
+    if sin_asignar.empty:
+        st.success("Todos los nombres registrados están asignados a una persona del Personal.")
+    else:
+        oficiales_pers = sorted(set(personal_df["nombre"])) if not personal_df.empty else []
+        sin_asignar = sin_asignar.assign(
+            Sugerencia=[sh.sugerir_oficial(n, oficiales_pers) for n in sin_asignar["nombre_original"]]
+        ).rename(columns={"nombre_original": "Nombre registrado", "local": "Local"})
+        st.warning(
+            f"{len(sin_asignar)} nombre(s) registrado(s) no están asignados a nadie del Personal, "
+            "por eso salen como personas aparte en Liquidación y en los reportes."
+        )
+        st.dataframe(sh.arrow_safe(sin_asignar), width="stretch", hide_index=True)
+        if oficiales_pers:
+            u1, u2, u3 = st.columns([2, 2, 1])
+            nombre_sin = u1.selectbox(
+                "Nombre registrado", sin_asignar["Nombre registrado"].tolist(), key="alias_nombre_sin"
+            )
+            sugerido = sin_asignar.loc[sin_asignar["Nombre registrado"] == nombre_sin, "Sugerencia"].iloc[0]
+            etiquetas_pers = [f"{r['nombre']} · {r['local']}" for _, r in personal_df.iterrows()]
+            idx_sug = next(
+                (i for i, r in enumerate(personal_df.itertuples()) if r.nombre == sugerido), 0
+            )
+            destino = u2.selectbox(
+                "Es en realidad…", range(len(etiquetas_pers)),
+                format_func=lambda i: etiquetas_pers[i], index=idx_sug,
+                key=f"alias_destino_{nombre_sin}",
+            )
+            u3.write("")
+            if u3.button("Unir", key="alias_unir"):
+                fila_dest = personal_df.iloc[destino]
+                alias_nuevos = [a for a in fila_dest["alias"].split("|") if a.strip()]
+                if nombre_sin not in alias_nuevos:
+                    alias_nuevos.append(nombre_sin)
+                sh.actualizar_persona(
+                    fila_dest["nombre"], fila_dest["local"],
+                    {"nombre": fila_dest["nombre"], "local": fila_dest["local"],
+                     "alias": "|".join(alias_nuevos), "activo": fila_dest["activo"] or "Sí"},
+                )
+                st.success(f"«{nombre_sin}» ahora se cuenta como {fila_dest['nombre']}.")
+                st.rerun()
+        st.caption("Si es una persona nueva, agrégala más abajo en «Agregar persona».")
+
+    if not personal_df.empty:
+        st.markdown("**Reasignar un nombre registrado**")
+        st.caption(
+            "Para cualquier nombre (de registros de caja, encuestas o reposiciones), esté ya asignado o no: se muestra a quién "
+            "se cuenta hoy y puedes cambiarlo. Sirve cuando un nombre quedó unido a la persona "
+            "equivocada."
+        )
+        cuenta_hoy = todos_nombres.drop_duplicates("nombre_original").set_index("nombre_original")["nombre"].to_dict()
+        etiquetas_reas = [f"{r['nombre']} · {r['local']}" for _, r in personal_df.iterrows()]
+        ra, rb, rc = st.columns([2, 2, 1])
+        nombre_reas = ra.selectbox(
+            "Nombre registrado",
+            sorted(cuenta_hoy),
+            format_func=lambda n: f"{n}  →  hoy cuenta como {cuenta_hoy.get(n, n)}",
+            key="reasignar_nombre",
+        )
+        destino_reas = rb.selectbox(
+            "Contarlo como…", range(len(etiquetas_reas)),
+            format_func=lambda i: etiquetas_reas[i], key=f"reasignar_destino_{nombre_reas}",
+        )
+        rc.write("")
+        if rc.button("Reasignar", key="reasignar_btn"):
+            clave_reas = sh.clave_alias(nombre_reas)
+            oficial_de = [p["nombre"] for _, p in personal_df.iterrows() if sh.clave_alias(p["nombre"]) == clave_reas]
+            if oficial_de and sh.clave_alias(personal_df.iloc[destino_reas]["nombre"]) != clave_reas:
+                st.error(
+                    f"«{nombre_reas}» es el nombre oficial de una persona cargada: para unirla con "
+                    "otra usa «Fusionar personas duplicadas»."
+                )
+            else:
+                nuevos_alias = {}
+                for pos, (_, p) in enumerate(personal_df.iterrows()):
+                    lista = [a for a in p["alias"].split("|") if a.strip() and sh.clave_alias(a) != clave_reas]
+                    nuevos_alias[pos] = lista
+                if sh.clave_alias(personal_df.iloc[destino_reas]["nombre"]) != clave_reas:
+                    nuevos_alias[destino_reas].append(nombre_reas)
+                for pos, (_, p) in enumerate(personal_df.iterrows()):
+                    if "|".join(nuevos_alias[pos]) != p["alias"]:
+                        sh.actualizar_persona(
+                            p["nombre"], p["local"],
+                            {"nombre": p["nombre"], "local": p["local"],
+                             "alias": "|".join(nuevos_alias[pos]), "activo": p["activo"] or "Sí"},
+                        )
+                st.success(f"«{nombre_reas}» ahora se cuenta como {personal_df.iloc[destino_reas]['nombre']}.")
+                st.rerun()
+
+    st.markdown("**Nombres tal como se registraron**")
+    detectados = (
+        todos_nombres.groupby(["nombre_original", "local"])
+        .agg(Apariciones=("nombre", "size"), Ultimo=("fecha", "max"), Se_muestra_como=("nombre", "first"),
+             Origen=("Origen", lambda s: ", ".join(sorted(set(s)))))
+        .reset_index()
+        .rename(columns={"nombre_original": "Nombre registrado", "local": "Local",
+                         "Ultimo": "Última vez", "Se_muestra_como": "Se muestra como"})
+        .sort_values(["Nombre registrado", "Local"])
+    )
+    st.dataframe(sh.arrow_safe(detectados), width="stretch", hide_index=True)
+
+    st.markdown("**Días fuera de su local habitual (rotaciones)**")
+    habituales = (
+        personal_df[personal_df["nombre"] != ""]
+        .drop_duplicates("nombre")[["nombre", "local"]]
+        .rename(columns={"local": "Local habitual"})
+    )
+    rotaciones = df[df["fecha"].between(desde, hasta)].merge(habituales, on="nombre", how="inner")
+    rotaciones = rotaciones[rotaciones["local"] != rotaciones["Local habitual"]]
+    if rotaciones.empty:
+        st.caption("Sin rotaciones en el rango de fechas seleccionado (o falta cargar el Personal).")
+    else:
+        st.dataframe(
+            sh.arrow_safe(
+                rotaciones.groupby(["fecha", "nombre", "local", "Local habitual", "turno"])
+                .agg(Registros=("id", "count"))
+                .reset_index()
+                .sort_values(["fecha", "nombre"], ascending=[False, True])
+                .rename(columns={"fecha": "Fecha", "nombre": "Persona",
+                                 "local": "Registró en", "turno": "Turno"})
+            ),
+            width="stretch",
+            hide_index=True,
+        )
+
+    if len(personal_df) >= 2:
+        st.markdown("**Fusionar personas duplicadas**")
+        st.caption(
+            "Si una misma persona quedó cargada dos o más veces (por ejemplo «Yovana», «Yovana Sumir» "
+            "y «Yovana Sumiri»), elige cuál se queda y cuáles se unen a ella. Los nombres de las "
+            "unidas pasan a ser alias de la que se queda, así que sus registros se cuentan juntos."
+        )
+        etiquetas_fus = [f"{r['nombre']} · {r['local']}" for _, r in personal_df.iterrows()]
+        quedan = st.selectbox(
+            "Persona que se queda (nombre oficial correcto)", range(len(etiquetas_fus)),
+            format_func=lambda i: etiquetas_fus[i], key="fusion_destino",
+        )
+        a_unir = st.multiselect(
+            "Personas que se unen a ella (se quitan de la lista)",
+            [i for i in range(len(etiquetas_fus)) if i != quedan],
+            format_func=lambda i: etiquetas_fus[i], key=f"fusion_origen_{quedan}",
+        )
+        confirma_fusion = st.checkbox(
+            "Confirmo que son la misma persona", key=f"fusion_confirma_{quedan}"
+        )
+        if st.button("Fusionar", key="fusion_btn"):
+            if not a_unir:
+                st.error("Elige al menos una persona para unir.")
+            elif not confirma_fusion:
+                st.error("Marca la casilla de confirmación.")
+            else:
+                destino_f = personal_df.iloc[quedan]
+                alias_f = [a for a in destino_f["alias"].split("|") if a.strip()]
+                for i in a_unir:
+                    origen = personal_df.iloc[i]
+                    for a in [origen["nombre"]] + [x for x in origen["alias"].split("|") if x.strip()]:
+                        if a != destino_f["nombre"] and a not in alias_f:
+                            alias_f.append(a)
+                sh.actualizar_persona(
+                    destino_f["nombre"], destino_f["local"],
+                    {"nombre": destino_f["nombre"], "local": destino_f["local"],
+                     "alias": "|".join(alias_f), "activo": destino_f["activo"] or "Sí"},
+                )
+                for i in a_unir:
+                    origen = personal_df.iloc[i]
+                    sh.eliminar_persona(origen["nombre"], origen["local"])
+                st.success(f"Listo: ahora se cuentan juntos como {destino_f['nombre']}.")
+                st.rerun()
+
+    st.markdown("**Agregar persona**")
+    with st.form("form_persona", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        oficiales_existentes = sorted(set(personal_df["nombre"])) if not personal_df.empty else []
+        nombre_existente = c1.selectbox(
+            "Nombre oficial (elige uno ya cargado)", ["— Nueva persona —"] + oficiales_existentes,
+            help="Útil si la misma persona trabaja en otro local o quieres evitar errores al escribirlo.",
+        )
+        nombre_nuevo = c1.text_input(
+            "…o escribe el nombre oficial de una persona nueva", placeholder="Ej: Ana León"
+        )
+        nombre_oficial = nombre_nuevo.strip() or (
+            "" if nombre_existente == "— Nueva persona —" else nombre_existente
+        )
+        local_habitual = c2.selectbox("Local habitual", config_df["local"].tolist())
+        alias_sel = st.multiselect(
+            "Alias (nombres con los que ha firmado)",
+            sorted(todos_nombres["nombre_original"].unique()),
+            help="Elige todas las formas en que aparece su nombre en los registros.",
+        )
+        activa = st.checkbox("Sigue trabajando", value=True)
+        if st.form_submit_button("Agregar persona"):
+            if not nombre_oficial.strip():
+                st.error("Elige un nombre oficial de la lista o escribe el de una persona nueva.")
+            elif (
+                not personal_df.empty
+                and ((personal_df["nombre"].str.lower() == nombre_oficial.strip().lower())
+                     & (personal_df["local"] == local_habitual)).any()
+            ):
+                st.error("Esa persona ya está cargada en ese local.")
+            else:
+                sh.guardar_persona(
+                    {
+                        "nombre": nombre_oficial.strip(),
+                        "local": local_habitual,
+                        "alias": "|".join(alias_sel),
+                        "activo": "Sí" if activa else "No",
+                    }
+                )
+                st.success("Persona agregada.")
+                st.rerun()
+
+    if not personal_df.empty:
+        st.markdown("**Editar persona**")
+        etiquetas_personal = [f"{r['nombre']} · {r['local']}" for _, r in personal_df.iterrows()]
+        idx_edit = st.selectbox(
+            "Persona a editar", range(len(etiquetas_personal)),
+            format_func=lambda i: etiquetas_personal[i], key="persona_a_editar",
+        )
+        actual = personal_df.iloc[idx_edit]
+        alias_actuales = [a for a in actual["alias"].split("|") if a.strip()]
+        opciones_alias = sorted(set(todos_nombres["nombre_original"].unique()) | set(alias_actuales))
+        locales_cfg = config_df["local"].tolist()
+        with st.form(f"form_editar_persona_{idx_edit}"):
+            e1, e2 = st.columns(2)
+            nuevo_nombre = e1.text_input("Nombre oficial", value=actual["nombre"])
+            nuevo_local = e2.selectbox(
+                "Local habitual", locales_cfg,
+                index=locales_cfg.index(actual["local"]) if actual["local"] in locales_cfg else 0,
+            )
+            nuevos_alias = st.multiselect("Alias", opciones_alias, default=alias_actuales)
+            sigue = st.checkbox("Sigue trabajando", value=actual["activo"].lower() not in {"no", "false", "0"})
+            if st.form_submit_button("Guardar cambios"):
+                if not nuevo_nombre.strip():
+                    st.error("Escribe el nombre oficial.")
+                else:
+                    sh.actualizar_persona(
+                        actual["nombre"], actual["local"],
+                        {
+                            "nombre": nuevo_nombre.strip(),
+                            "local": nuevo_local,
+                            "alias": "|".join(nuevos_alias),
+                            "activo": "Sí" if sigue else "No",
+                        },
+                    )
+                    st.success("Cambios guardados.")
+                    st.rerun()
+
 with tab_operaciones:
     # -------------------------------------------------------------
     # Graficos
@@ -2428,860 +3290,3 @@ with tab_sucursales:
                 hide_index=True,
                 column_config={"Diferencia (S/)": st.column_config.NumberColumn(format="%+.2f")},
             )
-
-with tab_comisiones:
-    # -------------------------------------------------------------
-    # Comisiones estimadas (antes pages/8_Comisiones.py, movido acá
-    # como pestaña para no tener una pagina de administracion aparte).
-    #
-    # Estima cuanto genera cada local en comision, a partir del numero
-    # de operaciones registradas en los Cierres, multiplicado por una
-    # tarifa PROMEDIO por operacion (configurable por local en la hoja
-    # 'Config', columna 'soles_por_operacion'). La comision real del
-    # BCP varia por tipo de operacion y por contrato, asi que esto es
-    # un ESTIMADO, para tener una idea del mes, no el numero exacto.
-    #
-    # Usa los mismos filtros de Locales / Rango de fechas del sidebar
-    # que el resto del Dashboard (no un sidebar aparte, para no
-    # duplicar los mismos widgets dos veces en la misma pagina).
-    # -------------------------------------------------------------
-    st.subheader("💰 Comisiones estimadas")
-
-    cierres_comision = df[
-        (df["tipo"] == "Cierre")
-        & (df["local"].isin(locales_sel))
-        & (df["fecha"].between(desde, hasta))
-    ].copy()
-    cierres_comision["num_operaciones"] = pd.to_numeric(
-        cierres_comision["num_operaciones"], errors="coerce"
-    ).fillna(0)
-
-    ops_por_local = (
-        cierres_comision.groupby("local")["num_operaciones"].sum().rename("operaciones").reset_index()
-    )
-
-    cfg = config_df.drop_duplicates("local").set_index("local")
-    # Tolerante a que Config todavia no tenga las columnas nuevas (caché vieja
-    # tras un deploy): si faltan, se cae al tipo por nombre y la tarifa default.
-    tipo_por_local = cfg["tipo_agente"].to_dict() if "tipo_agente" in cfg.columns else {}
-    tarifa_por_local = (
-        pd.to_numeric(cfg["soles_por_operacion"], errors="coerce").to_dict()
-        if "soles_por_operacion" in cfg.columns
-        else {}
-    )
-
-
-    def _tipo_comision(local):
-        return tipo_por_local.get(local) or sh._tipo_agente_por_nombre(local)
-
-
-    def _tarifa_comision(local):
-        valor = tarifa_por_local.get(local)
-        if valor is None or pd.isna(valor) or valor <= 0:
-            return sh.TARIFA_DEFAULT.get(_tipo_comision(local), sh.TARIFA_DEFAULT["normal"])
-        return float(valor)
-
-
-    ops_por_local["tipo_agente"] = ops_por_local["local"].map(_tipo_comision)
-    # astype(float): sin ningun Cierre en el rango (p. ej. el dia 1 del mes) la tabla
-    # queda vacia y estas columnas salian como texto, lo que rompia la multiplicacion.
-    ops_por_local["operaciones"] = ops_por_local["operaciones"].astype(float)
-    ops_por_local["soles_por_operacion"] = ops_por_local["local"].map(_tarifa_comision).astype(float)
-    ops_por_local["comision"] = (
-        ops_por_local["operaciones"] * ops_por_local["soles_por_operacion"]
-    )
-    ops_por_local = ops_por_local.sort_values("comision", ascending=False)
-
-    st.caption(
-        f"Rango: **{desde}** a **{hasta}**. Comisión = operaciones × tarifa promedio por "
-        "operación (configurable por local en la hoja `Config`, columna "
-        "`soles_por_operacion`). Es un **estimado**."
-    )
-
-    # --- KPIs ---
-    total_ops_comision = int(ops_por_local["operaciones"].sum())
-    total_comision = float(ops_por_local["comision"].sum())
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Operaciones totales", f"{total_ops_comision:,}")
-    col2.metric("Comisión estimada total", f"S/ {total_comision:,.2f}")
-    dias_rango = max((hasta - desde).days + 1, 1)
-    col3.metric("Promedio por día", f"S/ {total_comision / dias_rango:,.2f}")
-
-    # --- Por tipo de agente ---
-    por_tipo = (
-        ops_por_local.groupby("tipo_agente")
-        .agg(operaciones=("operaciones", "sum"), comision=("comision", "sum"))
-        .reset_index()
-    )
-    st.markdown("**Por tipo de agente**")
-    st.dataframe(
-        sh.arrow_safe(
-            por_tipo.rename(
-                columns={
-                    "tipo_agente": "Tipo",
-                    "operaciones": "Operaciones",
-                    "comision": "Comisión estimada (S/)",
-                }
-            )
-        ),
-        width="stretch",
-        hide_index=True,
-    )
-
-    # --- Por local ---
-    st.markdown("**Por local**")
-    st.dataframe(
-        sh.arrow_safe(
-            ops_por_local.rename(
-                columns={
-                    "local": "Local",
-                    "tipo_agente": "Tipo",
-                    "soles_por_operacion": "Tarifa (S/ x op)",
-                    "operaciones": "Operaciones",
-                    "comision": "Comisión estimada (S/)",
-                }
-            )
-        ),
-        width="stretch",
-        hide_index=True,
-    )
-
-    if not ops_por_local.empty:
-        fig_comision = px.bar(
-            ops_por_local,
-            x="local",
-            y="comision",
-            color="tipo_agente",
-            labels={"local": "Local", "comision": "Comisión estimada (S/)", "tipo_agente": "Tipo"},
-        )
-        st.plotly_chart(fig_comision, width="stretch")
-
-    st.caption(
-        "Para ajustar una tarifa: en la hoja `Config` del Google Sheet, escribe el "
-        "valor en la columna `soles_por_operacion` de ese local (y `tipo_agente` = "
-        "superagente / normal). Si lo dejas vacío, se usa el promedio por defecto "
-        f"(superagente S/ {sh.TARIFA_DEFAULT['superagente']:.3f}, normal "
-        f"S/ {sh.TARIFA_DEFAULT['normal']:.3f})."
-    )
-
-    st.divider()
-    st.subheader("🧮 Calibrar la tarifa real por local")
-    st.caption(
-        "El banco no da el detalle, así que se calibra con lo que sí tienes: lo que te pagó de "
-        "comisión y las operaciones que registra la app (las de los Cierres). "
-        "**Pon el rango de fechas de la izquierda igual al mes de esa comisión** (por ejemplo, el "
-        "mes pasado completo)."
-    )
-    _cierres_cal = df_filtrado[df_filtrado["tipo"] == "Cierre"].copy()
-    _cierres_cal["num_operaciones"] = pd.to_numeric(_cierres_cal["num_operaciones"], errors="coerce").fillna(0)
-    _ops_app = _cierres_cal.groupby("local")["num_operaciones"].sum()
-    base_cal = config_df[["local", "tipo_agente", "soles_por_operacion"]].rename(
-        columns={"local": "Local", "tipo_agente": "Tipo", "soles_por_operacion": "Tarifa vigente (S/)"}
-    )
-    base_cal["Operaciones en la app"] = base_cal["Local"].map(_ops_app).fillna(0).astype(int)
-    base_cal["Comisión estimada hoy (S/)"] = base_cal["Operaciones en la app"] * base_cal["Tarifa vigente (S/)"]
-
-    modo_cal = st.radio(
-        "¿Qué dato tienes?",
-        ["Solo el total de la comisión (todos los locales)", "La comisión de cada local"],
-        horizontal=True,
-        key="cal_modo",
-    )
-    cal_resultado = None   # DataFrame con Local y Tarifa nueva
-    if modo_cal.startswith("Solo el total"):
-        total_pagado = st.number_input(
-            "Comisión total que te pagó BCP en ese mes (S/)", min_value=0.0, value=0.0, step=100.0,
-            key="cal_total",
-        )
-        estimada = float(base_cal["Comisión estimada hoy (S/)"].sum())
-        st.caption(
-            f"Con las tarifas vigentes, la app estima **S/ {estimada:,.2f}** para este rango. "
-            "Se escala la tarifa de todos los locales por igual (respetando su diferencia entre "
-            "superagente y normal) para que la suma coincida con lo que realmente te pagaron."
-        )
-        if total_pagado > 0 and estimada > 0:
-            factor_cal = total_pagado / estimada
-            cal_resultado = base_cal.assign(**{"Tarifa nueva (S/)": base_cal["Tarifa vigente (S/)"] * factor_cal})
-            st.metric("Ajuste a las tarifas", f"{(factor_cal - 1) * 100:+.1f}%", f"S/ {total_pagado:,.2f} reales vs S/ {estimada:,.2f} estimados")
-    else:
-        por_local = base_cal.copy()
-        por_local["Comisión pagada (S/)"] = 0.0
-        cal_editado = st.data_editor(
-            por_local[["Local", "Tipo", "Tarifa vigente (S/)", "Operaciones en la app", "Comisión pagada (S/)"]],
-            hide_index=True,
-            width="stretch",
-            disabled=["Local", "Tipo", "Tarifa vigente (S/)", "Operaciones en la app"],
-            column_config={
-                "Tarifa vigente (S/)": st.column_config.NumberColumn(format="%.3f"),
-                "Comisión pagada (S/)": st.column_config.NumberColumn(min_value=0.0, step=10.0, format="%.2f"),
-            },
-            key="cal_tarifas_editor",
-        )
-        validas = cal_editado[
-            (cal_editado["Comisión pagada (S/)"] > 0) & (cal_editado["Operaciones en la app"] > 0)
-        ]
-        if validas.empty:
-            st.caption("Escribe la comisión pagada de al menos un local (con operaciones en el rango).")
-        else:
-            cal_resultado = validas.assign(
-                **{"Tarifa nueva (S/)": validas["Comisión pagada (S/)"] / validas["Operaciones en la app"]}
-            )
-
-    if cal_resultado is not None and not cal_resultado.empty:
-        cal_resultado = cal_resultado.assign(
-            **{"Cambio (%)": (cal_resultado["Tarifa nueva (S/)"] / cal_resultado["Tarifa vigente (S/)"] - 1) * 100}
-        )
-        st.dataframe(
-            sh.arrow_safe(cal_resultado[["Local", "Tipo", "Tarifa vigente (S/)", "Tarifa nueva (S/)", "Cambio (%)"]]),
-            width="stretch",
-            hide_index=True,
-            column_config={
-                "Tarifa vigente (S/)": st.column_config.NumberColumn(format="%.3f"),
-                "Tarifa nueva (S/)": st.column_config.NumberColumn(format="%.3f"),
-                "Cambio (%)": st.column_config.NumberColumn(format="%+.1f%%"),
-            },
-        )
-        st.caption(
-            "La tarifa se calcula sobre las operaciones que registra la app: es justo la que usan las "
-            "proyecciones, así que quedan en la misma vara. Si el personal anota de menos o de más, "
-            "la tarifa compensa (por eso es una tarifa «efectiva»)."
-        )
-        if st.button("💾 Guardar estas tarifas en Config", key="cal_guardar"):
-            try:
-                sh.guardar_tarifas(dict(zip(cal_resultado["Local"], cal_resultado["Tarifa nueva (S/)"])))
-                st.success("Tarifas guardadas en la hoja Config. Comisiones y Metas ya las usan.")
-            except (ValueError, RuntimeError) as error:
-                st.error(f"No se guardaron las tarifas: {error}")
-
-with tab_registros:
-    # -------------------------------------------------------------
-    # Tabla consolidada
-    # -------------------------------------------------------------
-    st.subheader("🗂️ Registros")
-    columnas_fotos = [c for c in df_filtrado.columns if c.startswith("foto_")]
-    st.dataframe(
-        sh.arrow_safe(df_filtrado.drop(columns=columnas_fotos)),
-        width="stretch",
-        hide_index=True,
-    )
-
-    with st.expander("Ver links de fotos de un registro"):
-        if not df_filtrado.empty:
-            id_elegido = st.selectbox("ID de registro", df_filtrado["id"])
-            fila = df_filtrado[df_filtrado["id"] == id_elegido].iloc[0]
-            for col in columnas_fotos:
-                if fila[col]:
-                    st.markdown(f"- [{col}]({fila[col]})")
-
-with tab_respaldo:
-    # -------------------------------------------------------------
-    # Respaldo: una copia del Google Sheet en Drive (con fecha y hora) y/o un
-    # ZIP de CSV para guardar en tu computador. Se hace a pedido, para no gastar
-    # lecturas de Google Sheets en cada recarga.
-    # -------------------------------------------------------------
-    st.subheader("💾 Respaldo de los datos")
-    st.caption(
-        "Haz una copia antes de cambios grandes y, como hábito, al cerrar cada mes. "
-        "El respaldo en Drive es una copia completa del Google Sheet; el ZIP trae los registros, "
-        "ajustes, encuestas, notas y personal en CSV (no incluye los PIN de los locales)."
-    )
-    rb1, rb2 = st.columns(2)
-    if rb1.button("Crear respaldo en Drive ahora", key="respaldo_drive"):
-        try:
-            with st.spinner("Copiando el Google Sheet…"):
-                _copia = sh.crear_respaldo_drive()
-            st.success(f"Respaldo creado: {_copia['name']}")
-            if _copia.get("webViewLink"):
-                st.markdown(f"[Abrir el respaldo]({_copia['webViewLink']})")
-        except Exception as error:
-            st.error(f"No se pudo crear el respaldo: {error}")
-    if rb2.button("Preparar descarga (ZIP de CSV)", key="respaldo_zip"):
-        try:
-            with st.spinner("Armando el ZIP…"):
-                st.session_state["respaldo_zip_bytes"] = sh.respaldo_zip_csv()
-        except Exception as error:
-            st.error(f"No se pudo preparar el ZIP: {error}")
-    if "respaldo_zip_bytes" in st.session_state:
-        st.download_button(
-            "Descargar respaldo (ZIP)",
-            data=st.session_state["respaldo_zip_bytes"],
-            file_name=f"respaldo_agente_bcp_{sh.hoy_local()}.zip",
-            mime="application/zip",
-        )
-
-
-with tab_incentivos:
-    # -------------------------------------------------------------
-    # Incentivos por encuestas NPS (S/ 10 por encuesta calificada 9 o 10)
-    #
-    # Viene del incentivo interno del negocio: reemplaza el Google Form
-    # aparte que se usaba para esto. El personal registra cada encuesta
-    # desde pages/4_Encuestas.py (con el PIN de su local); cambiar el
-    # estado de pago SOLO se hace aca, protegido con tu PIN de dueno, para
-    # que nadie pueda marcar su propio incentivo como pagado (o invalidarlo)
-    # sin que tu lo hayas revisado.
-    # -------------------------------------------------------------
-    st.subheader("⭐ Incentivos por encuestas NPS (S/ 10 c/u)")
-    if "msg_enc_guardada" in st.session_state:
-        st.toast(st.session_state.pop("msg_enc_guardada"), icon="✅")
-
-    ESTADOS_PAGO_ENCUESTA = ["Pendiente", "Pagada", "No válido"]
-
-    encuestas_df = sh.get_encuestas_df()
-    notas_df = sh.get_notas_df()
-    encuestas_df = sh.con_estado_nota(encuestas_df, notas_df)
-
-    # El incentivo solo se paga si la nota del LOCAL en ese mes (la manda el
-    # ejecutivo de BCP al cerrar el mes) es de UMBRAL_NOTA_LOCAL o mas.
-    st.markdown(
-        f"**Nota mensual de cada local (BCP)** — el incentivo se paga solo si es de {sh.UMBRAL_NOTA_LOCAL} o más (nota mínima)"
-    )
-    _mes_actual = sh.hoy_local().strftime("%Y-%m")
-    meses_nota = sorted(
-        ({_mes_actual} | set(encuestas_df["mes"].dropna())) if not encuestas_df.empty else {_mes_actual},
-        reverse=True,
-    )
-    st.caption(
-        "Una nota **Parcial** (avance del mes que te da BCP) solo informa al personal: no habilita "
-        "pagos. La **Final** (al cerrar el mes) es la que decide el incentivo. Cargar de nuevo el "
-        "mismo mes y local reemplaza la anterior del mismo tipo."
-    )
-    with st.form("form_nota_local", clear_on_submit=True):
-        n1, n2, n3 = st.columns(3)
-        tipo_nota = n1.selectbox("Tipo", ["Final", "Parcial"])
-        mes_nota = n2.selectbox("Mes", meses_nota)
-        local_nota = n3.selectbox("Local", config_df["local"].tolist())
-        n4, n5, n6 = st.columns(3)
-        valor_nota = n4.number_input("Nota", min_value=0.0, max_value=100.0, value=0.0, step=1.0)
-        fecha_corte_nota = n5.date_input("Al (solo para Parcial)", value=sh.hoy_local())
-        quien_nota = n6.text_input("Cargado por")
-        if st.form_submit_button("Guardar nota"):
-            if not quien_nota.strip():
-                st.error("Escribe quién carga la nota.")
-            else:
-                sh.guardar_nota(
-                    {
-                        "mes": mes_nota,
-                        "local": local_nota,
-                        "nota": valor_nota,
-                        "cargado_por": quien_nota.strip(),
-                        "timestamp": sh.ahora_local().replace(tzinfo=None).isoformat(timespec="seconds"),
-                        "tipo": tipo_nota,
-                        "fecha_corte": fecha_corte_nota.strftime("%d/%m") if tipo_nota == "Parcial" else "",
-                    }
-                )
-                st.success("Nota guardada.")
-                st.rerun()
-    if notas_df.empty:
-        st.caption("Todavía no hay notas cargadas: los incentivos quedan «Condicionados».")
-    else:
-        notas_vista = notas_df.sort_values(["mes", "local"], ascending=[False, True]).copy()
-        notas_vista["Estado"] = [
-            sh.estado_parcial(n) if t == "Parcial" else sh.estado_nota(n)
-            for n, t in zip(notas_vista["nota"], notas_vista["tipo"])
-        ]
-        st.dataframe(
-            sh.arrow_safe(
-                notas_vista[["mes", "local", "tipo", "nota", "Estado", "fecha_corte", "cargado_por"]].rename(
-                    columns={"mes": "Mes", "local": "Local", "tipo": "Tipo", "nota": "Nota",
-                             "fecha_corte": "Al", "cargado_por": "Cargado por"}
-                )
-            ),
-            width="stretch",
-            hide_index=True,
-        )
-
-    if encuestas_df.empty:
-        st.caption("Todavia no se ha registrado ninguna encuesta NPS.")
-    else:
-        pendientes_todas_df = encuestas_df[encuestas_df["estado_pago"] == "Pendiente"]
-        pendientes_df = pendientes_todas_df[pendientes_todas_df["estado_nota"] == "Aprobado"]
-        condicionadas_df = pendientes_todas_df[pendientes_todas_df["estado_nota"] == "Condicionado"]
-        no_aprobadas_df = pendientes_todas_df[pendientes_todas_df["estado_nota"] == "No aprobado"]
-        pagadas_df = encuestas_df[encuestas_df["estado_pago"] == "Pagada"]
-        no_validas_df = encuestas_df[encuestas_df["estado_pago"] == "No válido"]
-
-        colA, colB, colC, colD = st.columns(4)
-        colA.metric("Encuestas totales", len(encuestas_df))
-        colB.metric(
-            "Por pagar (local aprobado)",
-            f"{len(pendientes_df)} (S/ {pendientes_df['incentivo'].sum():,.2f})",
-        )
-        colC.metric(
-            "Ya pagadas",
-            f"{len(pagadas_df)} (S/ {pagadas_df['incentivo'].sum():,.2f})",
-        )
-        colD.metric("No validas", len(no_validas_df))
-        colE, colF = st.columns(2)
-        colE.metric(
-            "Condicionadas (falta la nota del local)",
-            f"{len(condicionadas_df)} (S/ {condicionadas_df['incentivo'].sum():,.2f})",
-        )
-        colF.metric(
-            "No se pagan (nota del local no aprobada)",
-            f"{len(no_aprobadas_df)} (S/ {no_aprobadas_df['incentivo'].sum():,.2f})",
-        )
-
-        st.caption("Cuanto se le debe a cada trabajador (solo lo pendiente y con local aprobado):")
-        if pendientes_df.empty:
-            st.success("No hay incentivos por pagar ahora. 👍")
-        else:
-            resumen_por_nombre = (
-                pendientes_df.assign(medio_pago=pendientes_df["medio_pago"].replace("", "Sin definir"))
-                .groupby(["local", "nombre", "medio_pago"])["incentivo"]
-                .agg(["count", "sum"])
-                .reset_index()
-                .rename(
-                    columns={
-                        "local": "Local",
-                        "nombre": "Nombre",
-                        "medio_pago": "Forma de pago",
-                        "count": "Encuestas pendientes",
-                        "sum": "Monto pendiente (S/)",
-                    }
-                )
-                .sort_values("Monto pendiente (S/)", ascending=False)
-            )
-            st.dataframe(sh.arrow_safe(resumen_por_nombre), width="stretch", hide_index=True)
-
-        st.markdown("**Detalle de encuestas (ver capturas y cambiar estado):**")
-        for _, fila_encuesta in encuestas_df.sort_values("timestamp", ascending=False).iterrows():
-            _sube = fila_encuesta["timestamp"]
-            _otro_mes = pd.notna(_sube) and (_sube.year, _sube.month) != (
-                fila_encuesta["fecha"].year, fila_encuesta["fecha"].month
-            )
-            titulo_encuesta = (
-                f"{'⚠️ ' if _otro_mes else ''}{fila_encuesta['fecha']} · {fila_encuesta['local']} · "
-                f"{fila_encuesta['nombre']} "
-                f"· Nota {fila_encuesta['nota']} · {fila_encuesta['estado_visible']} "
-                f"· {fila_encuesta['medio_pago'] or 'Sin forma de pago'}"
-            )
-            with st.expander(titulo_encuesta):
-                # Chicas por defecto; con el check se ven a ancho completo. Las
-                # sirve la app (no un link de Drive), asi funciona aunque la
-                # carpeta de Drive no este compartida.
-                id_enc = fila_encuesta["id"]
-                for campo, etiqueta in [
-                    ("captura_correo", "Correo"),
-                    ("captura_mensaje_exito", "Mensaje de éxito"),
-                ]:
-                    imagen = sh.descargar_imagen_drive(fila_encuesta[campo])
-                    if imagen:
-                        grande = st.checkbox(
-                            f"🔍 Ver «{etiqueta}» más grande", key=f"zoom_{id_enc}_{campo}"
-                        )
-                        sh.mostrar_imagen(
-                            imagen, ancho_px=None if grande else 260, caption=etiqueta
-                        )
-                    else:
-                        st.caption(f"{etiqueta}: no se pudo cargar.")
-
-                st.caption(
-                    f"Fecha de la encuesta (la que declaró quien la subió): **{fila_encuesta['fecha']}** · "
-                    f"subida el {_sube:%Y-%m-%d %H:%M}"
-                    + (
-                        " · ⚠️ **es de un mes distinto al de la subida: verifícala con la captura del correo**"
-                        if _otro_mes
-                        else ""
-                    )
-                )
-                medios_opc = ["Sin definir"] + sh.MEDIOS_PAGO_ENCUESTA
-                medio_actual = fila_encuesta["medio_pago"] or "Sin definir"
-                estado_actual = fila_encuesta["estado_pago"]
-                if estado_actual not in ESTADOS_PAGO_ENCUESTA:
-                    estado_actual = "Pendiente"
-
-                # Los dos campos se guardan JUNTOS con un solo boton: asi cambiar
-                # uno no recarga toda la pagina (ni vuelve a leer Google Sheets)
-                # antes de poder cambiar el otro.
-                with st.form(f"form_enc_{fila_encuesta['id']}"):
-                    nueva_fecha = st.date_input(
-                        "Fecha de la encuesta",
-                        value=fila_encuesta["fecha"],
-                        max_value=sh.hoy_local(),
-                        key=f"fecha_{fila_encuesta['id']}",
-                        help="Corrígela si quien subió la encuesta puso la fecha de subida en vez de la fecha real "
-                        "del correo: de ella depende a qué mes y a qué nota NPS pertenece.",
-                    )
-                    nuevo_medio = st.selectbox(
-                        "Forma de pago",
-                        medios_opc,
-                        index=medios_opc.index(medio_actual) if medio_actual in medios_opc else 0,
-                        key=f"medio_{fila_encuesta['id']}",
-                    )
-                    nuevo_estado = st.selectbox(
-                        "Estado",
-                        ESTADOS_PAGO_ENCUESTA,
-                        index=ESTADOS_PAGO_ENCUESTA.index(estado_actual),
-                        key=f"estado_{fila_encuesta['id']}",
-                    )
-                    guardar_enc = st.form_submit_button("Guardar cambios")
-                if guardar_enc:
-                    cambio_medio = nuevo_medio != medio_actual and nuevo_medio != "Sin definir"
-                    cambio_estado = nuevo_estado != estado_actual
-                    cambio_fecha = nueva_fecha != fila_encuesta["fecha"]
-                    # Si se corrige la fecha, el pago se evalua con la nota del mes NUEVO.
-                    _estado_nota_nuevo = (
-                        sh.con_estado_nota(
-                            pd.DataFrame([{"fecha": nueva_fecha, "local": fila_encuesta["local"]}]),
-                            notas_df,
-                        )["estado_nota"].iloc[0]
-                        if cambio_fecha
-                        else fila_encuesta["estado_nota"]
-                    )
-                    if nuevo_estado == "Pagada" and (cambio_estado or cambio_fecha) and _estado_nota_nuevo != "Aprobado":
-                        st.error(
-                            "No se puede marcar como pagada: la nota del local en "
-                            f"{nueva_fecha:%Y-%m} está «{_estado_nota_nuevo}» "
-                            f"(la nota mínima para pagar es {sh.UMBRAL_NOTA_LOCAL})."
-                        )
-                    elif cambio_medio or cambio_estado or cambio_fecha:
-                        try:
-                            sh.actualizar_encuesta(
-                                fila_encuesta["id"],
-                                estado_pago=nuevo_estado if cambio_estado else None,
-                                medio_pago=nuevo_medio if cambio_medio else None,
-                                fecha=nueva_fecha.isoformat() if cambio_fecha else None,
-                                observaciones=(
-                                    (str(fila_encuesta["observaciones"] or "").strip() + " | ").lstrip(" |")
-                                    + f"Fecha corregida por administración de {fila_encuesta['fecha']} a {nueva_fecha}"
-                                    if cambio_fecha
-                                    else None
-                                ),
-                            )
-                        except (ValueError, RuntimeError) as error:
-                            st.error(f"No se guardó: {error}")
-                        else:
-                            _partes = []
-                            if cambio_medio:
-                                _partes.append(f"forma de pago: {nuevo_medio}")
-                            if cambio_estado:
-                                _partes.append(f"estado: {nuevo_estado}")
-                            if cambio_fecha:
-                                _partes.append(f"fecha: {nueva_fecha}")
-                            st.session_state["msg_enc_guardada"] = (
-                                f"Guardado y confirmado en la hoja ({', '.join(_partes)})."
-                            )
-                            st.rerun()
-                    else:
-                        st.info("No hay cambios para guardar.")
-
-
-with tab_personal:
-    # -------------------------------------------------------------
-    # Personal: une las distintas formas en que alguien firmo su nombre y
-    # desambigua nombres repetidos por local (p. ej. "Ana" en Colon es una
-    # persona y en Fer213 otra). Lo que se cargue aca se aplica a TODOS los
-    # reportes (Cuadre, Liquidacion, Historial...).
-    # -------------------------------------------------------------
-    st.subheader("👥 Personal")
-    st.caption(
-        "Cada persona tiene un nombre oficial, su local habitual y los nombres con los que "
-        "firmó antes (alias). Los registros se unifican por alias; si un alias lo comparten "
-        "dos personas (p. ej. «Ana»), se usa el local del registro para decidir cuál es."
-    )
-
-    personal_df = sh.get_personal_df()
-    if personal_df.empty:
-        st.info("Todavía no hay personal cargado. Agrega a la primera persona abajo.")
-    else:
-        st.dataframe(
-            sh.arrow_safe(
-                personal_df.rename(
-                    columns={"nombre": "Nombre oficial", "local": "Local habitual",
-                             "alias": "Alias (separados por |)", "activo": "Activo"}
-                )
-            ),
-            width="stretch",
-            hide_index=True,
-        )
-        st.caption("Para editar o desactivar a alguien, cambia su fila directo en la hoja «Personal» del Google Sheet.")
-
-    _conflictos = sh.conflictos_alias(personal_df)
-    if _conflictos:
-        st.error(
-            "Hay nombres que apuntan a más de una persona y la app no puede decidir cuál es "
-            "(por eso a veces salen separados en Liquidación). Usa «Fusionar personas duplicadas» "
-            "o «Reasignar un nombre registrado» para dejar una sola:"
-        )
-        for c in _conflictos:
-            st.markdown(f"- **{c['nombre']}** → " + " · ".join(c["personas"]))
-
-    # Todos los nombres que aparecen en la app, de DONDE vengan: registros de
-    # caja, encuestas y reposiciones (campo "Repuso" de los ajustes). Una
-    # persona puede estar solo en las encuestas, y de ahi sale "otra persona"
-    # en Liquidacion aunque no tenga registros de caja.
-    _fuentes_nombres = [
-        df[["nombre_original", "local", "nombre", "fecha"]].assign(Origen="Registros")
-    ]
-    _enc_nombres = sh.get_encuestas_df()
-    if not _enc_nombres.empty:
-        _fuentes_nombres.append(
-            _enc_nombres[["nombre_original", "local", "nombre", "fecha"]].assign(Origen="Encuestas")
-        )
-    _aj_nombres = sh.get_ajustes_df()
-    if not _aj_nombres.empty and (_aj_nombres["repuso_original"] != "").any():
-        _aj_rep = _aj_nombres[_aj_nombres["repuso_original"] != ""]
-        _fuentes_nombres.append(
-            _aj_rep[["repuso_original", "local", "repuso", "fecha"]]
-            .rename(columns={"repuso_original": "nombre_original", "repuso": "nombre"})
-            .assign(Origen="Reposiciones")
-        )
-    todos_nombres = pd.concat(_fuentes_nombres, ignore_index=True)
-
-    # Nombres que NO coinciden con ninguna persona/alias de la hoja Personal:
-    # son los que hacen aparecer "mas nombres" en Liquidacion y los reportes.
-    _mapa_pers = sh.mapa_alias(personal_df)
-    sin_asignar = (
-        todos_nombres.groupby(["nombre_original", "local"])
-        .agg(Apariciones=("nombre", "size"), Origen=("Origen", lambda s: ", ".join(sorted(set(s)))))
-        .reset_index()
-    )
-    sin_asignar = sin_asignar[
-        [sh.clave_alias(n) not in _mapa_pers for n in sin_asignar["nombre_original"]]
-    ]
-    if sin_asignar.empty:
-        st.success("Todos los nombres registrados están asignados a una persona del Personal.")
-    else:
-        oficiales_pers = sorted(set(personal_df["nombre"])) if not personal_df.empty else []
-        sin_asignar = sin_asignar.assign(
-            Sugerencia=[sh.sugerir_oficial(n, oficiales_pers) for n in sin_asignar["nombre_original"]]
-        ).rename(columns={"nombre_original": "Nombre registrado", "local": "Local"})
-        st.warning(
-            f"{len(sin_asignar)} nombre(s) registrado(s) no están asignados a nadie del Personal, "
-            "por eso salen como personas aparte en Liquidación y en los reportes."
-        )
-        st.dataframe(sh.arrow_safe(sin_asignar), width="stretch", hide_index=True)
-        if oficiales_pers:
-            u1, u2, u3 = st.columns([2, 2, 1])
-            nombre_sin = u1.selectbox(
-                "Nombre registrado", sin_asignar["Nombre registrado"].tolist(), key="alias_nombre_sin"
-            )
-            sugerido = sin_asignar.loc[sin_asignar["Nombre registrado"] == nombre_sin, "Sugerencia"].iloc[0]
-            etiquetas_pers = [f"{r['nombre']} · {r['local']}" for _, r in personal_df.iterrows()]
-            idx_sug = next(
-                (i for i, r in enumerate(personal_df.itertuples()) if r.nombre == sugerido), 0
-            )
-            destino = u2.selectbox(
-                "Es en realidad…", range(len(etiquetas_pers)),
-                format_func=lambda i: etiquetas_pers[i], index=idx_sug,
-                key=f"alias_destino_{nombre_sin}",
-            )
-            u3.write("")
-            if u3.button("Unir", key="alias_unir"):
-                fila_dest = personal_df.iloc[destino]
-                alias_nuevos = [a for a in fila_dest["alias"].split("|") if a.strip()]
-                if nombre_sin not in alias_nuevos:
-                    alias_nuevos.append(nombre_sin)
-                sh.actualizar_persona(
-                    fila_dest["nombre"], fila_dest["local"],
-                    {"nombre": fila_dest["nombre"], "local": fila_dest["local"],
-                     "alias": "|".join(alias_nuevos), "activo": fila_dest["activo"] or "Sí"},
-                )
-                st.success(f"«{nombre_sin}» ahora se cuenta como {fila_dest['nombre']}.")
-                st.rerun()
-        st.caption("Si es una persona nueva, agrégala más abajo en «Agregar persona».")
-
-    if not personal_df.empty:
-        st.markdown("**Reasignar un nombre registrado**")
-        st.caption(
-            "Para cualquier nombre (de registros de caja, encuestas o reposiciones), esté ya asignado o no: se muestra a quién "
-            "se cuenta hoy y puedes cambiarlo. Sirve cuando un nombre quedó unido a la persona "
-            "equivocada."
-        )
-        cuenta_hoy = todos_nombres.drop_duplicates("nombre_original").set_index("nombre_original")["nombre"].to_dict()
-        etiquetas_reas = [f"{r['nombre']} · {r['local']}" for _, r in personal_df.iterrows()]
-        ra, rb, rc = st.columns([2, 2, 1])
-        nombre_reas = ra.selectbox(
-            "Nombre registrado",
-            sorted(cuenta_hoy),
-            format_func=lambda n: f"{n}  →  hoy cuenta como {cuenta_hoy.get(n, n)}",
-            key="reasignar_nombre",
-        )
-        destino_reas = rb.selectbox(
-            "Contarlo como…", range(len(etiquetas_reas)),
-            format_func=lambda i: etiquetas_reas[i], key=f"reasignar_destino_{nombre_reas}",
-        )
-        rc.write("")
-        if rc.button("Reasignar", key="reasignar_btn"):
-            clave_reas = sh.clave_alias(nombre_reas)
-            oficial_de = [p["nombre"] for _, p in personal_df.iterrows() if sh.clave_alias(p["nombre"]) == clave_reas]
-            if oficial_de and sh.clave_alias(personal_df.iloc[destino_reas]["nombre"]) != clave_reas:
-                st.error(
-                    f"«{nombre_reas}» es el nombre oficial de una persona cargada: para unirla con "
-                    "otra usa «Fusionar personas duplicadas»."
-                )
-            else:
-                nuevos_alias = {}
-                for pos, (_, p) in enumerate(personal_df.iterrows()):
-                    lista = [a for a in p["alias"].split("|") if a.strip() and sh.clave_alias(a) != clave_reas]
-                    nuevos_alias[pos] = lista
-                if sh.clave_alias(personal_df.iloc[destino_reas]["nombre"]) != clave_reas:
-                    nuevos_alias[destino_reas].append(nombre_reas)
-                for pos, (_, p) in enumerate(personal_df.iterrows()):
-                    if "|".join(nuevos_alias[pos]) != p["alias"]:
-                        sh.actualizar_persona(
-                            p["nombre"], p["local"],
-                            {"nombre": p["nombre"], "local": p["local"],
-                             "alias": "|".join(nuevos_alias[pos]), "activo": p["activo"] or "Sí"},
-                        )
-                st.success(f"«{nombre_reas}» ahora se cuenta como {personal_df.iloc[destino_reas]['nombre']}.")
-                st.rerun()
-
-    st.markdown("**Nombres tal como se registraron**")
-    detectados = (
-        todos_nombres.groupby(["nombre_original", "local"])
-        .agg(Apariciones=("nombre", "size"), Ultimo=("fecha", "max"), Se_muestra_como=("nombre", "first"),
-             Origen=("Origen", lambda s: ", ".join(sorted(set(s)))))
-        .reset_index()
-        .rename(columns={"nombre_original": "Nombre registrado", "local": "Local",
-                         "Ultimo": "Última vez", "Se_muestra_como": "Se muestra como"})
-        .sort_values(["Nombre registrado", "Local"])
-    )
-    st.dataframe(sh.arrow_safe(detectados), width="stretch", hide_index=True)
-
-    st.markdown("**Días fuera de su local habitual (rotaciones)**")
-    habituales = (
-        personal_df[personal_df["nombre"] != ""]
-        .drop_duplicates("nombre")[["nombre", "local"]]
-        .rename(columns={"local": "Local habitual"})
-    )
-    rotaciones = df[df["fecha"].between(desde, hasta)].merge(habituales, on="nombre", how="inner")
-    rotaciones = rotaciones[rotaciones["local"] != rotaciones["Local habitual"]]
-    if rotaciones.empty:
-        st.caption("Sin rotaciones en el rango de fechas seleccionado (o falta cargar el Personal).")
-    else:
-        st.dataframe(
-            sh.arrow_safe(
-                rotaciones.groupby(["fecha", "nombre", "local", "Local habitual", "turno"])
-                .agg(Registros=("id", "count"))
-                .reset_index()
-                .sort_values(["fecha", "nombre"], ascending=[False, True])
-                .rename(columns={"fecha": "Fecha", "nombre": "Persona",
-                                 "local": "Registró en", "turno": "Turno"})
-            ),
-            width="stretch",
-            hide_index=True,
-        )
-
-    if len(personal_df) >= 2:
-        st.markdown("**Fusionar personas duplicadas**")
-        st.caption(
-            "Si una misma persona quedó cargada dos o más veces (por ejemplo «Yovana», «Yovana Sumir» "
-            "y «Yovana Sumiri»), elige cuál se queda y cuáles se unen a ella. Los nombres de las "
-            "unidas pasan a ser alias de la que se queda, así que sus registros se cuentan juntos."
-        )
-        etiquetas_fus = [f"{r['nombre']} · {r['local']}" for _, r in personal_df.iterrows()]
-        quedan = st.selectbox(
-            "Persona que se queda (nombre oficial correcto)", range(len(etiquetas_fus)),
-            format_func=lambda i: etiquetas_fus[i], key="fusion_destino",
-        )
-        a_unir = st.multiselect(
-            "Personas que se unen a ella (se quitan de la lista)",
-            [i for i in range(len(etiquetas_fus)) if i != quedan],
-            format_func=lambda i: etiquetas_fus[i], key=f"fusion_origen_{quedan}",
-        )
-        confirma_fusion = st.checkbox(
-            "Confirmo que son la misma persona", key=f"fusion_confirma_{quedan}"
-        )
-        if st.button("Fusionar", key="fusion_btn"):
-            if not a_unir:
-                st.error("Elige al menos una persona para unir.")
-            elif not confirma_fusion:
-                st.error("Marca la casilla de confirmación.")
-            else:
-                destino_f = personal_df.iloc[quedan]
-                alias_f = [a for a in destino_f["alias"].split("|") if a.strip()]
-                for i in a_unir:
-                    origen = personal_df.iloc[i]
-                    for a in [origen["nombre"]] + [x for x in origen["alias"].split("|") if x.strip()]:
-                        if a != destino_f["nombre"] and a not in alias_f:
-                            alias_f.append(a)
-                sh.actualizar_persona(
-                    destino_f["nombre"], destino_f["local"],
-                    {"nombre": destino_f["nombre"], "local": destino_f["local"],
-                     "alias": "|".join(alias_f), "activo": destino_f["activo"] or "Sí"},
-                )
-                for i in a_unir:
-                    origen = personal_df.iloc[i]
-                    sh.eliminar_persona(origen["nombre"], origen["local"])
-                st.success(f"Listo: ahora se cuentan juntos como {destino_f['nombre']}.")
-                st.rerun()
-
-    st.markdown("**Agregar persona**")
-    with st.form("form_persona", clear_on_submit=True):
-        c1, c2 = st.columns(2)
-        oficiales_existentes = sorted(set(personal_df["nombre"])) if not personal_df.empty else []
-        nombre_existente = c1.selectbox(
-            "Nombre oficial (elige uno ya cargado)", ["— Nueva persona —"] + oficiales_existentes,
-            help="Útil si la misma persona trabaja en otro local o quieres evitar errores al escribirlo.",
-        )
-        nombre_nuevo = c1.text_input(
-            "…o escribe el nombre oficial de una persona nueva", placeholder="Ej: Ana León"
-        )
-        nombre_oficial = nombre_nuevo.strip() or (
-            "" if nombre_existente == "— Nueva persona —" else nombre_existente
-        )
-        local_habitual = c2.selectbox("Local habitual", config_df["local"].tolist())
-        alias_sel = st.multiselect(
-            "Alias (nombres con los que ha firmado)",
-            sorted(todos_nombres["nombre_original"].unique()),
-            help="Elige todas las formas en que aparece su nombre en los registros.",
-        )
-        activa = st.checkbox("Sigue trabajando", value=True)
-        if st.form_submit_button("Agregar persona"):
-            if not nombre_oficial.strip():
-                st.error("Elige un nombre oficial de la lista o escribe el de una persona nueva.")
-            elif (
-                not personal_df.empty
-                and ((personal_df["nombre"].str.lower() == nombre_oficial.strip().lower())
-                     & (personal_df["local"] == local_habitual)).any()
-            ):
-                st.error("Esa persona ya está cargada en ese local.")
-            else:
-                sh.guardar_persona(
-                    {
-                        "nombre": nombre_oficial.strip(),
-                        "local": local_habitual,
-                        "alias": "|".join(alias_sel),
-                        "activo": "Sí" if activa else "No",
-                    }
-                )
-                st.success("Persona agregada.")
-                st.rerun()
-
-    if not personal_df.empty:
-        st.markdown("**Editar persona**")
-        etiquetas_personal = [f"{r['nombre']} · {r['local']}" for _, r in personal_df.iterrows()]
-        idx_edit = st.selectbox(
-            "Persona a editar", range(len(etiquetas_personal)),
-            format_func=lambda i: etiquetas_personal[i], key="persona_a_editar",
-        )
-        actual = personal_df.iloc[idx_edit]
-        alias_actuales = [a for a in actual["alias"].split("|") if a.strip()]
-        opciones_alias = sorted(set(todos_nombres["nombre_original"].unique()) | set(alias_actuales))
-        locales_cfg = config_df["local"].tolist()
-        with st.form(f"form_editar_persona_{idx_edit}"):
-            e1, e2 = st.columns(2)
-            nuevo_nombre = e1.text_input("Nombre oficial", value=actual["nombre"])
-            nuevo_local = e2.selectbox(
-                "Local habitual", locales_cfg,
-                index=locales_cfg.index(actual["local"]) if actual["local"] in locales_cfg else 0,
-            )
-            nuevos_alias = st.multiselect("Alias", opciones_alias, default=alias_actuales)
-            sigue = st.checkbox("Sigue trabajando", value=actual["activo"].lower() not in {"no", "false", "0"})
-            if st.form_submit_button("Guardar cambios"):
-                if not nuevo_nombre.strip():
-                    st.error("Escribe el nombre oficial.")
-                else:
-                    sh.actualizar_persona(
-                        actual["nombre"], actual["local"],
-                        {
-                            "nombre": nuevo_nombre.strip(),
-                            "local": nuevo_local,
-                            "alias": "|".join(nuevos_alias),
-                            "activo": "Sí" if sigue else "No",
-                        },
-                    )
-                    st.success("Cambios guardados.")
-                    st.rerun()
