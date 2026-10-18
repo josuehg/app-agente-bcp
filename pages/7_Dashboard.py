@@ -75,10 +75,25 @@ with st.sidebar:
         max_value=fecha_max,
     )
 
-if isinstance(rango, tuple) and len(rango) == 2:
-    desde, hasta = rango
+# st.date_input devuelve una tupla de 2 fechas cuando el rango esta completo, pero
+# de 1 sola mientras se esta eligiendo (ya marcaste el inicio y falta el final) y
+# vacia si se borro: sin esto, el Dashboard se caia a medio elegir.
+if isinstance(rango, (tuple, list)):
+    if len(rango) == 2:
+        desde, hasta = rango
+    elif len(rango) == 1:
+        desde = hasta = rango[0]
+        st.sidebar.caption("Elige también la fecha final del rango (por ahora se muestra solo ese día).")
+    else:
+        desde, hasta = fecha_min, fecha_max
 else:
     desde = hasta = rango
+
+if not locales_sel or not turnos_sel:
+    st.warning(
+        "⚠️ No hay ningún local o turno elegido en los **Filtros** (barra lateral): los reportes de "
+        "abajo salen vacíos. Elige al menos uno de cada uno."
+    )
 
 df_filtrado = df[
     df["local"].isin(locales_sel)
@@ -1224,7 +1239,20 @@ with tab_cuadre:
         )
 
 
-    _ajustado_turno = resumen.apply(_con_ajuste_turno, axis=1)
+    if resumen.empty:
+        # Sin turnos (p. ej. ningun local o turno elegido en los filtros): apply() sobre una
+        # tabla vacia no devuelve columnas y la linea siguiente fallaba con KeyError.
+        _ajustado_turno = pd.DataFrame(
+            {
+                "estado": pd.Series(dtype=object),
+                "_ajuste_total": pd.Series(dtype=float),
+                "_restante": pd.Series(dtype=float),
+                "_explicado": pd.Series(dtype=bool),
+            },
+            index=resumen.index,
+        )
+    else:
+        _ajustado_turno = resumen.apply(_con_ajuste_turno, axis=1)
     resumen["estado"] = _ajustado_turno["estado"]
     resumen["_ajuste_total"] = _ajustado_turno["_ajuste_total"]
     resumen["_restante"] = _ajustado_turno["_restante"]
