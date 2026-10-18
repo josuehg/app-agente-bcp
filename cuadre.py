@@ -966,3 +966,110 @@ def texto_espera(minutos: float | None) -> str:
     if m < 60 * 24:
         return f"{m // 60} h {m % 60:02d} min"
     return f"{m // (60 * 24)} d {(m % (60 * 24)) // 60} h"
+
+
+# ---------------------------------------------------------------------
+# Alerta automatica (Telegram) de diferencias al guardar un registro.
+#
+# Se evalua en el momento de guardar, con el MISMO calculo del Dashboard:
+#  - Si lo que se guarda es un CIERRE: el corte (su Apertura -> este Cierre).
+#  - Si es una APERTURA: el salto (el Cierre anterior del local -> esta Apertura),
+#    o sea lo que cambio "entre cierres".
+# Avisa solo si la diferencia es MAYOR (en valor absoluto) al umbral.
+# ---------------------------------------------------------------------
+UMBRAL_ALERTA_DIFERENCIA = 6.0
+
+
+def alertas_de_registro(registros: pd.DataFrame, id_nuevo, umbral: float = UMBRAL_ALERTA_DIFERENCIA) -> list[dict]:
+    """`registros`: DataFrame ya tipado (fecha date, timestamp datetime, total numerico)
+    que YA incluye el registro nuevo. Devuelve 0 o 1 alertas (lista de dicts)."""
+    if registros is None or registros.empty:
+        return []
+    nuevo_f = registros[registros["id"].astype(str) == str(id_nuevo)]
+    if nuevo_f.empty:
+        return []
+    nuevo = nuevo_f.iloc[-1]
+    tipo = str(nuevo["tipo"]).strip()
+    de_local = registros[registros["local"] == nuevo["local"]]
+    alertas: list[dict] = []
+
+    if tipo == "Cierre":
+        cortes = calcular_cortes(de_local, ["local", "fecha", "turno"])
+        if not cortes.empty:
+            for _, c in cortes[(cortes["id_cierre"] == str(id_nuevo)) & cortes["diferencia"].notna()].iterrows():
+                if abs(float(c["diferencia"])) > umbral:
+                    alertas.append(
+                        {
+                            "clase": "corte",
+                            "local": c["local"],
+                            "fecha": c["fecha"],
+                            "turno": c["turno"],
+                            "responsable": c["nombre"],
+                            "nombre_cierre": c["nombre_cierre"],
+                            "hora_apertura": c["hora_apertura"],
+                            "hora_cierre": c["hora_cierre"],
+                            "apertura": float(c["apertura"]),
+                            "cierre": float(c["cierre"]),
+                            "diferencia": float(c["diferencia"]),
+                            "observaciones": c["observaciones"],
+                        }
+                    )
+    elif tipo == "Apertura":
+        saltos = calcular_saltos(de_local)
+        if not saltos.empty:
+            for _, s in saltos[(saltos["id_apertura"] == str(id_nuevo)) & saltos["diferencia"].notna()].iterrows():
+                if abs(float(s["diferencia"])) > umbral:
+                    alertas.append(
+                        {
+                            "clase": "entre_cierres",
+                            "local": s["local"],
+                            "fecha_cierre": s["fecha_cierre"],
+                            "turno_cierre": s["turno_cierre"],
+                            "nombre_cierre": s["nombre_cierre"],
+                            "hora_cierre": s["hora_cierre"],
+                            "fecha_apertura": s["fecha_apertura"],
+                            "turno_apertura": s["turno_apertura"],
+                            "nombre_apertura": s["nombre_apertura"],
+                            "hora_apertura": s["hora_apertura"],
+                            "cierre": float(s["cierre"]),
+                            "apertura": float(s["apertura"]),
+                            "diferencia": float(s["diferencia"]),
+                            "observaciones": str(nuevo.get("observaciones", "") or "").strip(),
+                        }
+                    )
+    return alertas
+
+
+def _dia(fecha) -> str:
+    try:
+        return f"{fecha:%d/%m}"
+    except (TypeError, ValueError):
+        return str(fecha)
+
+
+def texto_alerta_diferencia(a: dict, enlace: str = "") -> str:
+    """Mensaje de Telegram para una alerta de alertas_de_registro()."""
+    dif = a["diferencia"]
+    cuanto = f"{'Faltante' if dif < 0 else 'Sobrante'} S/ {abs(dif):,.2f}"
+    if a["clase"] == "corte":
+        lineas = [
+            f"🔴 Diferencia en el CIERRE — {a['local']} ({a['turno']}, {_dia(a['fecha'])})",
+            f"💸 {cuanto}",
+            f"👤 Responsable (abrió): {a['responsable'] or '—'} · cerró: {a['nombre_cierre'] or '—'}",
+            f"Apertura {a['hora_apertura']} S/ {a['apertura']:,.2f} → Cierre {a['hora_cierre']} S/ {a['cierre']:,.2f}",
+        ]
+    else:
+        lineas = [
+            f"🟠 Diferencia ENTRE CIERRE Y APERTURA — {a['local']}",
+            f"💸 {cuanto}",
+            f"Cerró {a['nombre_cierre'] or '—'} ({a['turno_cierre']}, {_dia(a['fecha_cierre'])} {a['hora_cierre']}): "
+            f"S/ {a['cierre']:,.2f}",
+            f"Abrió {a['nombre_apertura'] or '—'} ({a['turno_apertura']}, {_dia(a['fecha_apertura'])} {a['hora_apertura']}): "
+            f"S/ {a['apertura']:,.2f}",
+            "Si fue un retiro o ingreso autorizado, regístralo en Dashboard → Cuadre.",
+        ]
+    if str(a.get("observaciones", "")).strip():
+        lineas.append(f"📝 {str(a['observaciones']).strip()}")
+    if enlace:
+        lineas.append(f"Revisar: {enlace}")
+    return "\n".join(lineas)

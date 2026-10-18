@@ -22,6 +22,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -70,6 +71,9 @@ from cuadre import (  # noqa: F401  (re-export para el resto de la app)
     resumen_turnos,
     totales_ticket,
     ESTADOS_SOLICITUD_ACTIVOS,
+    UMBRAL_ALERTA_DIFERENCIA,
+    alertas_de_registro,
+    texto_alerta_diferencia,
     minutos_entre,
     solicitudes_activas,
     texto_espera,
@@ -757,11 +761,14 @@ class SecuenciaInvalida(Exception):
     """
 
 
-def _registros_crudos_del_turno(local: str, fecha: str, turno: str) -> list[dict]:
-    """Lee la hoja 'Registros' SIN cache y devuelve las filas de ese turno
-    (mismo local + misma fecha + mismo Mañana/Tarde), ordenadas por hora."""
+def _leer_registros_crudos() -> list[dict]:
+    """Lee la hoja 'Registros' SIN cache (todo como texto). Una sola lectura."""
     ws = _get_or_create_worksheet(NOMBRE_HOJA_REGISTROS, COLUMNAS_REGISTROS)
-    filas = ws.get_all_records(numericise_ignore=["all"])
+    return ws.get_all_records(numericise_ignore=["all"])
+
+
+def _del_turno(filas: list[dict], local: str, fecha: str, turno: str) -> list[dict]:
+    """Filas de ese turno (mismo local + misma fecha + mismo Mañana/Tarde), por hora."""
     del_turno = [
         f
         for f in filas
@@ -773,7 +780,12 @@ def _registros_crudos_del_turno(local: str, fecha: str, turno: str) -> list[dict
     return del_turno
 
 
-def estado_turno(local: str, fecha: str, turno: str) -> dict:
+def _registros_crudos_del_turno(local: str, fecha: str, turno: str) -> list[dict]:
+    """Lee la hoja 'Registros' SIN cache y devuelve las filas de ese turno."""
+    return _del_turno(_leer_registros_crudos(), local, fecha, turno)
+
+
+def estado_turno(local: str, fecha: str, turno: str, filas_turno: list[dict] | None = None) -> dict:
     """Como esta el turno AHORA MISMO (lectura fresca, sin cache):
 
     - abierto: True si el ultimo registro del turno es una Apertura que
@@ -781,7 +793,7 @@ def estado_turno(local: str, fecha: str, turno: str) -> dict:
     - apertura_abierta: {"nombre", "hora"} de esa Apertura, o None.
     - ultimo_tipo: "Apertura" | "Cierre" | None (si el turno no tiene nada).
     """
-    filas = _registros_crudos_del_turno(local, fecha, turno)
+    filas = _registros_crudos_del_turno(local, fecha, turno) if filas_turno is None else filas_turno
     if not filas:
         return {"abierto": False, "apertura_abierta": None, "ultimo_tipo": None}
     ultimo = filas[-1]
@@ -847,7 +859,11 @@ def guardar_registro(datos: dict) -> None:
     personas registrando casi a la vez no puedan crear un duplicado.
     """
     tipo = str(datos.get("tipo", "")).strip()
-    estado = estado_turno(datos["local"], datos["fecha"], datos["turno"])
+    todas = _leer_registros_crudos()  # UNA lectura fresca: sirve para validar y para la alerta
+    estado = estado_turno(
+        datos["local"], datos["fecha"], datos["turno"],
+        _del_turno(todas, datos["local"], datos["fecha"], datos["turno"]),
+    )
 
     if tipo == "Apertura" and estado["abierto"]:
         ab = estado["apertura_abierta"]
@@ -870,6 +886,10 @@ def guardar_registro(datos: dict) -> None:
     # TTL completo.
     get_registros_df.clear()
     estado_turno_cache.clear()
+    try:
+        _avisar_diferencia(todas, dict(zip(COLUMNAS_REGISTROS, fila)))
+    except Exception:
+        pass  # el aviso es un extra: nunca debe afectar al guardado
 
 
 # ---------------------------------------------------------------------
@@ -969,16 +989,8 @@ def unificar_nombres(nombres: pd.Series, locales: pd.Series) -> pd.Series:
     return _normalizar_nombre(pd.Series(unidos, index=nombres.index))
 
 
-@st.cache_data(ttl=30, show_spinner=False)
-def get_registros_df() -> pd.DataFrame:
-    ws = _get_or_create_worksheet(NOMBRE_HOJA_REGISTROS, COLUMNAS_REGISTROS)
-    # numericise_ignore: todo llega como TEXTO. Si no, un id como "1234e56789" se
-    # lee como numero (inf) y varios ids distintos terminan siendo "el mismo";
-    # los montos se convierten a numero mas abajo con pd.to_numeric.
-    registros = ws.get_all_records(numericise_ignore=["all"])
-    df = pd.DataFrame(registros, columns=COLUMNAS_REGISTROS)
-    if df.empty:
-        return df
+def _tipar_registros(df: pd.DataFrame) -> pd.DataFrame:
+    """Fechas, numeros y totales recalculados: igual que se ven en el Dashboard."""
     columnas_denom = [col for _, col, _ in DENOMINACIONES]
     numericas = {"efectivo", "tarjeta", "total", "num_operaciones", *columnas_denom}
     df = _texto_seguro(df, numericas | {"fecha", "timestamp"})
@@ -997,6 +1009,20 @@ def get_registros_df() -> pd.DataFrame:
         suma_denominaciones > 0, df["efectivo"]
     ).fillna(0)
     df["total"] = df["efectivo"] + df["tarjeta"].fillna(0)
+    return df
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def get_registros_df() -> pd.DataFrame:
+    ws = _get_or_create_worksheet(NOMBRE_HOJA_REGISTROS, COLUMNAS_REGISTROS)
+    # numericise_ignore: todo llega como TEXTO. Si no, un id como "1234e56789" se
+    # lee como numero (inf) y varios ids distintos terminan siendo "el mismo";
+    # los montos se convierten a numero mas abajo con pd.to_numeric.
+    registros = ws.get_all_records(numericise_ignore=["all"])
+    df = pd.DataFrame(registros, columns=COLUMNAS_REGISTROS)
+    if df.empty:
+        return df
+    df = _tipar_registros(df)
 
     df["nombre"] = _normalizar_nombre(df["nombre"])
     df["nombre_original"] = df["nombre"]
@@ -1503,6 +1529,16 @@ def telegram_configurado() -> bool:
     return bool(_secreto("telegram_token", "TELEGRAM_BOT_TOKEN") and _secreto("telegram_chat_id", "TELEGRAM_CHAT_ID"))
 
 
+def _enviar_telegram(token: str, chat_id: str, texto: str) -> bool:
+    try:
+        cuerpo = urllib.parse.urlencode({"chat_id": chat_id, "text": texto}).encode()
+        pedido = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=cuerpo)
+        with urllib.request.urlopen(pedido, timeout=8) as respuesta:
+            return 200 <= respuesta.status < 300
+    except Exception:
+        return False
+
+
 def notificar_telegram(texto: str) -> bool:
     """Manda un mensaje al chat de administracion. Devuelve True si Telegram lo
     acepto. NUNCA lanza error ni muestra el detalle (la URL lleva el token): si
@@ -1511,13 +1547,46 @@ def notificar_telegram(texto: str) -> bool:
     chat_id = _secreto("telegram_chat_id", "TELEGRAM_CHAT_ID")
     if not token or not chat_id:
         return False
+    return _enviar_telegram(token, chat_id, texto)
+
+
+def notificar_telegram_en_segundo_plano(texto: str) -> None:
+    """Igual que notificar_telegram pero sin hacer esperar a quien guarda: se envia desde
+    otro hilo (las credenciales se leen aqui, antes de lanzarlo)."""
+    token = _secreto("telegram_token", "TELEGRAM_BOT_TOKEN")
+    chat_id = _secreto("telegram_chat_id", "TELEGRAM_CHAT_ID")
+    if token and chat_id:
+        threading.Thread(target=_enviar_telegram, args=(token, chat_id, texto), daemon=True).start()
+
+
+def umbral_alerta_diferencia() -> float:
+    """Desde cuantos soles de diferencia se avisa por Telegram (6 por defecto). Se puede
+    cambiar con la variable ALERTA_DIFERENCIA_SOLES en Railway."""
     try:
-        cuerpo = urllib.parse.urlencode({"chat_id": chat_id, "text": texto}).encode()
-        pedido = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=cuerpo)
-        with urllib.request.urlopen(pedido, timeout=8) as respuesta:
-            return 200 <= respuesta.status < 300
+        return float(_secreto("alerta_diferencia_soles", "ALERTA_DIFERENCIA_SOLES") or UMBRAL_ALERTA_DIFERENCIA)
+    except ValueError:
+        return UMBRAL_ALERTA_DIFERENCIA
+
+
+def _enlace_dashboard() -> str:
+    dominio = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "").strip()
+    return f"https://{dominio}/Dashboard" if dominio else ""
+
+
+def _avisar_diferencia(filas_previas: list[dict], nueva: dict) -> None:
+    """Despues de guardar una Apertura o un Cierre: si el corte (Cierre) o el salto con el
+    Cierre anterior (Apertura) supera el umbral, avisa por Telegram. Reusa las filas que
+    guardar_registro ya leyo, asi que no gasta lecturas de Google."""
+    if not telegram_configurado():
+        return
+    df = _tipar_registros(pd.DataFrame(list(filas_previas) + [nueva], columns=COLUMNAS_REGISTROS))
+    df["nombre"] = _normalizar_nombre(df["nombre"])
+    try:
+        df["nombre"] = unificar_nombres(df["nombre"], df["local"])
     except Exception:
-        return False
+        pass  # sin la hoja Personal igual avisamos con el nombre tal cual
+    for alerta in alertas_de_registro(df, str(nueva["id"]), umbral_alerta_diferencia()):
+        notificar_telegram_en_segundo_plano(texto_alerta_diferencia(alerta, _enlace_dashboard()))
 
 
 def telegram_token_configurado() -> bool:

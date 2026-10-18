@@ -582,3 +582,77 @@ def test_minutos_y_texto_de_espera():
     assert texto_espera(65) == "1 h 05 min"
     assert texto_espera(60 * 26) == "1 d 2 h"
     assert texto_espera(None) == ""
+
+
+# ---------------------------------------------------------------------
+# Alerta de diferencias al guardar (Telegram)
+# ---------------------------------------------------------------------
+import datetime as _dt  # noqa: E402
+
+from cuadre import alertas_de_registro, texto_alerta_diferencia  # noqa: E402
+
+
+def _reg_alerta(id_, local, fecha, turno, tipo, nombre, hora, total, obs=""):
+    return {
+        "id": id_, "local": local, "fecha": _dt.date.fromisoformat(fecha), "turno": turno, "tipo": tipo,
+        "nombre": nombre, "timestamp": pd.Timestamp(f"{fecha} {hora}"), "total": float(total),
+        "observaciones": obs, "motivo_cierre_otro_nombre": "",
+    }
+
+
+def _df_alerta(*filas):
+    return pd.DataFrame(list(filas))
+
+
+def test_alerta_cierre_con_diferencia_mayor_al_umbral():
+    df = _df_alerta(
+        _reg_alerta("a1", "Colon", "2026-10-17", "Mañana", "Apertura", "Ana", "08:00", 3500),
+        _reg_alerta("c1", "Colon", "2026-10-17", "Mañana", "Cierre", "Ana", "14:00", 3480, "faltó"),
+    )
+    [a] = alertas_de_registro(df, "c1")
+    assert a["clase"] == "corte" and a["diferencia"] == -20 and a["responsable"] == "Ana"
+    txt = texto_alerta_diferencia(a, "https://x/Dashboard")
+    assert "Faltante S/ 20.00" in txt and "Colon" in txt and "faltó" in txt and "https://x/Dashboard" in txt
+
+
+def test_alerta_no_salta_si_la_diferencia_no_supera_el_umbral():
+    base = [_reg_alerta("a1", "Colon", "2026-10-17", "Mañana", "Apertura", "Ana", "08:00", 3500)]
+    igual = _df_alerta(*base, _reg_alerta("c1", "Colon", "2026-10-17", "Mañana", "Cierre", "Ana", "14:00", 3506))
+    assert alertas_de_registro(igual, "c1") == []  # justo 6.00: no es "mayor a 6"
+    mas = _df_alerta(*base, _reg_alerta("c1", "Colon", "2026-10-17", "Mañana", "Cierre", "Ana", "14:00", 3506.01))
+    [a] = alertas_de_registro(mas, "c1")
+    assert round(a["diferencia"], 2) == 6.01 and "Sobrante" in texto_alerta_diferencia(a)
+
+
+def test_alerta_entre_cierres_al_guardar_la_apertura():
+    df = _df_alerta(
+        _reg_alerta("a1", "Colon", "2026-10-17", "Tarde", "Apertura", "Pedro", "14:30", 3500),
+        _reg_alerta("c1", "Colon", "2026-10-17", "Tarde", "Cierre", "Pedro", "21:00", 3500),
+        _reg_alerta("a2", "Colon", "2026-10-18", "Mañana", "Apertura", "Ana", "08:00", 3450, "contó mal"),
+    )
+    [a] = alertas_de_registro(df, "a2")
+    assert a["clase"] == "entre_cierres" and a["diferencia"] == -50
+    assert a["nombre_cierre"] == "Pedro" and a["nombre_apertura"] == "Ana"
+    txt = texto_alerta_diferencia(a)
+    assert "ENTRE CIERRE Y APERTURA" in txt and "Faltante S/ 50.00" in txt and "contó mal" in txt
+    # guardar el Cierre de ese turno no repite la alerta del salto
+    assert alertas_de_registro(df[df["id"] != "a2"], "c1") == []
+
+
+def test_alerta_primera_apertura_sin_cierre_previo_y_otros_locales():
+    df = _df_alerta(
+        _reg_alerta("c0", "Zol A", "2026-10-17", "Tarde", "Cierre", "Luis", "21:00", 9999),
+        _reg_alerta("a1", "Colon", "2026-10-18", "Mañana", "Apertura", "Ana", "08:00", 3500),
+    )
+    assert alertas_de_registro(df, "a1") == []  # el Cierre de otro local no cuenta
+    assert alertas_de_registro(df, "no-existe") == []
+    assert alertas_de_registro(pd.DataFrame(), "a1") == []
+
+
+def test_alerta_usa_umbral_configurable():
+    df = _df_alerta(
+        _reg_alerta("a1", "Colon", "2026-10-17", "Mañana", "Apertura", "Ana", "08:00", 3500),
+        _reg_alerta("c1", "Colon", "2026-10-17", "Mañana", "Cierre", "Ana", "14:00", 3490),
+    )
+    assert len(alertas_de_registro(df, "c1", umbral=6)) == 1
+    assert alertas_de_registro(df, "c1", umbral=10.5) == []
