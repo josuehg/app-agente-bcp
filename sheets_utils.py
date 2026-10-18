@@ -71,6 +71,10 @@ from cuadre import (  # noqa: F401  (re-export para el resto de la app)
     resumen_turnos,
     totales_ticket,
     ESTADOS_SOLICITUD_ACTIVOS,
+    ESTADOS_CONFORMIDAD,
+    ESTADO_SIN_CONFORMIDAD,
+    COLUMNAS_CONFORMIDAD,
+    con_conformidad,
     UMBRAL_ALERTA_DIFERENCIA,
     alertas_de_registro,
     texto_alerta_diferencia,
@@ -1240,6 +1244,7 @@ def _hojas_respaldo() -> list:
         (NOMBRE_HOJA_NOTAS, COLUMNAS_NOTAS),
         (NOMBRE_HOJA_PERSONAL, COLUMNAS_PERSONAL),
         (NOMBRE_HOJA_SOLICITUDES, COLUMNAS_SOLICITUDES),
+        (NOMBRE_HOJA_CONFORMIDADES, COLUMNAS_CONFORMIDAD),
     ]
 
 
@@ -1814,3 +1819,35 @@ def solicitud_cancelada(id_solicitud: str, motivo: str = "", local: str = "", ti
         + (f" (por {por})" if por else "")
         + (f"\nMotivo: {motivo.strip()}" if motivo.strip() else "")
     )
+
+
+# ---------------------------------------------------------------------
+# Conformidad del trabajador (ver cuadre.con_conformidad)
+# ---------------------------------------------------------------------
+NOMBRE_HOJA_CONFORMIDADES = "Conformidades"
+
+
+def guardar_conformidad(datos: dict) -> None:
+    """Agrega un registro de conformidad (nunca se pisa uno anterior: queda el historial y manda el
+    ultimo). `datos`: tipo, id_cierre, local, fecha, persona, monto, estado, fecha_conformidad,
+    registrado_por, nota."""
+    if str(datos.get("estado", "")) not in ESTADOS_CONFORMIDAD:
+        raise ValueError(f"Estado de conformidad no valido: {datos.get('estado')}")
+    if not str(datos.get("id_cierre", "")).strip():
+        raise ValueError("Esta diferencia no tiene un identificador de Cierre: no se puede guardar su conformidad.")
+    ws = _get_or_create_worksheet(NOMBRE_HOJA_CONFORMIDADES, COLUMNAS_CONFORMIDAD)
+    fila = {"id": nuevo_id(), "timestamp": ahora_local().replace(tzinfo=None).isoformat(timespec="seconds"), **datos}
+    ws.append_row([str(fila.get(c, "")) for c in COLUMNAS_CONFORMIDAD])
+    get_conformidades_df.clear()
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def get_conformidades_df() -> pd.DataFrame:
+    ws = _get_or_create_worksheet(NOMBRE_HOJA_CONFORMIDADES, COLUMNAS_CONFORMIDAD)
+    df = pd.DataFrame(ws.get_all_records(numericise_ignore=["all"]), columns=COLUMNAS_CONFORMIDAD)
+    if df.empty:
+        return df
+    df = _texto_seguro(df, {"timestamp", "monto"})
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    df["monto"] = pd.to_numeric(df["monto"], errors="coerce").fillna(0)
+    return df

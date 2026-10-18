@@ -131,12 +131,12 @@ def generar_respuesta(comando: str, argumento: str) -> str:
                 periodo = p.lower()
             else:
                 filtro.append(p)
-        registros, config, encuestas, notas, ajustes, personal = _fresco(
+        registros, config, encuestas, notas, ajustes, personal, conformidades = _fresco(
             sh.get_registros_df, sh.get_config_df, sh.get_encuestas_df, sh.get_notas_df, sh.get_ajustes_df,
-            sh.get_personal_df,
+            sh.get_personal_df, sh.get_conformidades_df,
         )
         return rp.reporte_liquidacion(
-            registros, config, encuestas, notas, ajustes, personal, hoy, periodo, " ".join(filtro)
+            registros, config, encuestas, notas, ajustes, personal, hoy, periodo, " ".join(filtro), conformidades
         )
     if comando == "sucursales":
         periodo, filtro = "mes", []

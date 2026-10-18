@@ -25,6 +25,7 @@ from cuadre import (
     UMBRAL_VERDE,
     calcular_cortes,
     calcular_saltos,
+    con_conformidad,
     con_estado_nota,
     creditos_repuso,
     estado_nota,
@@ -779,17 +780,18 @@ def _base_periodo(registros: pd.DataFrame, ajustes, desde: date, hasta: date, lo
 COLUMNAS_LIQUIDACION = [
     "Persona", "Ítems", "Faltantes (S/)", "Sobrantes (S/)", "Neto (S/)", "A revisar (S/)", "A favor (S/)",
     "Descuento asignado (S/)", "A descontar (S/)", "Incentivo a pagar (S/)", "Operaciones", "Encuestas llenadas",
-    "Turnos trabajados", "Turnos con meta", "Meta cumplida", "Local",
+    "Turnos trabajados", "Turnos con meta", "Meta cumplida", "Local", "Conformes",
 ]
 
 
 def tabla_liquidacion(registros, config, encuestas, notas, ajustes, personal, desde: date, hasta: date, locales,
-                      compensar: bool = True, incluir_entregas: bool = True) -> pd.DataFrame:
+                      compensar: bool = True, incluir_entregas: bool = True, conformidades=None) -> pd.DataFrame:
     """Una fila por trabajador (todos los que trabajaron en el periodo y el personal activo, aunque
     tengan 0 diferencias), con las mismas columnas y reglas que la Liquidacion del Dashboard."""
     b = _base_periodo(registros, ajustes, desde, hasta, locales)
     reg, cortes = b["reg"], b["cortes"]
     items = items_ticket(b["cortes_acum"], b["saltos_acum"], incluir_entregas)
+    items_c = con_conformidad(items, conformidades)
     _, pol_rep, _ = politica_sucursal(b["items"], b["ops_por_local"], POL_TASA, POL_PISO, POL_TOPE, POL_GRANDE)
     creditos = creditos_repuso(ajustes, desde, hasta, list(locales))
 
@@ -851,6 +853,7 @@ def tabla_liquidacion(registros, config, encuestas, notas, ajustes, personal, de
             "Turnos con meta": int(st_p["con_meta"]) if st_p is not None else 0,
             "Meta cumplida": int(st_p["cumplidos"]) if st_p is not None else 0,
             "Local": locales_p.get(p, ""),
+            "Conformes": int(((items_c["persona"] == p) & (items_c["conformidad"] == "Aceptó")).sum()),
         })
     if not filas:
         return pd.DataFrame(columns=COLUMNAS_LIQUIDACION)
@@ -860,7 +863,7 @@ def tabla_liquidacion(registros, config, encuestas, notas, ajustes, personal, de
 
 
 def reporte_liquidacion(registros, config, encuestas, notas, ajustes, personal, hoy: date,
-                        periodo: str = "mes", filtro: str = "") -> str:
+                        periodo: str = "mes", filtro: str = "", conformidades=None) -> str:
     desde, hasta, etiqueta = rango_periodo(periodo, hoy)
     final = periodo == "anterior"  # el mes ya cerrado: la liquidacion definitiva
     titulo = (
@@ -873,7 +876,9 @@ def reporte_liquidacion(registros, config, encuestas, notas, ajustes, personal, 
     persona_filtro = ""
     if filtro.strip() and not locales:  # no es un local: se busca como nombre de trabajador
         persona_filtro, locales = filtro.strip(), todos
-    tabla = tabla_liquidacion(registros, config, encuestas, notas, ajustes, personal, desde, hasta, locales)
+    tabla = tabla_liquidacion(
+        registros, config, encuestas, notas, ajustes, personal, desde, hasta, locales, conformidades=conformidades
+    )
     if persona_filtro:
         tabla = tabla[tabla["Persona"].map(_clave).str.contains(_clave(persona_filtro), regex=False)]
         if tabla.empty:
@@ -904,6 +909,8 @@ def reporte_liquidacion(registros, config, encuestas, notas, ajustes, personal, 
                 f"📐 Descuento asignado: {soles(r['Descuento asignado (S/)'])}",
                 f"💸 <b>A descontar: {soles(r['A descontar (S/)'])}</b>",
             ]
+        if r["Ítems"]:
+            lineas.append(f"✍️ Conformidad del trabajador: {r['Conformes']} de {r['Ítems']} aceptadas")
         lineas.append(f"⭐ Incentivo a pagar: {soles(r['Incentivo a pagar (S/)'])} · Encuestas: {r['Encuestas llenadas']}")
         lineas.append(f"🔢 Operaciones: {r['Operaciones']:,} · Turnos: {r['Turnos trabajados']}")
         if r["Turnos con meta"]:
@@ -911,21 +918,23 @@ def reporte_liquidacion(registros, config, encuestas, notas, ajustes, personal, 
         bloques.append("\n".join(lineas))
     pendientes = ""
     if final:  # lo que todavia no se autorizo: cuenta tal cual en la liquidacion
-        items = _base_periodo(registros, ajustes, desde, hasta, locales)["items"]
+        items = con_conformidad(_base_periodo(registros, ajustes, desde, hasta, locales)["items"], conformidades)
         if persona_filtro and not items.empty:
             items = items[items["persona"].map(_clave).str.contains(_clave(persona_filtro), regex=False)]
         if items.empty:
             pendientes = "✅ <b>No quedan diferencias sin autorizar.</b>\n\n———————\n\n"
         else:
             items = items.sort_values(["fecha", "local"])
+            marcas = {"Aceptó": " ✍️ aceptó", "No aceptó": " ❌ no aceptó", "Pendiente": " 👀 la vio, sin respuesta"}
             lineas = [
                 f"⚠️ <b>Diferencias que siguen sin autorizar ({len(items)})</b>",
                 "(si no se autorizan, cuentan tal cual en la liquidación)",
+                f"✍️ Con conformidad del trabajador: {int((items['conformidad'] == 'Aceptó').sum())} de {len(items)}",
             ]
             for _, it in items.head(25).iterrows():
                 lineas.append(
                     f"• {_dm(it['fecha'])} · {esc(it['local'])} · {esc(it['tipo'])} · {esc(it['persona'])}: "
-                    f"{_con_signo(it['diferencia'])}"
+                    f"{_con_signo(it['diferencia'])}{marcas.get(it['conformidad'], '')}"
                 )
             if len(items) > 25:
                 lineas.append(f"… y {len(items) - 25} más (revísalas en el Dashboard → Cuadre).")

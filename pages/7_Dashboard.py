@@ -2865,6 +2865,8 @@ with tab_liquidacion:
     # excluyen lo "🔷 Autorizado" y respetan los filtros del sidebar.
     # -------------------------------------------------------------
     st.subheader("🧾 Liquidación por trabajador")
+    if "conf_msg" in st.session_state:
+        st.success(st.session_state.pop("conf_msg"))
     st.caption(
         "Usa los filtros de la izquierda (locales, turno y rango de fechas). "
         "Excluye lo '🔷 Autorizado' y las diferencias de hasta S/ 1. Es una "
@@ -2882,6 +2884,11 @@ with tab_liquidacion:
     )
 
     items_liq = sh.items_ticket(cortes_acumulado, saltos_para_acumulado, incluir_entregas_liq)
+    try:
+        conformidades_df = sh.get_conformidades_df()
+    except Exception:
+        conformidades_df = pd.DataFrame(columns=sh.COLUMNAS_CONFORMIDAD)  # Google ocupado: sin la columna
+    items_liq_conf = sh.con_conformidad(items_liq, conformidades_df)
     creditos_liq = sh.creditos_repuso(ajustes_df, desde, hasta, locales_sel)
 
     # Incentivos por encuestas del periodo, segun la nota de su local en su mes.
@@ -2966,6 +2973,12 @@ with tab_liquidacion:
                 {
                     "Persona": _persona,
                     "Ítems": int((items_liq["persona"] == _persona).sum()),
+                    "Conformidad": (
+                        f"{int(((items_liq_conf['persona'] == _persona) & (items_liq_conf['conformidad'] == 'Aceptó')).sum())}"
+                        f" de {int((items_liq_conf['persona'] == _persona).sum())}"
+                        if (items_liq_conf["persona"] == _persona).any()
+                        else ""
+                    ),
                     "Faltantes (S/)": _t["faltantes"],
                     "Sobrantes (S/)": _t["sobrantes"],
                     "Neto (S/)": _t["neto"],
@@ -3092,11 +3105,13 @@ with tab_liquidacion:
                     "Cada concepto se paga o se descuenta por separado."
                 )
 
-            tabla_ticket = items_persona.drop(columns=["persona"]).rename(
+            items_persona_conf = items_liq_conf[items_liq_conf["persona"] == persona_liq]
+            tabla_ticket = items_persona_conf.drop(columns=["persona", "id_cierre"]).rename(
                 columns={
                     "tipo": "Tipo", "fecha": "Fecha", "local": "Local",
                     "detalle": "Detalle", "diferencia": "Diferencia (S/)",
-                    "observaciones": "Observaciones",
+                    "observaciones": "Observaciones", "conformidad": "Conformidad",
+                    "fecha_conformidad": "Fecha conformidad",
                 }
             )
             if not tabla_ticket.empty:
@@ -3108,6 +3123,43 @@ with tab_liquidacion:
                 )
             else:
                 st.caption("Sin diferencias propias por revisar.")
+
+            if not items_persona_conf.empty:
+                _aceptadas = int((items_persona_conf["conformidad"] == "Aceptó").sum())
+                st.caption(f"✍️ Conformidad del trabajador: {_aceptadas} de {len(items_persona_conf)} diferencias aceptadas.")
+                with st.expander("✍️ Registrar o cambiar la conformidad del trabajador"):
+                    st.caption(
+                        "Anota si ya le mostraste la diferencia y si la aceptó (idealmente con su firma en un acta). "
+                        "Queda guardado con su fecha; si cambia de opinión, registra de nuevo y manda el último."
+                    )
+                    _opciones_conf = {
+                        f"{r['fecha']} · {r['tipo']} · {r['local']} · {r['diferencia']:+,.2f}"
+                        + ("" if r["conformidad"] == "Sin registrar" else f" ({r['conformidad']})"): r
+                        for _, r in items_persona_conf.iterrows()
+                    }
+                    with st.form(f"conf_form_{persona_liq}"):
+                        _sel_conf = st.selectbox("Diferencia", list(_opciones_conf))
+                        _estado_conf = st.radio("Conformidad", sh.ESTADOS_CONFORMIDAD, horizontal=True)
+                        _fecha_conf = st.date_input(
+                            "Fecha en que se le mostró o aceptó", value=sh.hoy_local(), max_value=sh.hoy_local()
+                        )
+                        _quien_conf = st.text_input("Registrado por (opcional)")
+                        _nota_conf = st.text_input("Nota (opcional)", placeholder="Ej: firmó el acta / lo revisará")
+                        _guardar_conf = st.form_submit_button("Guardar conformidad", type="primary")
+                    if _guardar_conf:
+                        _it = _opciones_conf[_sel_conf]
+                        try:
+                            sh.guardar_conformidad({
+                                "tipo": _it["tipo"], "id_cierre": _it["id_cierre"], "local": _it["local"],
+                                "fecha": str(_it["fecha"]), "persona": persona_liq, "monto": float(_it["diferencia"]),
+                                "estado": _estado_conf, "fecha_conformidad": str(_fecha_conf),
+                                "registrado_por": _quien_conf.strip(), "nota": _nota_conf.strip(),
+                            })
+                        except Exception as error:
+                            st.error(f"No se pudo guardar la conformidad: {error}")
+                        else:
+                            st.session_state["conf_msg"] = f"Conformidad de {persona_liq}: {_estado_conf}."
+                            st.rerun()
 
             tabla_favor = creditos_persona.drop(columns=["persona"]).rename(
                 columns={"fecha": "Fecha", "local": "Local", "monto": "Repuso (S/)", "motivo": "Motivo"}
@@ -3227,7 +3279,7 @@ with tab_sucursales:
             else:
                 st.dataframe(
                     sh.arrow_safe(
-                        det.drop(columns=["local"]).rename(
+                        det.drop(columns=["local", "id_cierre"]).rename(
                             columns={"persona": "Persona", "tipo": "Tipo", "fecha": "Fecha",
                                      "detalle": "Detalle", "diferencia": "Diferencia (S/)",
                                      "observaciones": "Observaciones"}
@@ -3309,7 +3361,7 @@ with tab_sucursales:
             st.markdown("**Ítems grandes: investigar aparte (no entran al reparto)**")
             st.dataframe(
                 sh.arrow_safe(
-                    pol_grandes.rename(
+                    pol_grandes.drop(columns=["id_cierre"], errors="ignore").rename(
                         columns={"persona": "Persona", "tipo": "Tipo", "fecha": "Fecha", "local": "Local",
                                  "detalle": "Detalle", "diferencia": "Diferencia (S/)",
                                  "observaciones": "Observaciones"}

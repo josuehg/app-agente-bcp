@@ -471,3 +471,74 @@ def test_liquidacion_final_de_un_trabajador_o_local_filtra_los_pendientes():
     assert "sin autorizar (1)" in ana and "Luis" not in ana
     zol = rp.reporte_liquidacion(_registros(), _config(), _encuestas(), _notas(), _ajustes(), _personal(), hoy, "anterior", "zol")
     assert "sin autorizar (1)" in zol and "Colon" not in zol.split("🧾")[0]
+
+
+# ---------------------------------------------------------------------
+# Conformidad del trabajador
+# ---------------------------------------------------------------------
+from cuadre import COLUMNAS_CONFORMIDAD  # noqa: E402
+
+
+def _conformidades(*filas):
+    cols = COLUMNAS_CONFORMIDAD
+    base = {c: "" for c in cols}
+    out = []
+    for f in filas:
+        d = dict(base)
+        d.update(f)
+        out.append(d)
+    return pd.DataFrame(out, columns=cols)
+
+
+def test_los_items_traen_el_id_del_cierre():
+    b = rp._base_periodo(_registros(), _ajustes(), dt.date(2026, 10, 1), HOY, ["Colon-H0715", "Zol A-H3582"])
+    ids = dict(zip(b["items"]["tipo"], b["items"]["id_cierre"]))
+    assert ids == {"Corte": "c1", "Entrega de caja": "c4"}
+
+
+def test_con_conformidad_manda_la_ultima_y_distingue_corte_de_entrega():
+    from cuadre import con_conformidad
+
+    items = pd.DataFrame([
+        {"persona": "Ana", "tipo": "Corte", "fecha": HOY, "local": "L", "detalle": "", "diferencia": -20.0, "observaciones": "", "id_cierre": "c1"},
+        {"persona": "Ana", "tipo": "Entrega de caja", "fecha": HOY, "local": "L", "detalle": "", "diferencia": 5.0, "observaciones": "", "id_cierre": "c1"},
+        {"persona": "Pedro", "tipo": "Corte", "fecha": HOY, "local": "L", "detalle": "", "diferencia": -9.0, "observaciones": "", "id_cierre": "c9"},
+    ])
+    conf = _conformidades(
+        {"timestamp": pd.Timestamp("2026-10-18 09:00"), "tipo": "Corte", "id_cierre": "c1", "estado": "Pendiente", "fecha_conformidad": "2026-10-18"},
+        {"timestamp": pd.Timestamp("2026-10-18 11:00"), "tipo": "Corte", "id_cierre": "c1", "estado": "Aceptó", "fecha_conformidad": "2026-10-19"},
+    )
+    r = con_conformidad(items, conf)
+    assert list(r["conformidad"]) == ["Aceptó", "Sin registrar", "Sin registrar"]   # la ultima gana; la entrega es otra cosa
+    assert r["fecha_conformidad"].iloc[0] == "2026-10-19"
+    assert list(con_conformidad(items, None)["conformidad"]) == ["Sin registrar"] * 3
+    assert con_conformidad(items.iloc[0:0], conf).empty
+
+
+def test_liquidacion_cuenta_las_conformidades_aceptadas():
+    conf = _conformidades({"timestamp": pd.Timestamp("2026-10-18 11:00"), "tipo": "Corte", "id_cierre": "c1", "estado": "Aceptó"})
+    t = rp.tabla_liquidacion(
+        _registros(), _config(), _encuestas(), _notas(), _ajustes(), _personal(), dt.date(2026, 10, 1), HOY,
+        ["Colon-H0715", "Zol A-H3582"], conformidades=conf,
+    ).set_index("Persona")
+    assert t.loc["Ana", "Conformes"] == 1 and t.loc["Luis", "Conformes"] == 0 and t.loc["Maria", "Conformes"] == 0
+    txt = rp.reporte_liquidacion(_registros(), _config(), _encuestas(), _notas(), _ajustes(), _personal(), HOY, conformidades=conf)
+    assert "✍️ Conformidad del trabajador: 1 de 1 aceptadas" in txt          # Ana
+    assert "✍️ Conformidad del trabajador: 0 de 1 aceptadas" in txt          # Luis (su entrega)
+    assert "Conformidad del trabajador" not in txt.split("<b>Maria</b>")[1].split("———")[0]   # sin diferencias: no aplica
+
+
+def test_liquidacion_final_marca_cada_diferencia_con_su_conformidad():
+    conf = _conformidades(
+        {"timestamp": pd.Timestamp("2026-10-30 11:00"), "tipo": "Corte", "id_cierre": "c1", "estado": "Aceptó"},
+        {"timestamp": pd.Timestamp("2026-10-30 11:05"), "tipo": "Entrega de caja", "id_cierre": "c4", "estado": "No aceptó"},
+    )
+    txt = rp.reporte_liquidacion(
+        _registros(), _config(), _encuestas(), _notas(), _ajustes(), _personal(), dt.date(2026, 11, 3), "anterior",
+        conformidades=conf,
+    )
+    assert "✍️ Con conformidad del trabajador: 1 de 2" in txt
+    assert "Corte · Ana: -20.00 ✍️ aceptó" in txt
+    assert "Entrega de caja · Luis: +1,100.00 ❌ no aceptó" in txt
+    sin = rp.reporte_liquidacion(_registros(), _config(), _encuestas(), _notas(), _ajustes(), _personal(), dt.date(2026, 11, 3), "anterior")
+    assert "Con conformidad del trabajador: 0 de 2" in sin and "aceptó" not in sin.split("Diferencias que siguen")[1].split("———")[0]

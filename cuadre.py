@@ -488,7 +488,7 @@ def calcular_saltos(df: pd.DataFrame) -> pd.DataFrame:
 # quien abrio) y de sus entregas de caja (atribuidas a quien cerro).
 # Quien llame debe pasar cortes/saltos YA sin lo "Autorizado".
 # ---------------------------------------------------------------------
-COLUMNAS_TICKET = ["persona", "tipo", "fecha", "local", "detalle", "diferencia", "observaciones"]
+COLUMNAS_TICKET = ["persona", "tipo", "fecha", "local", "detalle", "diferencia", "observaciones", "id_cierre"]
 
 
 def items_ticket(cortes: pd.DataFrame, saltos: pd.DataFrame, incluir_entregas: bool = True) -> pd.DataFrame:
@@ -510,6 +510,7 @@ def items_ticket(cortes: pd.DataFrame, saltos: pd.DataFrame, incluir_entregas: b
                     "detalle": f"{r['turno']} · corte {r['corte']} ({r['hora_apertura']}–{r['hora_cierre']})",
                     "diferencia": float(r["diferencia"]),
                     "observaciones": r.get("observaciones", ""),
+                    "id_cierre": str(r.get("id_cierre", "") or ""),
                 }
             )
 
@@ -532,6 +533,7 @@ def items_ticket(cortes: pd.DataFrame, saltos: pd.DataFrame, incluir_entregas: b
                     ),
                     "diferencia": float(r["diferencia"]),
                     "observaciones": "",
+                    "id_cierre": str(r.get("id_cierre", "") or ""),
                 }
             )
 
@@ -1131,3 +1133,38 @@ def marcar_autorizados(cortes, saltos, ajustes):
         saltos["_restante"] = saltos["diferencia"].fillna(0) - saltos["_ajuste"]
         saltos["_autorizado"] = (saltos["_ajuste"] != 0) & (saltos["_restante"].abs() <= UMBRAL_VERDE) & saltos["diferencia"].notna()
     return cortes, saltos
+
+
+# ---------------------------------------------------------------------
+# Conformidad del trabajador: si ya vio y acepto cada diferencia. Se guarda aparte (hoja
+# "Conformidades"), una fila por registro; para cada diferencia manda la ULTIMA que se registro.
+# Una diferencia se identifica por su tipo ("Corte" / "Entrega de caja") y el id del Cierre.
+# ---------------------------------------------------------------------
+ESTADOS_CONFORMIDAD = ["Aceptó", "No aceptó", "Pendiente"]
+ESTADO_SIN_CONFORMIDAD = "Sin registrar"
+COLUMNAS_CONFORMIDAD = [
+    "id", "timestamp", "tipo", "id_cierre", "local", "fecha", "persona", "monto", "estado",
+    "fecha_conformidad", "registrado_por", "nota",
+]
+
+
+def con_conformidad(items: pd.DataFrame, conformidades) -> pd.DataFrame:
+    """Agrega 'conformidad' (Aceptó / No aceptó / Pendiente / Sin registrar) y 'fecha_conformidad'
+    a cada item de items_ticket()."""
+    if items is None:
+        return pd.DataFrame(columns=COLUMNAS_TICKET + ["conformidad", "fecha_conformidad"])
+    salida = items.copy()
+    mapa: dict = {}
+    if conformidades is not None and not conformidades.empty:
+        for _, c in conformidades.sort_values("timestamp", kind="stable").iterrows():
+            mapa[(str(c["tipo"]).strip(), str(c["id_cierre"]).strip())] = (
+                str(c["estado"]).strip(), str(c.get("fecha_conformidad", "") or "").strip(),
+            )
+    if salida.empty:
+        salida["conformidad"] = pd.Series(dtype=str)
+        salida["fecha_conformidad"] = pd.Series(dtype=str)
+        return salida
+    res = [mapa.get((str(t), str(i)), (ESTADO_SIN_CONFORMIDAD, "")) for t, i in zip(salida["tipo"], salida["id_cierre"])]
+    salida["conformidad"] = [r[0] for r in res]
+    salida["fecha_conformidad"] = [r[1] for r in res]
+    return salida
