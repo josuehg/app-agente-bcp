@@ -328,16 +328,16 @@ def test_resumen_diario_junta_todas_las_secciones():
     assert "Todos los turnos están cerrados" in cerrado and "Hoy no se registraron encuestas" in cerrado
 
 
-def test_turnos_sin_cerrar_por_defecto_a_las_8_horas(monkeypatch):
+def test_turnos_sin_cerrar_por_defecto_a_las_8_horas_y_media(monkeypatch):
     import bot_telegram as bot
 
     monkeypatch.delenv("ALERTA_TURNO_ABIERTO_HORAS", raising=False)
-    assert bot.horas_turno_abierto() == 8.0
+    assert bot.horas_turno_abierto() == 8.5
     monkeypatch.setenv("ALERTA_TURNO_ABIERTO_HORAS", "6.5")
     assert bot.horas_turno_abierto() == 6.5
     monkeypatch.setenv("ALERTA_TURNO_ABIERTO_HORAS", "xx")
-    assert bot.horas_turno_abierto() == 8.0
+    assert bot.horas_turno_abierto() == 8.5
 
     reg = pd.DataFrame([_r("a1", "Colon", "2026-10-18", "Tarde", "Apertura", "Ana", "13:00", 3000, 500)])
-    assert rp.turnos_sin_cerrar(reg, pd.Timestamp("2026-10-18 20:59")) == []     # 7 h 59 min
-    assert len(rp.turnos_sin_cerrar(reg, pd.Timestamp("2026-10-18 21:00"))) == 1  # 8 h
+    assert rp.turnos_sin_cerrar(reg, pd.Timestamp("2026-10-18 21:29")) == []     # 8 h 29 min
+    assert len(rp.turnos_sin_cerrar(reg, pd.Timestamp("2026-10-18 21:30"))) == 1  # 8 h 30 min

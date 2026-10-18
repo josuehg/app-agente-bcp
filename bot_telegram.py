@@ -204,12 +204,12 @@ def hora_resumen() -> int | None:
 
 
 def horas_turno_abierto() -> float:
-    """Horas con la Apertura sin Cierre desde las que se avisa (ALERTA_TURNO_ABIERTO_HORAS; 8, igual
+    """Horas con la Apertura sin Cierre desde las que se avisa (ALERTA_TURNO_ABIERTO_HORAS; 8.5, igual
     que el Dashboard)."""
     try:
-        return float(sh._secreto("alerta_turno_abierto_horas", "ALERTA_TURNO_ABIERTO_HORAS") or 8)
+        return float(sh._secreto("alerta_turno_abierto_horas", "ALERTA_TURNO_ABIERTO_HORAS") or 8.5)
     except ValueError:
-        return 8.0
+        return 8.5
 
 
 class Programador:

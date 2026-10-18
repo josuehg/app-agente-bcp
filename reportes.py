@@ -461,7 +461,7 @@ def reporte_diferencias(registros: pd.DataFrame, hoy: date, dias: int = 7, umbra
 # ---------------------------------------------------------------------
 # Turnos que se quedaron sin cerrar (alerta automatica y parte del resumen)
 # ---------------------------------------------------------------------
-def turnos_sin_cerrar(registros: pd.DataFrame, ahora, horas: float = 8.0) -> list[dict]:
+def turnos_sin_cerrar(registros: pd.DataFrame, ahora, horas: float = 8.5) -> list[dict]:
     """Turnos de ayer u hoy cuyo ULTIMO registro es una Apertura de hace `horas` o mas. Es la
     misma idea (y el mismo umbral por defecto) que "⏰ Turnos sin cerrar" del Dashboard."""
     if registros is None or registros.empty:
