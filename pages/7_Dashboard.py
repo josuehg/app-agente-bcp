@@ -524,7 +524,7 @@ with tab_resumen:
             st.warning(
                 f"**{t['local']}** · turno **{t['turno']}** del {t['fecha']}: "
                 f"Apertura de **{t['nombre']}** a las {hora_ap} "
-                f"(hace {t["horas_abierto"]:.1f} horas) sin Cierre registrado."
+                f"(hace {t['horas_abierto']:.1f} horas) sin Cierre registrado."
             )
         st.caption(
             "Puede ser que se olvidaron de registrar el Cierre, o que el "
