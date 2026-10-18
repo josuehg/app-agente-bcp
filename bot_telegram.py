@@ -230,15 +230,18 @@ def hora_resumen() -> int | None:
 
 
 def dia_liquidacion() -> int | None:
-    """Dia del mes en que se manda la liquidacion de todos (LIQUIDACION_DIA; 30 por defecto; 'off' la
-    apaga). En un mes mas corto (febrero) sale el ultimo dia."""
-    valor = (sh._secreto("liquidacion_dia", "LIQUIDACION_DIA") or "30").strip().lower()
+    """Dia del mes en que se manda la liquidacion de todos. Por defecto, el ULTIMO dia de cada mes
+    (se guarda como 31 y en los meses mas cortos sale el 30, 29 o 28). LIQUIDACION_DIA puede ser un
+    numero (por ejemplo 25), 'ultimo' o 'off' para apagarla."""
+    valor = (sh._secreto("liquidacion_dia", "LIQUIDACION_DIA") or "ultimo").strip().lower()
     if valor in ("off", "no", "0", "apagado"):
         return None
+    if valor in ("ultimo", "último", "fin", "final"):
+        return 31
     try:
         return min(max(int(valor), 1), 31)
     except ValueError:
-        return 30
+        return 31
 
 
 def hora_liquidacion() -> int:
