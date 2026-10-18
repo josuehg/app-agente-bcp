@@ -192,15 +192,15 @@ def enviar_a_todos(token: str, texto: str) -> None:
 
 def hora_resumen() -> int | None:
     """Minutos desde medianoche a los que se manda el resumen (RESUMEN_DIARIO_HORA, 'HH:MM';
-    'off' lo apaga). Por defecto 21:30."""
-    valor = (sh._secreto("resumen_diario_hora", "RESUMEN_DIARIO_HORA") or "21:30").strip().lower()
+    'off' lo apaga). Por defecto 22:00."""
+    valor = (sh._secreto("resumen_diario_hora", "RESUMEN_DIARIO_HORA") or "22:00").strip().lower()
     if valor in ("off", "no", "0", "apagado"):
         return None
     try:
         h, m = valor.split(":")
         return int(h) * 60 + int(m)
     except ValueError:
-        return 21 * 60 + 30
+        return 22 * 60
 
 
 def horas_turno_abierto() -> float:
