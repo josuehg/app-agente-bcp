@@ -782,13 +782,20 @@ def con_estado_nota(encuestas: pd.DataFrame, notas: pd.DataFrame) -> pd.DataFram
 # ---------------------------------------------------------------------
 COLUMNAS_POL_SUCURSAL = [
     "local", "operaciones", "faltantes", "sobrantes", "perdida_neta",
-    "franquicia", "exceso", "descuento", "items_grandes", "monto_grandes",
+    "franquicia", "exceso", "descuento", "items_grandes", "monto_grandes", "tope", "sobre_techo",
 ]
 COLUMNAS_POL_REPARTO = ["local", "persona", "faltante", "participacion", "asignado"]
 
 
-def politica_sucursal(items, ops_por_local: dict, tasa: float, piso: float, tope: float, grande: float):
-    """Devuelve (por sucursal, reparto por operador, items grandes)."""
+def politica_sucursal(items, ops_por_local: dict, tasa: float, piso: float, tope, grande: float):
+    """Devuelve (por sucursal, reparto por operador, items grandes). `tope` es el techo de descuento por
+    sucursal: un numero para todas, o un dict {local: techo} (p. ej. distinto para superagentes). Lo que
+    pasa del techo NO se descuenta a nadie: queda en la columna 'sobre_techo' (lo asume la empresa)."""
+    def _techo(loc) -> float:
+        if isinstance(tope, dict):
+            return float(tope.get(loc, min(tope.values()) if tope else 0.0))
+        return float(tope)
+
     if items is None or items.empty:
         items = pd.DataFrame(columns=COLUMNAS_TICKET)
         pool = grandes = items
@@ -807,7 +814,8 @@ def politica_sucursal(items, ops_por_local: dict, tasa: float, piso: float, tope
         ops = float(ops_por_local.get(loc, 0) or 0)
         franquicia = float(piso + tasa * ops)
         exceso = max(0.0, perdida - franquicia)
-        descuento = float(min(tope, exceso))
+        techo = _techo(loc)
+        descuento = float(min(techo, exceso))
         g = grandes[grandes["local"] == loc]
         filas.append(
             {
@@ -815,6 +823,7 @@ def politica_sucursal(items, ops_por_local: dict, tasa: float, piso: float, tope
                 "sobrantes": sobrantes, "perdida_neta": perdida, "franquicia": franquicia,
                 "exceso": exceso, "descuento": descuento, "items_grandes": int(len(g)),
                 "monto_grandes": float(g["diferencia"].sum()),
+                "tope": techo, "sobre_techo": max(0.0, exceso - techo),
             }
         )
         if faltantes > 0:

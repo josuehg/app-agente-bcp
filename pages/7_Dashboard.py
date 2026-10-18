@@ -2835,7 +2835,17 @@ with tab_cuadre:
 # calcula UNA vez aca para usarla en Sucursales y en Liquidacion. Los
 # parametros se editan en la pestaña Sucursales (widgets con estas keys).
 # -------------------------------------------------------------
-POL_TASA_DEF, POL_PISO_DEF, POL_TOPE_DEF, POL_GRANDE_DEF = 0.01, 0.0, 30.0, 40.0
+POL_TASA_DEF, POL_PISO_DEF, POL_GRANDE_DEF = 0.01, 0.0, 40.0
+# Techo de descuento por sucursal al mes: distinto para agentes normales y superagentes.
+POL_TOPE_NORMAL_DEF, POL_TOPE_SUPER_DEF = 22.0, 33.0
+topes_pol = {
+    _loc: (
+        st.session_state.get("pol_tope_super", POL_TOPE_SUPER_DEF)
+        if _tipo == "superagente"
+        else st.session_state.get("pol_tope_normal", POL_TOPE_NORMAL_DEF)
+    )
+    for _loc, _tipo in zip(config_df["local"], config_df["tipo_agente"])
+}
 items_pol = sh.items_ticket(
     cortes_acumulado, saltos_para_acumulado, st.session_state.get("suc_incluir_entregas", True)
 )
@@ -2852,7 +2862,7 @@ pol_suc, pol_rep, pol_grandes = sh.politica_sucursal(
     ops_por_local,
     st.session_state.get("pol_tasa", POL_TASA_DEF),
     st.session_state.get("pol_piso", POL_PISO_DEF),
-    st.session_state.get("pol_tope", POL_TOPE_DEF),
+    topes_pol,
     st.session_state.get("pol_grande", POL_GRANDE_DEF),
 )
 
@@ -3299,19 +3309,24 @@ with tab_sucursales:
         "(4) el descuento se reparte entre los operadores según lo que le faltó a cada uno, y quien "
         "no tuvo faltantes no paga. Los ítems grandes se investigan aparte."
     )
-    pp1, pp2, pp3, pp4 = st.columns(4)
+    pp1, pp2, pp3, pp3b, pp4 = st.columns(5)
     pp1.number_input(
         "Franquicia: S/ por operación", min_value=0.0, value=POL_TASA_DEF, step=0.005,
         format="%.3f", key="pol_tasa",
     )
     pp2.number_input("Franquicia: piso (S/)", min_value=0.0, value=POL_PISO_DEF, step=1.0, key="pol_piso")
     pp3.number_input(
-        "Techo de descuento por sucursal (S/)", min_value=0.0, value=POL_TOPE_DEF, step=5.0, key="pol_tope"
+        "Techo por sucursal: agentes normales (S/)", min_value=0.0, value=POL_TOPE_NORMAL_DEF, step=1.0,
+        key="pol_tope_normal",
+    )
+    pp3b.number_input(
+        "Techo por sucursal: superagentes (S/)", min_value=0.0, value=POL_TOPE_SUPER_DEF, step=1.0,
+        key="pol_tope_super",
     )
     pp4.number_input(
         "Ítem grande (S/): se investiga aparte", min_value=1.0, value=POL_GRANDE_DEF, step=5.0, key="pol_grande"
     )
-    st.caption("Los valores vuelven a los acordados (S/ 0.01 por operación, techo S/ 30, ítem grande S/ 40) al recargar la página.")
+    st.caption("Los valores vuelven a los acordados (S/ 0.01 por operación, techo S/ 22 en agentes normales y S/ 33 en superagentes, ítem grande S/ 40) al recargar la página.")
 
     if pol_suc.empty:
         st.caption("Sin datos para calcular la política en el rango seleccionado.")
@@ -3322,10 +3337,12 @@ with tab_sucursales:
                 "sobrantes": "Sobrantes (S/)", "perdida_neta": "Pérdida neta (S/)",
                 "franquicia": "Franquicia (S/)", "exceso": "Pasa la franquicia (S/)",
                 "descuento": "Descuento (S/)", "items_grandes": "Ítems grandes",
-                "monto_grandes": "Monto ítems grandes (S/)",
+                "monto_grandes": "Monto ítems grandes (S/)", "tope": "Techo (S/)",
+                "sobre_techo": "Pasa el techo: lo asume la empresa (S/)",
             }
         )
         total_pol = {"Local": "TOTAL", **{c: vista_pol[c].sum() for c in vista_pol.columns if c != "Local"}}
+        total_pol["Techo (S/)"] = float("nan")  # sumar techos de distintas sucursales no significa nada
         st.dataframe(
             sh.arrow_safe(pd.concat([vista_pol, pd.DataFrame([total_pol])], ignore_index=True)),
             width="stretch",
@@ -3333,7 +3350,8 @@ with tab_sucursales:
             column_config={
                 c: st.column_config.NumberColumn(format="%.2f")
                 for c in ["Faltantes (S/)", "Sobrantes (S/)", "Pérdida neta (S/)", "Franquicia (S/)",
-                          "Pasa la franquicia (S/)", "Descuento (S/)", "Monto ítems grandes (S/)"]
+                          "Pasa la franquicia (S/)", "Descuento (S/)", "Monto ítems grandes (S/)", "Techo (S/)",
+                          "Pasa el techo: lo asume la empresa (S/)"]
             },
         )
         if pol_rep.empty:

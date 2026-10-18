@@ -34,7 +34,7 @@ def _registros():
 def _config():
     return pd.DataFrame({
         "local": ["Colon-H0715", "Zol A-H3582"], "fondo_minimo": [5000.0, 5000.0],
-        "meta_ops_manana": [60, 0], "meta_ops_tarde": [40, 0],
+        "meta_ops_manana": [60, 0], "meta_ops_tarde": [40, 0], "tipo_agente": ["normal", "superagente"],
     })
 
 
@@ -597,3 +597,64 @@ def test_sin_descuento_porque_es_un_item_grande_o_porque_no_tuvo_faltantes():
 def test_con_descuento_no_hay_motivo():
     t = _tabla_liq()
     assert t.loc["Ana", "Descuento asignado (S/)"] > 0 and t.loc["Ana", "Motivo sin descuento"] == ""
+
+
+# ---------------------------------------------------------------------
+# Techo de descuento por sucursal segun el tipo de agente (22 normal / 33 superagente)
+# ---------------------------------------------------------------------
+def _tres_faltantes_seguidos():
+    # 3 dias, cada uno falta 30 y el dia siguiente abre con lo que cerro (sin descuadre en las entregas)
+    return pd.DataFrame(
+        _corte(1, "Maria", "08:00", "14:00", 3000, 2970, ops=100, dia="2026-10-10")
+        + _corte(2, "Maria", "08:00", "14:00", 2970, 2940, ops=100, dia="2026-10-11")
+        + _corte(3, "Maria", "08:00", "14:00", 2940, 2910, ops=100, dia="2026-10-12")
+    )
+
+
+def test_politica_techo_por_local_y_lo_que_lo_pasa():
+    from cuadre import politica_sucursal
+
+    cols = ["persona", "tipo", "fecha", "local", "detalle", "diferencia", "observaciones", "id_cierre"]
+    items = pd.DataFrame(
+        [["Ana", "Corte", HOY, loc, "", -30.0, "", f"{loc}{i}"] for loc in ("L1", "L2") for i in range(2)], columns=cols
+    )
+    suc, rep, _ = politica_sucursal(items, {"L1": 0, "L2": 0}, 0, 0, {"L1": 22.0, "L2": 33.0}, 40)
+    s = suc.set_index("local")
+    assert (s.loc["L1", "descuento"], s.loc["L1", "sobre_techo"], s.loc["L1", "tope"]) == (22.0, 38.0, 22.0)
+    assert (s.loc["L2", "descuento"], s.loc["L2", "sobre_techo"], s.loc["L2", "tope"]) == (33.0, 27.0, 33.0)
+    assert rep.groupby("local")["asignado"].sum().to_dict() == {"L1": 22.0, "L2": 33.0}
+    escalar, _, _ = politica_sucursal(items, {"L1": 0, "L2": 0}, 0, 0, 30, 40)    # un solo techo sigue funcionando
+    assert list(escalar["descuento"]) == [30.0, 30.0] and list(escalar["sobre_techo"]) == [30.0, 30.0]
+
+
+def test_techos_segun_el_tipo_de_agente():
+    assert rp.topes_por_local(_config(), ["Colon-H0715", "Zol A-H3582", "Otro"]) == {
+        "Colon-H0715": 22.0, "Zol A-H3582": 33.0, "Otro": 22.0}
+    assert rp.topes_por_local(pd.DataFrame(), ["X"]) == {"X": 22.0}
+
+
+def test_sucursales_normal_se_topa_en_22_y_muestra_lo_que_pasa_del_techo():
+    txt = rp.reporte_sucursales(_tres_faltantes_seguidos(), _config(), _ajustes(), HOY, "mes", "colon")
+    assert "descuento S/ 22.00</b> (techo S/ 22.00)" in txt.replace("<b>", "<b>")
+    assert "Pasa el techo por S/ 65.00" in txt and "la asume la empresa" in txt   # 90 - 3 de franquicia - 22 de techo
+
+
+def test_sucursales_superagente_se_topa_en_33():
+    cfg = _config().assign(tipo_agente=["superagente", "superagente"])
+    txt = rp.reporte_sucursales(_tres_faltantes_seguidos(), cfg, _ajustes(), HOY, "mes", "colon")
+    assert "descuento S/ 33.00</b> (techo S/ 33.00)" in txt and "Pasa el techo por S/ 54.00" in txt
+
+
+def test_sin_pasar_el_techo_no_se_muestra_nada_extra():
+    reg = pd.DataFrame(_corte(1, "Maria", "08:00", "14:00", 3000, 2970, ops=100))   # falto 30; franquicia 1 -> descuento 22? no: 29 > 22
+    txt = rp.reporte_sucursales(reg, _config(), _ajustes(), HOY, "mes", "colon")
+    assert "descuento S/ 22.00" in txt and "Pasa el techo por S/ 7.00" in txt
+    chico = pd.DataFrame(_corte(1, "Maria", "08:00", "14:00", 3000, 2985, ops=100))  # falto 15 -> 14 sobre franquicia: dentro del techo
+    txt2 = rp.reporte_sucursales(chico, _config(), _ajustes(), HOY, "mes", "colon")
+    assert "descuento S/ 14.00" in txt2 and "Pasa el techo" not in txt2
+
+
+def test_liquidacion_resume_lo_que_pasa_del_techo_y_asigna_hasta_el_techo():
+    txt = rp.reporte_liquidacion(_tres_faltantes_seguidos(), _config(), _encuestas().iloc[0:0], _notas(), _ajustes(), _personal().iloc[0:0], HOY, "mes", "colon")
+    assert "🏢 <b>Pasa del techo (lo asume la empresa):</b>\n   Colon-H0715: S/ 65.00 (techo S/ 22.00)" in txt
+    assert "📐 Descuento asignado: S/ 22.00" in txt and "💸 <b>A descontar: S/ 22.00</b>" in txt

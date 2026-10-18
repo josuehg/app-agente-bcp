@@ -645,7 +645,16 @@ def resumen_diario(registros, config, encuestas, ajustes, solicitudes, hoy: date
 # /sucursales: balance de diferencias por sucursal + politica de descuento
 # (lo mismo que la pestaña "🏪 Sucursales" del Dashboard, con los mismos calculos)
 # ---------------------------------------------------------------------
-POL_TASA, POL_PISO, POL_TOPE, POL_GRANDE = 0.01, 0.0, 30.0, 40.0  # los acordados (ver Dashboard)
+POL_TASA, POL_PISO, POL_GRANDE = 0.01, 0.0, 40.0  # los acordados (ver Dashboard)
+POL_TOPE_NORMAL, POL_TOPE_SUPER = 22.0, 33.0      # techo de descuento por sucursal y mes, segun el tipo de agente
+
+
+def topes_por_local(config, locales) -> dict:
+    """{local: techo de descuento}: S/ 33 para superagentes y S/ 22 para agentes normales."""
+    tipos = {}
+    if config is not None and not config.empty and "tipo_agente" in config.columns:
+        tipos = dict(zip(config["local"].astype(str), config["tipo_agente"].astype(str).str.lower()))
+    return {str(l): (POL_TOPE_SUPER if tipos.get(str(l)) == "superagente" else POL_TOPE_NORMAL) for l in locales}
 
 
 def reporte_sucursales(registros: pd.DataFrame, config: pd.DataFrame, ajustes, hoy: date,
@@ -668,7 +677,9 @@ def reporte_sucursales(registros: pd.DataFrame, config: pd.DataFrame, ajustes, h
     # cortes del rango y entregas (saltos) cuyo Cierre cae en el rango; sin lo ya autorizado
     b = _base_periodo(registros, ajustes, desde, hasta, elegidos)
     cortes, items, ops_por_local = b["cortes"], b["items"], b["ops_por_local"]
-    pol_suc, pol_rep, pol_grandes = politica_sucursal(items, ops_por_local, POL_TASA, POL_PISO, POL_TOPE, POL_GRANDE)
+    pol_suc, pol_rep, pol_grandes = politica_sucursal(
+        items, ops_por_local, POL_TASA, POL_PISO, topes_por_local(config, elegidos), POL_GRANDE
+    )
 
     aj = pd.DataFrame()
     if ajustes is not None and not ajustes.empty:
@@ -711,8 +722,12 @@ def reporte_sucursales(registros: pd.DataFrame, config: pd.DataFrame, ajustes, h
         if p is not None:
             lineas.append(
                 f"📐 Política: pérdida neta {soles(p['perdida_neta'])} · franquicia {soles(p['franquicia'])} → "
-                f"<b>descuento {soles(p['descuento'])}</b>"
+                f"<b>descuento {soles(p['descuento'])}</b> (techo {soles(p['tope'])})"
             )
+            if p["sobre_techo"] > 0:
+                lineas.append(
+                    f"🏢 <b>Pasa el techo por {soles(p['sobre_techo'])}</b>: esa parte no se descuenta a nadie, la asume la empresa"
+                )
             rep = pol_rep[pol_rep["local"] == f["local"]] if not pol_rep.empty else pol_rep
             for _, r in rep.sort_values("asignado", ascending=False).iterrows():
                 if r["asignado"] > 0:
@@ -726,11 +741,13 @@ def reporte_sucursales(registros: pd.DataFrame, config: pd.DataFrame, ajustes, h
 
     total = {k: sum(f[k] for f in filas) for k in ("faltantes", "sobrantes", "neto", "autorizado", "repuesto")}
     desc_total = float(pol_suc["descuento"].sum()) if not pol_suc.empty else 0.0
+    sobre_total = float(pol_suc["sobre_techo"].sum()) if not pol_suc.empty else 0.0
     pie = (
         "\n\n📊 <b>Total</b>\n"
         f"📉 Faltantes: {soles(total['faltantes'])}\n📈 Sobrantes: {soles(total['sobrantes'])}\n"
         f"⚖️ Neto sin explicar: {_con_signo(total['neto'])}\n🔷 Autorizado: {_con_signo(total['autorizado'])}\n"
         f"↩️ Repuesto: {soles(total['repuesto'])}\n📐 Descuento por política: {soles(desc_total)}"
+        + (f"\n🏢 Pasa del techo (lo asume la empresa): {soles(sobre_total)}" if sobre_total > 0 else "")
     ) if len(filas) > 1 else ""
     detalle = ""
     if local_filtro.strip() and len(filas) == 1 and not items.empty:  # con un local: las diferencias una por una
@@ -741,8 +758,9 @@ def reporte_sucursales(registros: pd.DataFrame, config: pd.DataFrame, ajustes, h
                 for _, r in det.iterrows()
             )
     nota = (
-        f"\n\nℹ️ Política: franquicia S/ {POL_TASA:g} por operación, techo S/ {POL_TOPE:g} por sucursal, "
-        "el descuento se reparte según lo que le faltó a cada uno."
+        f"\n\nℹ️ Política: franquicia S/ {POL_TASA:g} por operación; techo por sucursal S/ {POL_TOPE_NORMAL:g} "
+        f"(agentes normales) o S/ {POL_TOPE_SUPER:g} (superagentes); lo que pasa del techo lo asume la empresa. "
+        "El descuento se reparte según lo que le faltó a cada uno."
     )
     return f"{titulo}\n\n" + "\n\n".join(bloques) + pie + detalle + nota
 
@@ -819,7 +837,9 @@ def tabla_liquidacion(registros, config, encuestas, notas, ajustes, personal, de
     reg, cortes = b["reg"], b["cortes"]
     items = items_ticket(b["cortes_acum"], b["saltos_acum"], incluir_entregas)
     items_c = con_conformidad(items, conformidades)
-    pol_suc, pol_rep, pol_grandes = politica_sucursal(b["items"], b["ops_por_local"], POL_TASA, POL_PISO, POL_TOPE, POL_GRANDE)
+    pol_suc, pol_rep, pol_grandes = politica_sucursal(
+        b["items"], b["ops_por_local"], POL_TASA, POL_PISO, topes_por_local(config, locales), POL_GRANDE
+    )
     creditos = creditos_repuso(ajustes, desde, hasta, list(locales))
 
     enc = pd.DataFrame()
@@ -888,9 +908,11 @@ def tabla_liquidacion(registros, config, encuestas, notas, ajustes, personal, de
         })
     if not filas:
         return pd.DataFrame(columns=COLUMNAS_LIQUIDACION)
-    return pd.DataFrame(filas, columns=COLUMNAS_LIQUIDACION).sort_values(
+    resultado = pd.DataFrame(filas, columns=COLUMNAS_LIQUIDACION).sort_values(
         ["A descontar (S/)", "A revisar (S/)"], ascending=False, kind="stable"
     ).reset_index(drop=True)
+    resultado.attrs["pol_suc"] = pol_suc   # por sucursal: techo y lo que lo pasa (lo asume la empresa)
+    return resultado
 
 
 def reporte_liquidacion(registros, config, encuestas, notas, ajustes, personal, hoy: date,
@@ -910,6 +932,7 @@ def reporte_liquidacion(registros, config, encuestas, notas, ajustes, personal, 
     tabla = tabla_liquidacion(
         registros, config, encuestas, notas, ajustes, personal, desde, hasta, locales, conformidades=conformidades
     )
+    pol_suc = tabla.attrs.get("pol_suc")
     if persona_filtro:
         tabla = tabla[tabla["Persona"].map(_clave).str.contains(_clave(persona_filtro), regex=False)]
         if tabla.empty:
@@ -925,6 +948,11 @@ def reporte_liquidacion(registros, config, encuestas, notas, ajustes, personal, 
         f"💸 A descontar en total: {soles(tabla['A descontar (S/)'].sum())}\n"
         f"⭐ Incentivos a pagar: {soles(tabla['Incentivo a pagar (S/)'].sum())}"
     )
+    if pol_suc is not None and not pol_suc.empty and (pol_suc["sobre_techo"] > 0).any():
+        resumen += "\n🏢 <b>Pasa del techo (lo asume la empresa):</b>" + "".join(
+            f"\n   {esc(x['local'])}: {soles(x['sobre_techo'])} (techo {soles(x['tope'])})"
+            for _, x in pol_suc[pol_suc["sobre_techo"] > 0].iterrows()
+        )
     bloques = []
     for _, r in tabla.iterrows():
         con_dif = (r["Ítems"] or r["A favor (S/)"] or r["Descuento asignado (S/)"])
