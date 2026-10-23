@@ -71,6 +71,7 @@ from cuadre import (  # noqa: F401  (re-export para el resto de la app)
     resumen_turnos,
     totales_ticket,
     ESTADOS_SOLICITUD_ACTIVOS,
+    solicitud_repetida,
     ESTADOS_CONFORMIDAD,
     ESTADO_SIN_CONFORMIDAD,
     COLUMNAS_CONFORMIDAD,
@@ -1517,7 +1518,7 @@ COLUMNAS_SOLICITUDES = [
 
 
 class SolicitudDuplicada(Exception):
-    """Ya hay una solicitud abierta de ese tipo en ese local."""
+    """La misma solicitud ya se envio hace un momento (doble clic). Se permiten varias abiertas a la vez."""
 
 
 def _secreto(nombre_secret: str, nombre_env: str) -> str:
@@ -1709,7 +1710,7 @@ def telegram_chats_recientes() -> list[dict]:
     return telegram_diagnostico()["chats"]
 
 
-def _texto_alerta_solicitud(datos: dict) -> str:
+def _texto_alerta_solicitud(datos: dict, previas: int = 0) -> str:
     pide_efectivo = datos["tipo"] == "Falta efectivo"
     accion = (
         "Acción: el personal de confianza entrega efectivo de la reserva; el cajero deposita ese "
@@ -1725,35 +1726,42 @@ def _texto_alerta_solicitud(datos: dict) -> str:
     ]
     if str(datos.get("nota", "")).strip():
         lineas.append(f"📝 {str(datos['nota']).strip()}")
+    if previas:
+        lineas.append(f"📌 Este local ya tenía {previas} solicitud(es) de este tipo sin atender.")
     lineas.append(accion)
     lineas.append("Atiéndela en Dashboard → 📨 Solicitudes.")
     return "\n".join(lineas)
 
 
 def guardar_solicitud(datos: dict) -> bool:
-    """Guarda una solicitud nueva (estado Solicitada) y avisa por Telegram.
-    Devuelve True si el aviso salio. Antes de escribir revisa, con lectura
-    FRESCA, que no haya otra abierta del mismo tipo en ese local."""
+    """Guarda una solicitud nueva (estado Solicitada) y avisa por Telegram. Devuelve True si el aviso salio.
+    Un local puede tener VARIAS solicitudes abiertas a la vez (aunque administracion no haya respondido las
+    anteriores); lo unico que se rechaza es enviar exactamente la misma dos veces seguidas (doble clic)."""
     ws = _get_or_create_worksheet(NOMBRE_HOJA_SOLICITUDES, COLUMNAS_SOLICITUDES)
-    for f in ws.get_all_records(numericise_ignore=["all"]):
-        if (
-            str(f.get("local", "")).strip() == str(datos["local"]).strip()
-            and str(f.get("tipo", "")).strip() == str(datos["tipo"]).strip()
-            and str(f.get("estado", "")).strip() in ESTADOS_SOLICITUD_ACTIVOS
-        ):
-            raise SolicitudDuplicada(
-                f"Ya hay una solicitud abierta de «{datos['tipo']}» en {datos['local']} "
-                f"(S/ {f.get('monto', '')}, estado {f.get('estado', '')}). Espera a que se atienda."
-            )
+    filas = ws.get_all_records(numericise_ignore=["all"])
+    ahora = ahora_local().replace(tzinfo=None)
+    repetida = solicitud_repetida(filas, datos, ahora)
+    if repetida:
+        raise SolicitudDuplicada(
+            f"Ya enviaste esa misma solicitud hace un momento (S/ {repetida.get('monto', '')}). "
+            "Si es otra, cambia el monto o espera un par de minutos."
+        )
+    previas = sum(
+        1
+        for f in filas
+        if str(f.get("local", "")).strip() == str(datos["local"]).strip()
+        and str(f.get("tipo", "")).strip() == str(datos["tipo"]).strip()
+        and str(f.get("estado", "")).strip() in ESTADOS_SOLICITUD_ACTIVOS
+    )
     fila = {
         "id": nuevo_id(),
-        "timestamp": ahora_local().replace(tzinfo=None).isoformat(timespec="seconds"),
+        "timestamp": ahora.isoformat(timespec="seconds"),
         "estado": "Solicitada",
         **datos,
     }
     ws.append_row([fila.get(col, "") for col in COLUMNAS_SOLICITUDES])
     get_solicitudes_df.clear()
-    return notificar_telegram(_texto_alerta_solicitud(fila))
+    return notificar_telegram(_texto_alerta_solicitud(fila, previas))
 
 
 @st.cache_data(ttl=30, show_spinner=False)

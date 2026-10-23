@@ -1177,3 +1177,26 @@ def con_conformidad(items: pd.DataFrame, conformidades) -> pd.DataFrame:
     salida["conformidad"] = [r[0] for r in res]
     salida["fecha_conformidad"] = [r[1] for r in res]
     return salida
+
+
+def solicitud_repetida(solicitudes, datos: dict, ahora, segundos: int = 120):
+    """Doble envio: devuelve la solicitud ya guardada si es LA MISMA (local, tipo, monto y quien la pide) y se
+    mando hace menos de `segundos`. Se pueden tener varias solicitudes abiertas; esto solo frena el doble clic."""
+    for f in solicitudes or []:
+        if str(f.get("estado", "")).strip() == "Cancelada":
+            continue
+        if (
+            str(f.get("local", "")).strip() != str(datos["local"]).strip()
+            or str(f.get("tipo", "")).strip() != str(datos["tipo"]).strip()
+            or str(f.get("solicitado_por", "")).strip().lower() != str(datos.get("solicitado_por", "")).strip().lower()
+        ):
+            continue
+        try:
+            if abs(float(str(f.get("monto", "")).replace(",", "")) - float(datos["monto"])) >= 0.005:
+                continue
+        except ValueError:
+            continue
+        ts = pd.to_datetime(f.get("timestamp", ""), errors="coerce")
+        if pd.notna(ts) and 0 <= (pd.Timestamp(ahora) - ts).total_seconds() < segundos:
+            return f
+    return None

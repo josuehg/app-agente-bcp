@@ -142,19 +142,19 @@ else:
 
 nota = st.text_input("Nota (opcional)", placeholder="Ej: hay cola de retiros", key=f"sol_nota_{v}")
 
-# Aviso temprano si ya hay una abierta del mismo tipo (el guardado igual revalida con lectura fresca).
+# Se pueden enviar varias solicitudes aunque haya otras sin responder; solo se avisa para que no se repitan por error.
 ya_abierta = (
     sh.solicitudes_activas(solicitudes_df, local=local, tipo=tipo)
     if _lectura_ok and not solicitudes_df.empty
     else pd.DataFrame()
 )
 if not ya_abierta.empty:
-    st.warning(
-        f"Ya tienes una solicitud abierta de «{tipo}» (S/ {float(ya_abierta.iloc[0]['monto']):,.2f}). "
-        "Espera a que se atienda o cancélala arriba."
+    st.info(
+        f"Ya tienes {len(ya_abierta)} solicitud(es) abierta(s) de «{tipo}» sin atender (arriba las ves). "
+        "Puedes enviar otra si es un pedido distinto."
     )
 
-if st.button("Enviar solicitud", type="primary", width="stretch", disabled=not ya_abierta.empty):
+if st.button("Enviar solicitud", type="primary", width="stretch"):
     errores = []
     if monto <= 0:
         errores.append("Escribe el monto que necesitas.")

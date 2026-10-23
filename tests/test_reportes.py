@@ -658,3 +658,22 @@ def test_liquidacion_resume_lo_que_pasa_del_techo_y_asigna_hasta_el_techo():
     txt = rp.reporte_liquidacion(_tres_faltantes_seguidos(), _config(), _encuestas().iloc[0:0], _notas(), _ajustes(), _personal().iloc[0:0], HOY, "mes", "colon")
     assert "🏢 <b>Pasa del techo (lo asume la empresa):</b>\n   Colon-H0715: S/ 65.00 (techo S/ 22.00)" in txt
     assert "📐 Descuento asignado: S/ 22.00" in txt and "💸 <b>A descontar: S/ 22.00</b>" in txt
+
+
+def test_solicitud_repetida_solo_frena_el_doble_clic():
+    from cuadre import solicitud_repetida
+
+    ahora = pd.Timestamp("2026-10-18 10:01:00")
+    previas = [
+        {"local": "Colon", "tipo": "Falta saldo", "monto": "500", "solicitado_por": "Ana", "estado": "Solicitada", "timestamp": "2026-10-18T10:00:30"},
+        {"local": "Colon", "tipo": "Falta saldo", "monto": "700", "solicitado_por": "Ana", "estado": "Solicitada", "timestamp": "2026-10-18T09:00:00"},
+    ]
+    base = {"local": "Colon", "tipo": "Falta saldo", "monto": 500.0, "solicitado_por": "ana"}
+    assert solicitud_repetida(previas, base, ahora)["monto"] == "500"                      # la misma, hace 30 s
+    assert solicitud_repetida(previas, {**base, "monto": 600.0}, ahora) is None            # otro monto: es otra solicitud
+    assert solicitud_repetida(previas, {**base, "tipo": "Falta efectivo"}, ahora) is None  # otro tipo
+    assert solicitud_repetida(previas, {**base, "solicitado_por": "Pedro"}, ahora) is None
+    assert solicitud_repetida(previas, base, pd.Timestamp("2026-10-18 10:05:00")) is None  # ya pasaron mas de 2 minutos
+    cancelada = [{**previas[0], "estado": "Cancelada"}]
+    assert solicitud_repetida(cancelada, base, ahora) is None                              # una cancelada no cuenta
+    assert solicitud_repetida([], base, ahora) is None and solicitud_repetida(None, base, ahora) is None
