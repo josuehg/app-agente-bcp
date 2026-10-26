@@ -173,15 +173,24 @@ def generar_respuesta(comando: str, argumento: str) -> str:
     return "No conozco ese comando. Escribe /ayuda para ver los que hay."
 
 
-def procesar_mensaje(chat_id, texto: str, autorizados: list[str]) -> str | None:
+NOMBRE_BOT = ""  # usuario del bot (sin @); se lee de Telegram al arrancar. Sirve para ignorar "/cmd@otro_bot" en grupos.
+
+
+def procesar_mensaje(chat_id, texto: str, autorizados: list[str], es_privado: bool = True, nombre_bot: str = "") -> str | None:
     """Que responder a un mensaje (None = no responder). Funcion pura respecto de Telegram:
-    la usan el bot y las pruebas."""
+    la usan el bot y las pruebas.
+
+    En un GRUPO (es_privado=False) el bot solo contesta a comandos: la conversacion normal de las personas
+    del grupo se ignora, y tambien los comandos dirigidos a otro bot ("/cmd@otro_bot")."""
     texto = (texto or "").strip()
     es_comando = texto.startswith("/")
     if not es_comando:
-        return "Escribe /ayuda para ver los comandos." if str(chat_id) in autorizados else None
+        return "Escribe /ayuda para ver los comandos." if es_privado and str(chat_id) in autorizados else None
     cabeza, _, argumento = texto.partition(" ")
-    comando = cabeza[1:].split("@")[0].lower()
+    comando, _, destino = cabeza[1:].partition("@")
+    comando = comando.lower()
+    if destino and nombre_bot and destino.lower() != nombre_bot.lower():
+        return None  # el comando es para otro bot del grupo
     if comando == "id" or str(chat_id) not in autorizados:
         base = f"🆔 Tu chat id es <code>{chat_id}</code>."
         if str(chat_id) in autorizados:
@@ -201,7 +210,8 @@ def atender(token: str, update: dict) -> None:
     if time.time() - float(msg.get("date", 0)) > MENSAJES_MAS_VIEJOS_QUE:
         return
     chat_id = msg["chat"]["id"]
-    respuesta = procesar_mensaje(chat_id, msg.get("text", ""), sh.telegram_chat_ids())
+    es_privado = msg["chat"].get("type", "private") == "private"
+    respuesta = procesar_mensaje(chat_id, msg.get("text", ""), sh.telegram_chat_ids(), es_privado, NOMBRE_BOT)
     if respuesta:
         enviar(token, chat_id, respuesta)
 
@@ -411,7 +421,10 @@ def main() -> None:
             time.sleep(60)  # sin token no hay bot: se queda esperando a que lo configures
     llamar(token, "deleteWebhook")  # por si algun dia hubo uno: con webhook no se puede usar getUpdates
     llamar(token, "setMyCommands", {"commands": json.dumps([{"command": c, "description": d} for c, d in COMANDOS_MENU])})
-    log("listo, escuchando comandos")
+    global NOMBRE_BOT
+    info, _ = llamar(token, "getMe")
+    NOMBRE_BOT = (info or {}).get("username", "")
+    log(f"listo, escuchando comandos (@{NOMBRE_BOT or '?'})")
     offset = None
     programador = Programador(token)
     while True:

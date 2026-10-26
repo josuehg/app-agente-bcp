@@ -226,7 +226,7 @@ with tab_solicitudes:
                         if "401" in _diag["error"] or "Unauthorized" in _diag["error"]
                         else (
                             "El bot ya está en marcha y atiende los mensajes, por eso esta búsqueda no puede "
-                            "leerlos: escríbele **/id** al bot en Telegram y te responde tu chat id."
+                            "leerlos: escríbele **/id** al bot en Telegram y te responde tu chat id (en un grupo, escribe **/id** dentro del grupo)."
                             if "409" in _diag["error"]
                             else ""
                         )

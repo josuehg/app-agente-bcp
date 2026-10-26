@@ -677,3 +677,49 @@ def test_solicitud_repetida_solo_frena_el_doble_clic():
     cancelada = [{**previas[0], "estado": "Cancelada"}]
     assert solicitud_repetida(cancelada, base, ahora) is None                              # una cancelada no cuenta
     assert solicitud_repetida([], base, ahora) is None and solicitud_repetida(None, base, ahora) is None
+
+
+# ---------------------------------------------------------------------
+# El bot dentro de un GRUPO
+# ---------------------------------------------------------------------
+def test_bot_en_un_grupo_solo_contesta_comandos_y_solo_los_suyos():
+    import bot_telegram as bot
+
+    autorizados = ["111", "-100222"]
+    grupo = dict(es_privado=False, nombre_bot="mi_bot")
+    assert bot.procesar_mensaje(-100222, "hola a todos, buenos días", autorizados, **grupo) is None   # la charla no se contesta
+    assert "/ayuda" in bot.procesar_mensaje(111, "hola", autorizados)                                  # en privado si
+    assert "/fondo" in bot.procesar_mensaje(-100222, "/ayuda", autorizados, **grupo)
+    assert "/fondo" in bot.procesar_mensaje(-100222, "/ayuda@mi_bot", autorizados, **grupo)
+    assert "/fondo" in bot.procesar_mensaje(-100222, "/AYUDA@Mi_Bot", autorizados, **grupo)
+    assert bot.procesar_mensaje(-100222, "/ayuda@otro_bot", autorizados, **grupo) is None             # es para otro bot
+    # un grupo que NO esta autorizado: solo recibe su id (para que lo agregues), nunca datos
+    resp = bot.procesar_mensaje(-100999, "/id", autorizados, **grupo)
+    assert "-100999" in resp and "Pásaselo al administrador" in resp
+    resp = bot.procesar_mensaje(-100999, "/fondo", autorizados, **grupo)
+    assert "-100999" in resp and "Efectivo" not in resp
+    assert bot.procesar_mensaje(-100999, "buenos días", autorizados, **grupo) is None
+    assert "autorizado" in bot.procesar_mensaje(-100222, "/id", autorizados, **grupo)
+
+
+def test_atender_distingue_grupo_de_chat_privado(monkeypatch):
+    import time
+
+    import bot_telegram as bot
+
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "111,-100222")
+    enviados = []
+    monkeypatch.setattr(bot, "enviar", lambda token, chat, texto: enviados.append((chat, texto)))
+    monkeypatch.setattr(bot, "NOMBRE_BOT", "mi_bot")
+
+    def upd(texto, tipo="supergroup", chat=-100222):
+        return {"update_id": 1, "message": {"date": time.time(), "chat": {"id": chat, "type": tipo}, "text": texto}}
+
+    bot.atender("t", upd("buenos días equipo"))
+    assert enviados == []                                    # charla del grupo: silencio
+    bot.atender("t", upd("/ayuda@mi_bot"))
+    assert len(enviados) == 1 and enviados[0][0] == -100222  # comando: responde en el grupo
+    bot.atender("t", upd("/ayuda@otro_bot"))
+    assert len(enviados) == 1                                # comando de otro bot: nada
+    bot.atender("t", upd("hola", tipo="private", chat=111))
+    assert len(enviados) == 2 and enviados[1][0] == 111      # en privado, "hola" si recibe la guia
