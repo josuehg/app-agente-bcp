@@ -19,6 +19,7 @@ CONCEPTOS NUEVOS QUE VAS A VER AQUI:
 
 from __future__ import annotations
 
+import hmac
 import io
 import json
 import os
@@ -547,6 +548,20 @@ def get_local_por_pin(pin: str) -> str | None:
     return str(encontrados.iloc[0]["local"])
 
 
+def _pin_admin() -> str:
+    """El PIN de administracion (el mismo que protege el Dashboard); vacio si no esta configurado."""
+    try:
+        return str(st.secrets.get("dashboard_pin") or "").strip()
+    except Exception:
+        return ""
+
+
+def es_pin_admin(pin) -> bool:
+    """True si `pin` es el de administracion (comparacion de tiempo constante)."""
+    admin = _pin_admin()
+    return bool(admin) and hmac.compare_digest(str(pin or "").strip().encode(), admin.encode())
+
+
 def pedir_pin_de_local(texto_ayuda: str = "") -> str:
     """Pide el PIN del local y devuelve el nombre de ese local ya
     autenticado. La usan TANTO pages/1_Registro.py COMO
@@ -569,22 +584,34 @@ def pedir_pin_de_local(texto_ayuda: str = "") -> str:
         st.session_state["local_autenticado"] = None
 
     if not st.session_state["local_autenticado"]:
+        st.session_state["es_admin"] = False
         if texto_ayuda:
             st.caption(texto_ayuda)
         pin_ingresado = st.text_input("PIN de tu local", type="password")
-        if pin_ingresado:
+        admin = es_pin_admin(pin_ingresado) or bool(st.session_state.get("dashboard_autenticado"))
+        if pin_ingresado and not es_pin_admin(pin_ingresado):
             local_encontrado = get_local_por_pin(pin_ingresado)
             if local_encontrado:
                 st.session_state["local_autenticado"] = local_encontrado
                 st.rerun()
             else:
                 st.error("PIN incorrecto.")
+        if admin:
+            # El PIN de administracion (o ya haber entrado al Dashboard) abre cualquier local.
+            st.info("🔑 Administración: elige el local al que quieres entrar.")
+            elegido = st.selectbox("Entrar como el local…", get_locales(), key="admin_local_elegido")
+            if st.button("Entrar a este local", type="primary", key="admin_entrar"):
+                st.session_state["local_autenticado"] = elegido
+                st.session_state["es_admin"] = True
+                st.rerun()
         st.caption(
             "El PIN de cada local se configura en la hoja 'Config' del "
             "Google Sheet (columna 'pin'), sin tocar codigo."
         )
         st.stop()
 
+    if st.session_state.get("es_admin"):
+        st.caption("🔑 Sesión de administración. Para entrar a otro local usa «Cambiar de PIN».")
     return st.session_state["local_autenticado"]
 
 

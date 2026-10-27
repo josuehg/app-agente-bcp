@@ -723,3 +723,13 @@ def test_atender_distingue_grupo_de_chat_privado(monkeypatch):
     assert len(enviados) == 1                                # comando de otro bot: nada
     bot.atender("t", upd("hola", tipo="private", chat=111))
     assert len(enviados) == 2 and enviados[1][0] == 111      # en privado, "hola" si recibe la guia
+
+
+def test_es_pin_admin_solo_con_el_pin_configurado(monkeypatch):
+    import sheets_utils as sh
+
+    monkeypatch.setattr(sh, "_pin_admin", lambda: "9999")
+    assert sh.es_pin_admin("9999") and sh.es_pin_admin(" 9999 ")
+    assert not sh.es_pin_admin("9998") and not sh.es_pin_admin("") and not sh.es_pin_admin(None)
+    monkeypatch.setattr(sh, "_pin_admin", lambda: "")      # sin PIN de administracion configurado: nada abre como admin
+    assert not sh.es_pin_admin("9999") and not sh.es_pin_admin("")
