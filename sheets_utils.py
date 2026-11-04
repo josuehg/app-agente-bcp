@@ -93,6 +93,12 @@ SCOPES = [
 ]
 
 NOMBRE_HOJA_REGISTROS = "Registros"
+
+# Cuanto se recuerdan las lecturas de las hojas de datos (registros, personal, notas, encuestas, ajustes,
+# solicitudes, conformidades). Cada escritura que hace la app borra el recuerdo correspondiente, asi que lo
+# unico que tarda hasta 2 minutos en verse es lo que se edite a mano en el Google Sheet. Menos lecturas =
+# paginas mas rapidas y menos riesgo de pasar el limite de Google (60 lecturas por minuto).
+TTL_DATOS = 120
 NOMBRE_HOJA_CONFIG = "Config"
 
 # ---------------------------------------------------------------------
@@ -976,7 +982,7 @@ def actualizar_persona(nombre_orig: str, local_orig: str, datos: dict) -> None:
     raise ValueError("No se encontró a esa persona en la hoja Personal.")
 
 
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=TTL_DATOS, show_spinner=False)
 def get_personal_df() -> pd.DataFrame:
     ws = _get_or_create_worksheet(NOMBRE_HOJA_PERSONAL, COLUMNAS_PERSONAL)
     df = pd.DataFrame(ws.get_all_records(), columns=COLUMNAS_PERSONAL)
@@ -1021,6 +1027,19 @@ def unificar_nombres(nombres: pd.Series, locales: pd.Series) -> pd.Series:
     return _normalizar_nombre(pd.Series(unidos, index=nombres.index))
 
 
+@st.cache_data(max_entries=8, show_spinner=False)
+def calcular_cortes_cache(df: pd.DataFrame, columnas_indice: list[str]) -> pd.DataFrame:
+    """calcular_cortes() recordado mientras los registros sean los mismos: el Dashboard y el Historial lo pedian
+    entero en CADA clic (con meses de datos eran ~1 s). Devuelve una copia, asi que se puede modificar."""
+    return calcular_cortes(df, columnas_indice)
+
+
+@st.cache_data(max_entries=8, show_spinner=False)
+def calcular_saltos_cache(df: pd.DataFrame) -> pd.DataFrame:
+    """Igual que calcular_cortes_cache, para las entregas entre un Cierre y la Apertura siguiente."""
+    return calcular_saltos(df)
+
+
 def _tipar_registros(df: pd.DataFrame) -> pd.DataFrame:
     """Fechas, numeros y totales recalculados: igual que se ven en el Dashboard."""
     columnas_denom = [col for _, col, _ in DENOMINACIONES]
@@ -1044,7 +1063,7 @@ def _tipar_registros(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=TTL_DATOS, show_spinner=False)
 def get_registros_df() -> pd.DataFrame:
     ws = _get_or_create_worksheet(NOMBRE_HOJA_REGISTROS, COLUMNAS_REGISTROS)
     # numericise_ignore: todo llega como TEXTO. Si no, un id como "1234e56789" se
@@ -1109,7 +1128,7 @@ def guardar_encuesta(datos: dict) -> None:
     get_encuestas_df.clear()
 
 
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=TTL_DATOS, show_spinner=False)
 def get_encuestas_df() -> pd.DataFrame:
     ws = _get_or_create_worksheet(NOMBRE_HOJA_ENCUESTAS, COLUMNAS_ENCUESTAS)
     registros = ws.get_all_records(numericise_ignore=["all"])
@@ -1247,7 +1266,7 @@ def guardar_nota(datos: dict) -> None:
     get_notas_df.clear()
 
 
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=TTL_DATOS, show_spinner=False)
 def get_notas_df() -> pd.DataFrame:
     ws = _get_or_create_worksheet(NOMBRE_HOJA_NOTAS, COLUMNAS_NOTAS)
     df = pd.DataFrame(ws.get_all_records(), columns=COLUMNAS_NOTAS)
@@ -1493,7 +1512,7 @@ def actualizar_repuso_ajuste(id_ajuste: str, repuso: str) -> None:
     get_ajustes_df.clear()
 
 
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=TTL_DATOS, show_spinner=False)
 def get_ajustes_df() -> pd.DataFrame:
     ws = _get_or_create_worksheet(NOMBRE_HOJA_AJUSTES, COLUMNAS_AJUSTES)
     registros = ws.get_all_records(numericise_ignore=["all"])
@@ -1633,20 +1652,40 @@ def _enlace_dashboard() -> str:
     return f"https://{dominio}/Dashboard" if dominio else ""
 
 
+def _calcular_y_avisar(filas_previas: list[dict], nueva: dict, mapa: dict, umbral: float, enlace: str,
+                       token: str, chats: list[str]) -> None:
+    """Corre en un hilo aparte (ver _avisar_diferencia): arma las tablas, calcula el corte o el salto y, si
+    supera el umbral, manda el aviso. Nunca lanza errores."""
+    try:
+        df = _tipar_registros(pd.DataFrame(list(filas_previas) + [nueva], columns=COLUMNAS_REGISTROS))
+        df["nombre"] = _normalizar_nombre(df["nombre"])
+        if mapa:
+            unidos = [resolver_nombre(n, loc, mapa) for n, loc in zip(df["nombre"], df["local"])]
+            df["nombre"] = _normalizar_nombre(pd.Series(unidos, index=df.index))
+        for alerta in alertas_de_registro(df, str(nueva["id"]), umbral):
+            _enviar_a_todos(token, chats, texto_alerta_diferencia(alerta, enlace))
+    except Exception:
+        pass  # el aviso es un extra: nunca debe afectar a nada
+
+
 def _avisar_diferencia(filas_previas: list[dict], nueva: dict) -> None:
     """Despues de guardar una Apertura o un Cierre: si el corte (Cierre) o el salto con el
     Cierre anterior (Apertura) supera el umbral, avisa por Telegram. Reusa las filas que
-    guardar_registro ya leyo, asi que no gasta lecturas de Google."""
-    if not telegram_configurado():
+    guardar_registro ya leyo (no gasta lecturas de Google) y TODO el calculo va en otro hilo: con meses de
+    datos tardaba casi un segundo y lo esperaba quien estaba guardando."""
+    token = _secreto("telegram_token", "TELEGRAM_BOT_TOKEN")
+    chats = telegram_chat_ids()
+    if not token or not chats:
         return
-    df = _tipar_registros(pd.DataFrame(list(filas_previas) + [nueva], columns=COLUMNAS_REGISTROS))
-    df["nombre"] = _normalizar_nombre(df["nombre"])
     try:
-        df["nombre"] = unificar_nombres(df["nombre"], df["local"])
+        mapa = mapa_alias(get_personal_df())  # cacheado; sin la hoja Personal igual avisamos con el nombre tal cual
     except Exception:
-        pass  # sin la hoja Personal igual avisamos con el nombre tal cual
-    for alerta in alertas_de_registro(df, str(nueva["id"]), umbral_alerta_diferencia()):
-        notificar_telegram_en_segundo_plano(texto_alerta_diferencia(alerta, _enlace_dashboard()))
+        mapa = {}
+    threading.Thread(
+        target=_calcular_y_avisar,
+        args=(list(filas_previas), dict(nueva), mapa, umbral_alerta_diferencia(), _enlace_dashboard(), token, chats),
+        daemon=True,
+    ).start()
 
 
 NOMBRE_HOJA_BOT = "Bot"
@@ -1791,7 +1830,7 @@ def guardar_solicitud(datos: dict) -> bool:
     return notificar_telegram(_texto_alerta_solicitud(fila, previas))
 
 
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=TTL_DATOS, show_spinner=False)
 def get_solicitudes_df() -> pd.DataFrame:
     ws = _get_or_create_worksheet(NOMBRE_HOJA_SOLICITUDES, COLUMNAS_SOLICITUDES)
     registros = ws.get_all_records(numericise_ignore=["all"])
@@ -1876,7 +1915,7 @@ def guardar_conformidad(datos: dict) -> None:
     get_conformidades_df.clear()
 
 
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=TTL_DATOS, show_spinner=False)
 def get_conformidades_df() -> pd.DataFrame:
     ws = _get_or_create_worksheet(NOMBRE_HOJA_CONFORMIDADES, COLUMNAS_CONFORMIDAD)
     df = pd.DataFrame(ws.get_all_records(numericise_ignore=["all"]), columns=COLUMNAS_CONFORMIDAD)

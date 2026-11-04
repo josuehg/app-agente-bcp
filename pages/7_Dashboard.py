@@ -2133,7 +2133,7 @@ with tab_cuadre:
         )
 
     registros_sel = df[df["local"].isin(locales_sel)]
-    saltos = sh.calcular_saltos(registros_sel)
+    saltos = sh.calcular_saltos_cache(registros_sel)
 
     filas_continuidad = []
     for _, s in saltos.iterrows():
@@ -2306,7 +2306,7 @@ with tab_cuadre:
     # -------------------------------------------------------------
 
     INDICE_TURNO = ["local", "fecha", "turno"]
-    cortes = sh.calcular_cortes(df_filtrado, INDICE_TURNO)
+    cortes = sh.calcular_cortes_cache(df_filtrado, INDICE_TURNO)
     resumen = sh.resumen_turnos(cortes, INDICE_TURNO)
     resumen = resumen.sort_values(["fecha", "local", "turno"], ascending=[False, True, True])
 

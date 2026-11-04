@@ -88,11 +88,19 @@ def enviar(token: str, chat_id, texto: str) -> None:
 # ---------------------------------------------------------------------
 # Datos y respuestas
 # ---------------------------------------------------------------------
+_ULTIMA_LECTURA: dict = {}
+FRESCURA_SEGUNDOS = 20  # si la hoja se leyo hace menos que esto, se reusa (varios comandos seguidos no gastan la cuota de Google)
+
+
 def _fresco(*lectores):
-    """Lee las hojas SIN el cache (un reporte tiene que reflejar lo ultimo guardado)."""
+    """Lee las hojas al dia: borra el recuerdo y vuelve a leer, salvo que ya se hayan leido hace unos segundos
+    (asi un par de comandos seguidos, o los de varias personas del grupo, no se comen la cuota de Google)."""
     salida = []
+    ahora = time.time()
     for lector in lectores:
-        lector.clear()
+        if ahora - _ULTIMA_LECTURA.get(lector.__name__, 0) >= FRESCURA_SEGUNDOS:
+            lector.clear()
+            _ULTIMA_LECTURA[lector.__name__] = ahora
         salida.append(lector())
     return salida if len(salida) > 1 else salida[0]
 

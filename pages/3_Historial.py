@@ -97,7 +97,7 @@ tab_linea, tab_acumulado, tab_registros = st.tabs(
 # pestaña propia: los usan la Linea de tiempo y las Diferencias por persona.
 # Siguen siendo SOLO LECTURA y solo el Estado (nunca motivo ni quien autorizo).
 # ---------------------------------------------------------------------
-cortes = sh.calcular_cortes(df_local, ["fecha", "turno"])
+cortes = sh.calcular_cortes_cache(df_local, ["fecha", "turno"])
 resumen = sh.resumen_turnos(cortes, ["fecha", "turno"]).sort_values(
     ["fecha", "turno"], ascending=[False, True]
 )
@@ -169,7 +169,7 @@ if pd.notna(fila_reciente["timestamp"]):
 
 # Continuidad: se calcula sobre TODO el historial del local (no solo lo filtrado
 # por fecha), para no perder el salto justo en el borde del rango.
-saltos_local = sh.calcular_saltos(df[df["local"] == local])
+saltos_local = sh.calcular_saltos_cache(df[df["local"] == local])
 
 _ajustes_todas_local = sh.get_ajustes_df()
 if not _ajustes_todas_local.empty:
