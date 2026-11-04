@@ -67,12 +67,31 @@ with st.sidebar:
         "Turno", options=turnos_disponibles, default=turnos_disponibles
     )
     fecha_min, fecha_max = df["fecha"].min(), df["fecha"].max()
+    def _ver_mes(anterior: bool) -> None:
+        """Atajo del rango de fechas: el mes anterior completo (para revisar y autorizar el cierre) o el mes en curso."""
+        hoy_ = sh.hoy_local()
+        ini = hoy_.replace(day=1)
+        if anterior:
+            fin = ini - timedelta(days=1)
+            ini = fin.replace(day=1)
+        else:
+            fin = hoy_
+        ini, fin = max(ini, fecha_min), min(fin, fecha_max)
+        st.session_state["rango_fechas"] = (ini, fin) if ini <= fin else (fecha_min, fecha_max)
+
+    st.button("⏮️ Ver el mes anterior completo", on_click=_ver_mes, args=(True,), key="rango_mes_anterior", width="stretch")
+    st.button("📅 Ver el mes en curso", on_click=_ver_mes, args=(False,), key="rango_mes_actual", width="stretch")
+    # Por defecto, desde el 1 del mes actual (sin salirse del rango con datos). El valor inicial solo se da la
+    # primera vez: despues manda lo que haya en session_state (lo que elija la persona o los botones de arriba).
+    _inicial = {} if "rango_fechas" in st.session_state else {
+        "value": (max(fecha_min, min(sh.hoy_local().replace(day=1), fecha_max)), fecha_max)
+    }
     rango = st.date_input(
         "Rango de fechas",
-        # Por defecto, desde el 1 del mes actual (sin salirse del rango con datos).
-        value=(max(fecha_min, min(sh.hoy_local().replace(day=1), fecha_max)), fecha_max),
         min_value=fecha_min,
         max_value=fecha_max,
+        key="rango_fechas",
+        **_inicial,
     )
 
 # st.date_input devuelve una tupla de 2 fechas cuando el rango esta completo, pero
@@ -93,6 +112,12 @@ if not locales_sel or not turnos_sel:
     st.warning(
         "⚠️ No hay ningún local o turno elegido en los **Filtros** (barra lateral): los reportes de "
         "abajo salen vacíos. Elige al menos uno de cada uno."
+    )
+
+if sh.hoy_local().day <= 5 and desde >= sh.hoy_local().replace(day=1):
+    st.sidebar.info(
+        "📌 Es inicio de mes: este rango NO incluye las diferencias del mes anterior. Toca «Ver el mes anterior "
+        "completo» para revisarlas y autorizarlas."
     )
 
 df_filtrado = df[
@@ -2541,6 +2566,11 @@ with tab_cuadre:
                             if not _falta and not _ft["_explicado"]:
                                 st.caption("La suma del turno cuadra: no requiere ajuste.")
                             _form_ajuste_turno(_ft, permitir_nuevo=_falta)
+            else:
+                st.info(
+                    "No hay diferencias para autorizar con estos filtros (sucursal, tipo, rango de fechas). Si buscas "
+                    "una de otro mes, toca «⏮️ Ver el mes anterior completo» en la barra lateral o cambia el rango."
+                )
 
     with st.expander("📋 Resumen por turno (tabla, corte por corte y gráfico)"):
         st.dataframe(

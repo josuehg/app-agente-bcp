@@ -611,7 +611,7 @@ def pedir_pin_de_local(texto_ayuda: str = "") -> str:
         st.stop()
 
     if st.session_state.get("es_admin"):
-        st.caption("🔑 Sesión de administración. Para entrar a otro local usa «Cambiar de PIN».")
+        st.caption("🔑 Sesión de administración. Para entrar a otro local usa «Cambiar de PIN». Aquí solo se ve el estado: para autorizar o justificar diferencias usa el Dashboard → 🔍 Cuadre.")
     return st.session_state["local_autenticado"]
 
 
