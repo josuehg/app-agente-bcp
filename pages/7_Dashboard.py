@@ -2460,7 +2460,10 @@ with tab_cuadre:
     # cortes y entregas intercalados en orden cronologico. Solo lectura: la
     # autorizacion sigue en los formularios de Continuidad y Cuadre por turno.
     # -------------------------------------------------------------
-    with bloque_linea:
+    # Fragmento: los selectores de la Linea de tiempo (sucursal, tipo, solo con diferencia, fila a autorizar) vuelven a
+    # dibujar solo este bloque, no toda la pagina. Guardar un ajuste hace st.rerun() (pagina completa) para refrescar estados.
+    @st.fragment
+    def _dibujar_linea_de_tiempo():
         st.subheader("🧭 Línea de tiempo por sucursal")
         st.caption(
             "Los cortes (lo que pasa dentro de un turno) y las entregas (el hueco entre un Cierre y la "
@@ -2571,6 +2574,9 @@ with tab_cuadre:
                     "No hay diferencias para autorizar con estos filtros (sucursal, tipo, rango de fechas). Si buscas "
                     "una de otro mes, toca «⏮️ Ver el mes anterior completo» en la barra lateral o cambia el rango."
                 )
+
+    with bloque_linea:
+        _dibujar_linea_de_tiempo()
 
     with st.expander("📋 Resumen por turno (tabla, corte por corte y gráfico)"):
         st.dataframe(
@@ -2741,96 +2747,33 @@ with tab_cuadre:
         )
         st.plotly_chart(fig_pers, width="stretch")
 
-        # --- Detalle por persona: ver de dónde salió el descuadre ---------
-        # Sirve para distinguir un descuadre real de un error al registrar
-        # (p. ej. escribir 100 donde iba 1000 en una denominación).
-        persona_sel = st.selectbox(
-            "Ver el detalle de una persona (para revisar si fue error al registrar)",
-            ["—"] + acumulado["nombre"].tolist(),
-        )
-        if persona_sel != "—":
-            cortes_persona = cortes[cortes["nombre"] == persona_sel].copy().sort_values(
-                ["fecha", "local", "turno", "corte"]
+        # Fragmento: al elegir una persona solo se vuelve a dibujar ESTE bloque, no toda la pagina (era lo que hacia lenta la pestaña).
+        @st.fragment
+        def _detalle_por_persona():
+            # --- Detalle por persona: ver de dónde salió el descuadre ---------
+            # Sirve para distinguir un descuadre real de un error al registrar
+            # (p. ej. escribir 100 donde iba 1000 en una denominación).
+            persona_sel = st.selectbox(
+                "Ver el detalle de una persona (para revisar si fue error al registrar)",
+                ["—"] + acumulado["nombre"].tolist(),
             )
-            st.markdown(f"**Cortes de {persona_sel} en el rango:**")
-            st.dataframe(
-                sh.arrow_safe(
-                    cortes_persona[
-                        ["fecha", "local", "turno", "corte", "nombre_cierre",
-                         "apertura", "cierre", "diferencia_fmt", "estado", "observaciones"]
-                    ].rename(
-                        columns={
-                            "fecha": "Fecha", "local": "Local", "turno": "Turno",
-                            "corte": "Corte", "nombre_cierre": "Cerró",
-                            "apertura": "Apertura (S/)", "cierre": "Cierre (S/)",
-                            "diferencia_fmt": "Diferencia (S/)", "estado": "Estado",
-                            "observaciones": "Observaciones",
-                        }
-                    )
-                ),
-                width="stretch",
-                hide_index=True,
-            )
-
-            st.markdown("**Revisión corte por corte** (Apertura vs Cierre, campo por campo):")
-            for _, c in cortes_persona.iterrows():
-                encabezado = (
-                    f"{c['fecha']} · {c['local']} · {c['turno']} · corte {c['corte']} · "
-                    f"{c['diferencia_fmt']} · {c['estado']}"
+            if persona_sel != "—":
+                cortes_persona = cortes[cortes["nombre"] == persona_sel].copy().sort_values(
+                    ["fecha", "local", "turno", "corte"]
                 )
-                with st.expander(encabezado):
-                    id_ap, id_ci = c["id_apertura"], c["id_cierre"]
-                    if (
-                        id_ap in _registros_por_id.index
-                        and id_ci in _registros_por_id.index
-                    ):
-                        _comparar_par(
-                            _registros_por_id.loc[id_ap], _registros_por_id.loc[id_ci]
-                        )
-                    else:
-                        st.caption("Este corte no tiene Apertura y Cierre completos para comparar.")
-
-            # --- Entregas de caja: los saltos que esta persona CERRÓ -----
-            # Complementa lo de arriba (que mide DENTRO de un corte): esto
-            # es lo que pasó en el hueco entre su Cierre y la Apertura
-            # siguiente (ver Continuidad, más arriba en esta pestaña).
-            saltos_persona = (
-                saltos[
-                    (saltos["nombre_cierre"] == persona_sel)
-                    & (saltos["fecha_cierre"] >= desde)
-                    & (saltos["fecha_cierre"] <= hasta)
-                ].copy()
-                if not saltos.empty
-                else saltos
-            )
-            if not saltos_persona.empty:
-                # El "estado" que trae calcular_saltos() es el semaforo CRUDO
-                # (no sabe de ajustes). Lo pisamos con el Estado ya calculado
-                # en cont_df (que sí considera ajustes -> "🔷 Autorizado"),
-                # para que este detalle diga lo mismo que la tabla de
-                # Continuidad de más arriba.
-                _estado_ajustado_por_id_cierre = (
-                    dict(zip(cont_df["_id_cierre"], cont_df["Estado"])) if not cont_df.empty else {}
-                )
-                saltos_persona["estado"] = (
-                    saltos_persona["id_cierre"]
-                    .map(_estado_ajustado_por_id_cierre)
-                    .fillna(saltos_persona["estado"])
-                )
-                st.markdown(f"**Entregas de caja de {persona_sel} en el rango:**")
+                st.markdown(f"**Cortes de {persona_sel} en el rango:**")
                 st.dataframe(
                     sh.arrow_safe(
-                        saltos_persona[
-                            ["tipo_salto", "fecha_cierre", "turno_cierre", "fecha_apertura",
-                             "turno_apertura", "nombre_apertura", "cierre", "apertura",
-                             "diferencia_fmt", "estado"]
+                        cortes_persona[
+                            ["fecha", "local", "turno", "corte", "nombre_cierre",
+                             "apertura", "cierre", "diferencia_fmt", "estado", "observaciones"]
                         ].rename(
                             columns={
-                                "tipo_salto": "Tipo", "fecha_cierre": "Fecha cierre",
-                                "turno_cierre": "Turno cierre", "fecha_apertura": "Fecha apertura",
-                                "turno_apertura": "Turno apertura", "nombre_apertura": "Abrió después",
-                                "cierre": "Cierre (S/)", "apertura": "Apertura (S/)",
+                                "fecha": "Fecha", "local": "Local", "turno": "Turno",
+                                "corte": "Corte", "nombre_cierre": "Cerró",
+                                "apertura": "Apertura (S/)", "cierre": "Cierre (S/)",
                                 "diferencia_fmt": "Diferencia (S/)", "estado": "Estado",
+                                "observaciones": "Observaciones",
                             }
                         )
                     ),
@@ -2838,27 +2781,95 @@ with tab_cuadre:
                     hide_index=True,
                 )
 
-                st.markdown("**Revisión de cada entrega** (Cierre vs Apertura siguiente, campo por campo):")
-                for _, sp in saltos_persona.iterrows():
-                    encabezado_salto = (
-                        f"{sp['tipo_salto']} · {sp['fecha_cierre']} {sp['turno_cierre']} → "
-                        f"{sp['fecha_apertura']} {sp['turno_apertura']} · "
-                        f"{sp['diferencia_fmt']} · {sp['estado']}"
+                st.markdown("**Revisión corte por corte** (Apertura vs Cierre, campo por campo):")
+                for _, c in cortes_persona.iterrows():
+                    encabezado = (
+                        f"{c['fecha']} · {c['local']} · {c['turno']} · corte {c['corte']} · "
+                        f"{c['diferencia_fmt']} · {c['estado']}"
                     )
-                    with st.expander(encabezado_salto):
-                        id_ci_s, id_ap_s = sp["id_cierre"], sp["id_apertura"]
+                    with st.expander(encabezado):
+                        id_ap, id_ci = c["id_apertura"], c["id_cierre"]
                         if (
-                            id_ci_s in _registros_por_id.index
-                            and id_ap_s in _registros_por_id.index
+                            id_ap in _registros_por_id.index
+                            and id_ci in _registros_por_id.index
                         ):
                             _comparar_par(
-                                _registros_por_id.loc[id_ci_s],
-                                _registros_por_id.loc[id_ap_s],
-                                "Cierre",
-                                "Apertura siguiente",
+                                _registros_por_id.loc[id_ap], _registros_por_id.loc[id_ci]
                             )
                         else:
-                            st.caption("No se encontraron los dos registros para comparar.")
+                            st.caption("Este corte no tiene Apertura y Cierre completos para comparar.")
+
+                # --- Entregas de caja: los saltos que esta persona CERRÓ -----
+                # Complementa lo de arriba (que mide DENTRO de un corte): esto
+                # es lo que pasó en el hueco entre su Cierre y la Apertura
+                # siguiente (ver Continuidad, más arriba en esta pestaña).
+                saltos_persona = (
+                    saltos[
+                        (saltos["nombre_cierre"] == persona_sel)
+                        & (saltos["fecha_cierre"] >= desde)
+                        & (saltos["fecha_cierre"] <= hasta)
+                    ].copy()
+                    if not saltos.empty
+                    else saltos
+                )
+                if not saltos_persona.empty:
+                    # El "estado" que trae calcular_saltos() es el semaforo CRUDO
+                    # (no sabe de ajustes). Lo pisamos con el Estado ya calculado
+                    # en cont_df (que sí considera ajustes -> "🔷 Autorizado"),
+                    # para que este detalle diga lo mismo que la tabla de
+                    # Continuidad de más arriba.
+                    _estado_ajustado_por_id_cierre = (
+                        dict(zip(cont_df["_id_cierre"], cont_df["Estado"])) if not cont_df.empty else {}
+                    )
+                    saltos_persona["estado"] = (
+                        saltos_persona["id_cierre"]
+                        .map(_estado_ajustado_por_id_cierre)
+                        .fillna(saltos_persona["estado"])
+                    )
+                    st.markdown(f"**Entregas de caja de {persona_sel} en el rango:**")
+                    st.dataframe(
+                        sh.arrow_safe(
+                            saltos_persona[
+                                ["tipo_salto", "fecha_cierre", "turno_cierre", "fecha_apertura",
+                                 "turno_apertura", "nombre_apertura", "cierre", "apertura",
+                                 "diferencia_fmt", "estado"]
+                            ].rename(
+                                columns={
+                                    "tipo_salto": "Tipo", "fecha_cierre": "Fecha cierre",
+                                    "turno_cierre": "Turno cierre", "fecha_apertura": "Fecha apertura",
+                                    "turno_apertura": "Turno apertura", "nombre_apertura": "Abrió después",
+                                    "cierre": "Cierre (S/)", "apertura": "Apertura (S/)",
+                                    "diferencia_fmt": "Diferencia (S/)", "estado": "Estado",
+                                }
+                            )
+                        ),
+                        width="stretch",
+                        hide_index=True,
+                    )
+
+                    st.markdown("**Revisión de cada entrega** (Cierre vs Apertura siguiente, campo por campo):")
+                    for _, sp in saltos_persona.iterrows():
+                        encabezado_salto = (
+                            f"{sp['tipo_salto']} · {sp['fecha_cierre']} {sp['turno_cierre']} → "
+                            f"{sp['fecha_apertura']} {sp['turno_apertura']} · "
+                            f"{sp['diferencia_fmt']} · {sp['estado']}"
+                        )
+                        with st.expander(encabezado_salto):
+                            id_ci_s, id_ap_s = sp["id_cierre"], sp["id_apertura"]
+                            if (
+                                id_ci_s in _registros_por_id.index
+                                and id_ap_s in _registros_por_id.index
+                            ):
+                                _comparar_par(
+                                    _registros_por_id.loc[id_ci_s],
+                                    _registros_por_id.loc[id_ap_s],
+                                    "Cierre",
+                                    "Apertura siguiente",
+                                )
+                            else:
+                                st.caption("No se encontraron los dos registros para comparar.")
+
+        _detalle_por_persona()
 
 # -------------------------------------------------------------
 # Politica de descuento por sucursal (ver cuadre.politica_sucursal): se
