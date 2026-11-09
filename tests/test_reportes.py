@@ -733,3 +733,75 @@ def test_es_pin_admin_solo_con_el_pin_configurado(monkeypatch):
     assert not sh.es_pin_admin("9998") and not sh.es_pin_admin("") and not sh.es_pin_admin(None)
     monkeypatch.setattr(sh, "_pin_admin", lambda: "")      # sin PIN de administracion configurado: nada abre como admin
     assert not sh.es_pin_admin("9999") and not sh.es_pin_admin("")
+
+
+# ---------------------------------------------------------------------
+# /incidencias y los recordatorios del bot
+# ---------------------------------------------------------------------
+def _incid(*filas):
+    base = {
+        "id": "", "timestamp": pd.Timestamp("2026-10-18 09:00"), "local": "Colon", "tipo": "Internet",
+        "gravedad": "No puedo operar", "reportado_por": "Ana", "descripcion": "", "estado": "Reportada",
+        "gestionado_por": "", "ticket_bcp": "", "ts_gestion": pd.NaT, "solucion": "", "ts_resuelto": pd.NaT,
+        "ts_cierre": pd.NaT, "bitacora": "", "ultimo_aviso": pd.NaT,
+    }
+    return pd.DataFrame([{**base, **f} for f in filas])
+
+
+def test_incidencias_abiertas_en_el_bot_y_vacio():
+    df = _incid(
+        {"id": "1", "descripcion": "router en rojo"},
+        {"id": "2", "local": "Zol A", "tipo": "Cargador / energía", "gravedad": "Preventivo", "estado": "En gestión",
+         "gestionado_por": "Josué", "ticket_bcp": "T-9"},
+        {"id": "3", "estado": "Confirmada"},
+    )
+    ahora = pd.Timestamp("2026-10-18 09:20")
+    txt = rp.reporte_incidencias(df, ahora)
+    assert "2 incidencia(s) abierta(s)" in txt
+    assert "🔴 <b>Colon</b>\n🌐 Internet\n⚠️ No puedo operar\n👤 Reportó: Ana\n🕒 Hace 20 min\n🔄 Estado: Reportada\n📝 router en rojo" in txt
+    assert "🔧 Lo lleva: Josué" in txt and "🎫 Ticket: T-9" in txt
+    sola = rp.reporte_incidencias(df, ahora, "zol")
+    assert "1 incidencia(s) abierta(s)" in sola and "Colon" not in sola
+    assert "No hay incidencias abiertas" in rp.reporte_incidencias(df.iloc[2:], ahora)
+    assert "No hay incidencias abiertas" in rp.reporte_incidencias(pd.DataFrame(), ahora)
+
+
+def test_recordatorio_del_bot_dice_que_nadie_la_tomo_o_que_sigue_sin_resolverse():
+    from cuadre import incidencias_por_avisar
+
+    sin_tomar = incidencias_por_avisar(_incid({"id": "a"}), pd.Timestamp("2026-10-18 09:20"), None)[0]
+    txt = rp.texto_recordatorio_incidencia(sin_tomar)
+    assert "Nadie ha tomado este caso" in txt and "Hace 20 min" in txt and "Se esperaba tomarlo en 15 min" in txt
+    en_gestion = incidencias_por_avisar(
+        _incid({"id": "b", "estado": "En gestión", "ts_gestion": pd.Timestamp("2026-10-18 09:05"), "ticket_bcp": "T-1"}),
+        pd.Timestamp("2026-10-18 09:40"), None)[0]
+    txt = rp.texto_recordatorio_incidencia(en_gestion)
+    assert "Sigue sin resolverse" in txt and "🎫 Ticket: T-1" in txt and "Se esperaba" not in txt
+
+
+def test_resumen_diario_incluye_las_incidencias_abiertas_si_se_le_pasan():
+    registros = _registros()
+    args = (registros, _config(), _encuestas(), _ajustes(), pd.DataFrame(columns=["id", "estado"]), HOY, pd.Timestamp("2026-10-18 22:00"))
+    assert "incidencia(s)" not in rp.resumen_diario(*args) and "incidencias abiertas" not in rp.resumen_diario(*args)
+    con = rp.resumen_diario(*args, 6.0, _incid({"id": "1"}))
+    assert "1 incidencia(s) abierta(s)" in con
+    assert "No hay incidencias abiertas" in rp.resumen_diario(*args, 6.0, _incid({"id": "1", "estado": "Confirmada"}))
+
+
+def test_ayuda_y_menu_del_bot_listan_incidencias():
+    import bot_telegram as bot
+
+    assert "/incidencias" in rp.AYUDA and "incidencias" in [c for c, _ in bot.COMANDOS_MENU]
+
+
+def test_horas_de_silencio_de_los_recordatorios_se_pueden_cambiar_o_apagar(monkeypatch):
+    import bot_telegram as bot
+
+    monkeypatch.delenv("INCIDENCIAS_SILENCIO", raising=False)
+    assert bot.silencio_incidencias() == (22 * 60, 7 * 60)
+    monkeypatch.setenv("INCIDENCIAS_SILENCIO", "23:30-06:00")
+    assert bot.silencio_incidencias() == (23 * 60 + 30, 6 * 60)
+    monkeypatch.setenv("INCIDENCIAS_SILENCIO", "off")
+    assert bot.silencio_incidencias() is None
+    monkeypatch.setenv("INCIDENCIAS_SILENCIO", "cualquier cosa")
+    assert bot.silencio_incidencias() == (22 * 60, 7 * 60)

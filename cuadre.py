@@ -1200,3 +1200,228 @@ def solicitud_repetida(solicitudes, datos: dict, ahora, segundos: int = 120):
         if pd.notna(ts) and 0 <= (pd.Timestamp(ahora) - ts).total_seconds() < segundos:
             return f
     return None
+
+
+# ---------------------------------------------------------------------
+# Soporte e incidencias del agente (internet, cargador, equipo, accesos...)
+#
+# El cajero reporta lo que falla; administracion lo toma (y gestiona con BCP o el proveedor), lo
+# resuelve y el local confirma que ya funciona:
+#
+#   Reportada -> En gestión -> Resuelta -> Confirmada      (o Cancelada antes de resolverse)
+#
+# "Abiertas" son las tres primeras. Cada paso queda en la bitacora (una linea por evento).
+# El bot vigila los tiempos: si nadie toma el caso a tiempo, o sigue sin resolverse, recuerda.
+# ---------------------------------------------------------------------
+TIPOS_INCIDENCIA = ["Internet", "Cargador / energía", "Equipo del agente", "Accesos", "Otro"]
+ICONO_TIPO_INCIDENCIA = {
+    "Internet": "🌐", "Cargador / energía": "🔌", "Equipo del agente": "🖥️", "Accesos": "🔐", "Otro": "🧰",
+}
+GRAVEDADES_INCIDENCIA = ["No puedo operar", "Opero con limitaciones", "Preventivo"]
+ICONO_GRAVEDAD = {"No puedo operar": "🔴", "Opero con limitaciones": "🟠", "Preventivo": "🟢"}
+FRASE_GRAVEDAD = {
+    "No puedo operar": "no puede operar",
+    "Opero con limitaciones": "opera con limitaciones",
+    "Preventivo": "reporte preventivo",
+}
+# Minutos que pueden pasar sin que alguien tome el caso, y cada cuanto se recuerda (mientras siga abierto).
+MINUTOS_PARA_TOMAR = {"No puedo operar": 15, "Opero con limitaciones": 120, "Preventivo": 24 * 60}
+MINUTOS_RECORDATORIO = {"No puedo operar": 30, "Opero con limitaciones": 240, "Preventivo": 24 * 60}
+ESTADOS_INCIDENCIA_ABIERTOS = ("Reportada", "En gestión", "Resuelta")
+DIAS_REINCIDENCIA = 30
+SILENCIO_INCIDENCIAS = (22 * 60, 7 * 60)  # de noche no se mandan recordatorios (minutos desde medianoche)
+
+COLUMNAS_INCIDENCIAS = [
+    "id",
+    "timestamp",
+    "local",
+    "tipo",
+    "gravedad",
+    "reportado_por",
+    "descripcion",
+    "estado",  # Reportada | En gestión | Resuelta | Confirmada | Cancelada
+    "gestionado_por",  # quien de administracion lo tomo
+    "ticket_bcp",  # N° de ticket / caso con BCP o con el proveedor
+    "ts_gestion",  # cuando se tomo el caso
+    "solucion",
+    "ts_resuelto",
+    "ts_cierre",  # confirmada o cancelada
+    "bitacora",  # una linea por evento: "dd/mm HH:MM · quien · texto"
+    "ultimo_aviso",  # ultimo recordatorio que mando el bot
+]
+
+GUIA_INCIDENCIA = {
+    "Internet": [
+        "Reinicia el router o módem: desenchúfalo 30 segundos y vuelve a enchufarlo.",
+        "Revisa que los cables estén bien conectados y que las luces del equipo estén encendidas.",
+        "Si puedes, prueba con los datos del celular para saber si falla solo el internet del local.",
+        "Al reportar, di desde qué hora no hay conexión.",
+    ],
+    "Cargador / energía": [
+        "Prueba otro enchufe o regleta y revisa que el cable no esté doblado ni partido.",
+        "Si hay otro cargador compatible a la mano, úsalo mientras tanto.",
+        "Cuéntanos si el equipo no carga nada o si la batería dura muy poco.",
+    ],
+    "Equipo del agente": [
+        "Reinicia el equipo por completo (apágalo y vuelve a prenderlo).",
+        "Anota el mensaje exacto que muestra la pantalla, o toma una foto con tu celular.",
+        "Indica si falla una sola operación o todas.",
+    ],
+    "Accesos": [
+        "No sigas probando claves: puede bloquearse más.",
+        "Indica quién es la persona afectada y qué mensaje aparece.",
+    ],
+    "Otro": [
+        "Cuenta qué pasó, desde cuándo y qué operaciones afecta.",
+    ],
+}
+
+
+def etiqueta_tipo_incidencia(tipo) -> str:
+    return f"{ICONO_TIPO_INCIDENCIA.get(str(tipo), '🧰')} {tipo}"
+
+
+def etiqueta_gravedad(gravedad) -> str:
+    return f"{ICONO_GRAVEDAD.get(str(gravedad), '⚪')} {gravedad}"
+
+
+def incidencias_abiertas(df: pd.DataFrame, local: str | None = None) -> pd.DataFrame:
+    """Incidencias que siguen abiertas (opcionalmente de un local): primero las que necesitan accion
+    (las 'Resuelta' esperan la confirmacion del local), las mas graves arriba y, dentro de cada
+    gravedad, la mas antigua primero."""
+    if df is None or df.empty:
+        return pd.DataFrame() if df is None else df.iloc[0:0]
+    abiertas = df[df["estado"].isin(ESTADOS_INCIDENCIA_ABIERTOS)]
+    if local is not None:
+        abiertas = abiertas[abiertas["local"] == local]
+    orden = {g: i for i, g in enumerate(GRAVEDADES_INCIDENCIA)}
+    return (
+        abiertas.assign(
+            _r=(abiertas["estado"] == "Resuelta").astype(int),
+            _g=abiertas["gravedad"].map(orden).fillna(len(orden)),
+        )
+        .sort_values(["_r", "_g", "timestamp"])
+        .drop(columns=["_r", "_g"])
+    )
+
+
+def agregar_bitacora(actual, ahora, quien: str, texto: str) -> str:
+    """Agrega una linea 'dd/mm HH:MM · quien · texto' al final de la bitacora (el texto va en una sola linea)."""
+    previo = "" if actual is None or (isinstance(actual, float) and pd.isna(actual)) else str(actual).rstrip()
+    cuerpo = " ".join(str(texto).split())
+    linea = f"{pd.Timestamp(ahora):%d/%m %H:%M} · {str(quien).strip() or 'Sistema'} · {cuerpo}"
+    return f"{previo}\n{linea}" if previo else linea
+
+
+def lineas_bitacora(texto) -> list[str]:
+    return [l.strip() for l in str(texto or "").split("\n") if l.strip()]
+
+
+def _en_silencio(ahora, silencio) -> bool:
+    if not silencio:
+        return False
+    desde, hasta = silencio
+    m = pd.Timestamp(ahora).hour * 60 + pd.Timestamp(ahora).minute
+    return (desde <= m or m < hasta) if desde > hasta else (desde <= m < hasta)
+
+
+def incidencias_por_avisar(df: pd.DataFrame, ahora, silencio=SILENCIO_INCIDENCIAS) -> list[dict]:
+    """Casos a los que el bot debe recordar ahora. Dos motivos:
+      - 'sin_tomar': sigue 'Reportada' pasado el tiempo que se da para tomarla (segun la gravedad),
+      - 'sin_resolver': esta 'En gestión' y ya paso el intervalo de recordatorio.
+    Despues del primer recordatorio se repite cada MINUTOS_RECORDATORIO[gravedad], hasta que el caso cambie.
+    De noche (`silencio`) no se manda nada: al amanecer sale el recordatorio pendiente."""
+    if df is None or df.empty or _en_silencio(ahora, silencio):
+        return []
+    ahora = pd.Timestamp(ahora)
+    salida = []
+    for _, i in df[df["estado"].isin(("Reportada", "En gestión"))].iterrows():
+        grav = str(i["gravedad"])
+        tomar = pd.Timedelta(minutes=MINUTOS_PARA_TOMAR.get(grav, 120))
+        cada = pd.Timedelta(minutes=MINUTOS_RECORDATORIO.get(grav, 240))
+        inicio = pd.to_datetime(i["timestamp"], errors="coerce")
+        if pd.isna(inicio):
+            continue
+        ultimo = pd.to_datetime(i.get("ultimo_aviso"), errors="coerce")
+        if i["estado"] == "Reportada":
+            primero = inicio + tomar
+            proximo = primero if (pd.isna(ultimo) or ultimo < primero) else ultimo + cada
+            motivo = "sin_tomar"
+        else:
+            ref = pd.to_datetime(i.get("ts_gestion"), errors="coerce")
+            ref = inicio if pd.isna(ref) else ref
+            if pd.notna(ultimo) and ultimo > ref:
+                ref = ultimo
+            proximo = ref + cada
+            motivo = "sin_resolver"
+        if ahora >= proximo:
+            salida.append(
+                {
+                    "id": str(i["id"]), "local": str(i["local"]), "tipo": str(i["tipo"]), "gravedad": grav,
+                    "estado": str(i["estado"]), "motivo": motivo, "ticket": str(i.get("ticket_bcp", "") or "").strip(),
+                    "minutos": (ahora - inicio).total_seconds() / 60.0,
+                }
+            )
+    return salida
+
+
+def incidencia_repetida(filas, datos: dict, ahora, segundos: int = 120):
+    """Doble clic: devuelve la incidencia ya guardada si es LA MISMA (local, tipo, gravedad, quien la reporta y
+    descripcion) y se mando hace menos de `segundos`."""
+    def _n(x):
+        return " ".join(str(x or "").split()).lower()
+
+    for f in filas or []:
+        if str(f.get("estado", "")).strip() == "Cancelada":
+            continue
+        if any(_n(f.get(k)) != _n(datos.get(k)) for k in ("local", "tipo", "gravedad", "reportado_por", "descripcion")):
+            continue
+        ts = pd.to_datetime(f.get("timestamp", ""), errors="coerce")
+        if pd.notna(ts) and 0 <= (pd.Timestamp(ahora) - ts).total_seconds() < segundos:
+            return f
+    return None
+
+
+def incidencias_previas(filas, local: str, tipo: str, ahora, dias: int = DIAS_REINCIDENCIA) -> int:
+    """Cuantas veces reporto este local ese mismo tipo en los ultimos `dias` (sin contar las canceladas)."""
+    desde = pd.Timestamp(ahora) - pd.Timedelta(days=dias)
+    n = 0
+    for f in filas or []:
+        if str(f.get("local", "")).strip() != str(local).strip() or str(f.get("tipo", "")).strip() != str(tipo).strip():
+            continue
+        if str(f.get("estado", "")).strip() == "Cancelada":
+            continue
+        ts = pd.to_datetime(f.get("timestamp", ""), errors="coerce")
+        if pd.notna(ts) and ts >= desde:
+            n += 1
+    return n
+
+
+def reincidencias(df: pd.DataFrame, desde) -> pd.DataFrame:
+    """Local + tipo que se repiten (2 o mas veces) desde `desde`: es la evidencia para reclamar al proveedor
+    o a BCP. Columnas: local, tipo, veces, ultima."""
+    columnas = ["local", "tipo", "veces", "ultima"]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=columnas)
+    d = df[(df["estado"] != "Cancelada") & (df["timestamp"] >= pd.Timestamp(desde))]
+    if d.empty:
+        return pd.DataFrame(columns=columnas)
+    g = d.groupby(["local", "tipo"]).agg(veces=("id", "size"), ultima=("timestamp", "max")).reset_index()
+    return g[g["veces"] >= 2].sort_values(["veces", "ultima"], ascending=False).reset_index(drop=True)[columnas]
+
+
+def texto_alerta_incidencia(d: dict, previas: int = 0, enlace: str = "") -> str:
+    """Aviso de Telegram cuando un local reporta una incidencia (un dato por linea)."""
+    grav = str(d["gravedad"])
+    lineas = [
+        f"{ICONO_GRAVEDAD.get(grav, '⚪')} {d['local']}: {FRASE_GRAVEDAD.get(grav, grav.lower())}",
+        f"{etiqueta_tipo_incidencia(d['tipo'])}",
+        f"👤 {d['reportado_por']}",
+    ]
+    if str(d.get("descripcion", "")).strip():
+        lineas.append(f"📝 {str(d['descripcion']).strip()}")
+    if previas:
+        lineas.append(f"📌 Es la {previas + 1}.ª vez en {DIAS_REINCIDENCIA} días que {d['local']} reporta «{d['tipo']}».")
+    lineas.append(f"⏱ Hay que tomarlo en {texto_espera(MINUTOS_PARA_TOMAR.get(grav, 120))}.")
+    lineas.append("Atiéndelo en Dashboard → 🛠️ Soporte." + (f"\n{enlace}" if enlace else ""))
+    return "\n".join(lineas)

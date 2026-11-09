@@ -2,7 +2,7 @@
 bot_telegram.py
 ----------------
 Bot de Telegram con COMANDOS (/fondo, /corte, /encuestas, /operaciones, /solicitudes,
-/diferencias, /ayuda, /id). Corre como un proceso aparte, al lado de la app de Streamlit
+/incidencias, /diferencias, /ayuda, /id). Corre como un proceso aparte, al lado de la app de Streamlit
 (lo arranca docker-entrypoint.sh) y escucha a Telegram con "long polling": no necesita una
 direccion publica ni configurar nada mas que el token.
 
@@ -44,6 +44,7 @@ COMANDOS_MENU = [
     ("sucursales", "Balance de diferencias por sucursal"),
     ("liquidacion", "Liquidación de los trabajadores"),
     ("solicitudes", "Pedidos de efectivo o saldo pendientes"),
+    ("incidencias", "Fallas abiertas: internet, cargador, equipo"),
     ("diferencias", "Diferencias grandes sin autorizar"),
     ("ayuda", "Ver todos los comandos"),
     ("id", "Ver tu chat id"),
@@ -156,15 +157,18 @@ def generar_respuesta(comando: str, argumento: str) -> str:
         registros, config, ajustes = _fresco(sh.get_registros_df, sh.get_config_df, sh.get_ajustes_df)
         return rp.reporte_sucursales(registros, config, ajustes, hoy, periodo, " ".join(filtro))
     if comando == "resumen":
-        registros, config, encuestas, ajustes, solicitudes = _fresco(
-            sh.get_registros_df, sh.get_config_df, sh.get_encuestas_df, sh.get_ajustes_df, sh.get_solicitudes_df
+        registros, config, encuestas, ajustes, solicitudes, incidencias = _fresco(
+            sh.get_registros_df, sh.get_config_df, sh.get_encuestas_df, sh.get_ajustes_df, sh.get_solicitudes_df,
+            sh.get_incidencias_df,
         )
         return rp.resumen_diario(
             registros, config, encuestas, ajustes, solicitudes, hoy, sh.ahora_local().replace(tzinfo=None),
-            sh.umbral_alerta_diferencia(),
+            sh.umbral_alerta_diferencia(), incidencias,
         )
     if comando == "solicitudes":
         return rp.reporte_solicitudes(_fresco(sh.get_solicitudes_df), sh.ahora_local().replace(tzinfo=None))
+    if comando == "incidencias":
+        return rp.reporte_incidencias(_fresco(sh.get_incidencias_df), sh.ahora_local().replace(tzinfo=None), argumento)
     if comando == "diferencias":
         dias, filtro, todas = 7, [], False
         for p in argumento.split():
@@ -228,6 +232,7 @@ def atender(token: str, update: dict) -> None:
 # Avisos programados: resumen de cada noche y turnos sin cerrar
 # ---------------------------------------------------------------------
 REVISION_TURNOS_CADA = 900  # segundos (15 min)
+REVISION_INCIDENCIAS_CADA = 300  # segundos (5 min): el plazo mas corto es de 15 min
 
 
 def enviar_a_todos(token: str, texto: str) -> None:
@@ -295,6 +300,20 @@ def hora_liquidacion() -> int:
         return 21 * 60 + 30
 
 
+def silencio_incidencias():
+    """Horas en las que el bot NO manda recordatorios de incidencias (INCIDENCIAS_SILENCIO, '22:00-07:00' por
+    defecto; 'off' los manda a cualquier hora). Devuelve (desde, hasta) en minutos o None."""
+    valor = (sh._secreto("incidencias_silencio", "INCIDENCIAS_SILENCIO") or "").strip().lower()
+    if valor in ("off", "no", "0", "apagado"):
+        return None
+    try:
+        a, b = valor.split("-")
+        (h1, m1), (h2, m2) = a.split(":"), b.split(":")
+        return int(h1) * 60 + int(m1), int(h2) * 60 + int(m2)
+    except ValueError:
+        return sh.SILENCIO_INCIDENCIAS
+
+
 def horas_turno_abierto() -> float:
     """Horas con la Apertura sin Cierre desde las que se avisa (ALERTA_TURNO_ABIERTO_HORAS; 8.5, igual
     que el Dashboard)."""
@@ -315,6 +334,7 @@ class Programador:
         self.proximo_intento_resumen = 0.0
         self.proximo_intento_liquidacion = 0.0
         self.proximo_intento_final = 0.0
+        self.proxima_revision_incidencias = 0.0
 
     def _cargar(self) -> None:
         try:
@@ -335,6 +355,7 @@ class Programador:
         self._liquidacion(ahora)
         self._liquidacion_final(ahora)
         self._turnos(ahora)
+        self._incidencias(ahora)
 
     def _resumen(self, ahora) -> None:
         minutos = hora_resumen()
@@ -416,6 +437,20 @@ class Programador:
                 log(f"aviso de turno sin cerrar: {t['local']} {t['turno']} {t['fecha']}")
         except Exception as e:
             log(f"revisión de turnos: {type(e).__name__}: {e}")
+
+    def _incidencias(self, ahora) -> None:
+        """Recuerda las incidencias que nadie tomo a tiempo o que siguen sin resolverse (ver
+        cuadre.incidencias_por_avisar). El ultimo recordatorio queda anotado en la propia hoja."""
+        if time.time() < self.proxima_revision_incidencias:
+            return
+        self.proxima_revision_incidencias = time.time() + REVISION_INCIDENCIAS_CADA
+        try:
+            for i in sh.incidencias_por_avisar(_fresco(sh.get_incidencias_df), ahora, silencio_incidencias()):
+                enviar_a_todos(self.token, rp.texto_recordatorio_incidencia(i))
+                sh.incidencia_avisada(i["id"])
+                log(f"recordatorio de incidencia: {i['local']} {i['tipo']} ({i['motivo']})")
+        except Exception as e:
+            log(f"revisión de incidencias: {type(e).__name__}: {e}")
 
 
 # ---------------------------------------------------------------------

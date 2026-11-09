@@ -83,6 +83,27 @@ from cuadre import (  # noqa: F401  (re-export para el resto de la app)
     minutos_entre,
     solicitudes_activas,
     texto_espera,
+    TIPOS_INCIDENCIA,
+    ICONO_TIPO_INCIDENCIA,
+    GRAVEDADES_INCIDENCIA,
+    ICONO_GRAVEDAD,
+    MINUTOS_PARA_TOMAR,
+    MINUTOS_RECORDATORIO,
+    ESTADOS_INCIDENCIA_ABIERTOS,
+    DIAS_REINCIDENCIA,
+    SILENCIO_INCIDENCIAS,
+    COLUMNAS_INCIDENCIAS,
+    GUIA_INCIDENCIA,
+    etiqueta_tipo_incidencia,
+    etiqueta_gravedad,
+    incidencias_abiertas,
+    agregar_bitacora,
+    lineas_bitacora,
+    incidencias_por_avisar,
+    incidencia_repetida,
+    incidencias_previas,
+    reincidencias,
+    texto_alerta_incidencia,
 )
 
 # Los "scopes" son los permisos que le pedimos a Google. Sin el permiso
@@ -1292,6 +1313,7 @@ def _hojas_respaldo() -> list:
         (NOMBRE_HOJA_PERSONAL, COLUMNAS_PERSONAL),
         (NOMBRE_HOJA_SOLICITUDES, COLUMNAS_SOLICITUDES),
         (NOMBRE_HOJA_CONFORMIDADES, COLUMNAS_CONFORMIDAD),
+        (NOMBRE_HOJA_INCIDENCIAS, COLUMNAS_INCIDENCIAS),
     ]
 
 
@@ -1925,3 +1947,155 @@ def get_conformidades_df() -> pd.DataFrame:
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df["monto"] = pd.to_numeric(df["monto"], errors="coerce").fillna(0)
     return df
+
+
+# ---------------------------------------------------------------------
+# Soporte e incidencias del agente (los tipos, gravedades y tiempos estan en cuadre.py)
+#
+#   Reportada -> En gestión -> Resuelta -> Confirmada      (o Cancelada antes de resolverse)
+#
+# Cada paso agrega una linea a la bitacora del caso y, cuando conviene, avisa por Telegram.
+# ---------------------------------------------------------------------
+NOMBRE_HOJA_INCIDENCIAS = "Incidencias"
+
+
+class IncidenciaDuplicada(Exception):
+    """El mismo reporte se envio hace un momento (doble clic)."""
+
+
+def guardar_incidencia(datos: dict) -> bool:
+    """Guarda un reporte nuevo (estado Reportada) y avisa por Telegram. Devuelve True si el aviso salio.
+    `datos`: local, tipo, gravedad, reportado_por, descripcion."""
+    ws = _get_or_create_worksheet(NOMBRE_HOJA_INCIDENCIAS, COLUMNAS_INCIDENCIAS)
+    filas = ws.get_all_records(numericise_ignore=["all"])
+    ahora = ahora_local().replace(tzinfo=None)
+    if incidencia_repetida(filas, datos, ahora):
+        raise IncidenciaDuplicada(
+            "Ya enviaste este mismo reporte hace un momento. Si es otro problema, cambia la descripción "
+            "o espera un par de minutos."
+        )
+    previas = incidencias_previas(filas, datos["local"], datos["tipo"], ahora)
+    fila = {"id": nuevo_id(), "timestamp": ahora.isoformat(timespec="seconds"), "estado": "Reportada", **datos}
+    fila["bitacora"] = agregar_bitacora("", ahora, datos["reportado_por"], "Reportó la incidencia")
+    ws.append_row([str(fila.get(c, "")) for c in COLUMNAS_INCIDENCIAS])
+    get_incidencias_df.clear()
+    return notificar_telegram(texto_alerta_incidencia(fila, previas, _enlace_dashboard()))
+
+
+@st.cache_data(ttl=TTL_DATOS, show_spinner=False)
+def get_incidencias_df() -> pd.DataFrame:
+    ws = _get_or_create_worksheet(NOMBRE_HOJA_INCIDENCIAS, COLUMNAS_INCIDENCIAS)
+    df = pd.DataFrame(ws.get_all_records(numericise_ignore=["all"]), columns=COLUMNAS_INCIDENCIAS)
+    fechas = ["timestamp", "ts_gestion", "ts_resuelto", "ts_cierre", "ultimo_aviso"]
+    if df.empty:
+        return df
+    df = _texto_seguro(df, set(fechas))
+    for col in fechas:
+        df[col] = pd.to_datetime(df[col], errors="coerce")
+    for col in ("local", "estado", "tipo", "gravedad"):
+        df[col] = df[col].str.strip()
+    return df.sort_values("timestamp", ascending=False).reset_index(drop=True)
+
+
+def actualizar_incidencia(id_incidencia: str, **campos) -> None:
+    """Cambia campos de UNA incidencia en una sola escritura confirmada (lanza error si no la encuentra)."""
+    ws = _get_or_create_worksheet(NOMBRE_HOJA_INCIDENCIAS, COLUMNAS_INCIDENCIAS)
+    fila = _fila_de_id(ws, id_incidencia, COLUMNAS_INCIDENCIAS.index("id") + 1)
+    cambios = []
+    for columna, valor in campos.items():
+        if columna not in COLUMNAS_INCIDENCIAS or columna == "id":
+            raise ValueError(f"Campo no permitido en una incidencia: {columna}")
+        a1 = gspread.utils.rowcol_to_a1(fila, COLUMNAS_INCIDENCIAS.index(columna) + 1)
+        cambios.append({"range": a1, "values": [[valor]]})
+    if cambios:
+        _escribir_y_confirmar(ws, cambios)
+        get_incidencias_df.clear()
+
+
+def _cambiar_incidencia(id_incidencia: str, quien: str, evento: str, aviso: str | None = None, **campos) -> dict:
+    """Aplica un cambio, agrega `evento` a la bitacora (leyendola fresca, para no pisar lo que escribio otra
+    persona) y manda `aviso` por Telegram desde otro hilo. Devuelve la fila de la incidencia con los cambios."""
+    ws = _get_or_create_worksheet(NOMBRE_HOJA_INCIDENCIAS, COLUMNAS_INCIDENCIAS)
+    objetivo = str(id_incidencia).strip()
+    actual = next(
+        (f for f in ws.get_all_records(numericise_ignore=["all"]) if str(f.get("id", "")).strip() == objetivo), None
+    )
+    if actual is None:
+        raise ValueError(f"No se encontró la incidencia {objetivo} (¿se borró la fila?).")
+    campos["bitacora"] = agregar_bitacora(actual.get("bitacora", ""), ahora_local().replace(tzinfo=None), quien, evento)
+    actualizar_incidencia(objetivo, **campos)
+    actual.update(campos)
+    if aviso:
+        # replace y no format: el texto que escribe la gente puede traer llaves { }
+        notificar_telegram_en_segundo_plano(aviso.replace("{local}", str(actual["local"])).replace("{tipo}", str(actual["tipo"])))
+    return actual
+
+
+def incidencia_tomar(id_incidencia: str, quien: str, ticket: str = "", nota: str = "") -> dict:
+    """Administracion toma el caso (lo gestiona con BCP o con el proveedor)."""
+    evento = "Tomó el caso" + (f" · ticket {ticket.strip()}" if ticket.strip() else "") + (f" · {nota.strip()}" if nota.strip() else "")
+    campos = {"estado": "En gestión", "gestionado_por": quien.strip(), "ts_gestion": _ahora_iso()}
+    if ticket.strip():
+        campos["ticket_bcp"] = ticket.strip()
+    aviso = "🔧 {local}: «{tipo}» en gestión\n👤 " + quien.strip() + (f"\n🎫 Ticket: {ticket.strip()}" if ticket.strip() else "")
+    return _cambiar_incidencia(id_incidencia, quien, evento, aviso, **campos)
+
+
+def incidencia_novedad(id_incidencia: str, quien: str, texto: str, ticket: str = "", por_local: bool = False) -> dict:
+    """Una novedad en la bitacora. Si la escribe el local, administracion recibe el aviso."""
+    campos = {"ticket_bcp": ticket.strip()} if ticket.strip() else {}
+    evento = texto.strip() + (f" · ticket {ticket.strip()}" if ticket.strip() else "")
+    aviso = ("💬 {local} agregó una novedad en «{tipo}»\n📝 " + " ".join(texto.split())) if por_local else None
+    return _cambiar_incidencia(id_incidencia, quien, evento, aviso, **campos)
+
+
+def incidencia_resolver(id_incidencia: str, quien: str, solucion: str) -> dict:
+    """Administracion la da por resuelta; falta que el local confirme que ya funciona."""
+    aviso = "✅ {local}: «{tipo}» resuelta\n🛠 " + " ".join(solucion.split()) + "\nEspera la confirmación del local."
+    return _cambiar_incidencia(
+        id_incidencia, quien, f"Resuelta: {solucion.strip()}", aviso,
+        estado="Resuelta", solucion=solucion.strip(), ts_resuelto=_ahora_iso(),
+    )
+
+
+def incidencia_confirmar(id_incidencia: str, quien: str, por_local: bool = True) -> dict:
+    """Cierra el caso. Lo confirma el local (se avisa) o lo cierra administracion sin esperarlo."""
+    aviso = "👍 {local} confirmó que «{tipo}» ya funciona." if por_local else None
+    evento = "Confirmó que ya funciona" if por_local else "Cerrada por administración"
+    return _cambiar_incidencia(id_incidencia, quien, evento, aviso, estado="Confirmada", ts_cierre=_ahora_iso())
+
+
+def incidencia_reabrir(id_incidencia: str, quien: str, texto: str = "") -> dict:
+    """El local dice que sigue fallando: vuelve a 'En gestión' y se avisa a administracion."""
+    detalle = " ".join(texto.split())
+    aviso = "↩️ {local} dice que «{tipo}» sigue fallando" + (f"\n📝 {detalle}" if detalle else "")
+    return _cambiar_incidencia(
+        id_incidencia, quien, "Dice que sigue fallando" + (f": {detalle}" if detalle else ""), aviso,
+        estado="En gestión", ts_resuelto="", ultimo_aviso=_ahora_iso(),
+    )
+
+
+def incidencia_cancelar(id_incidencia: str, quien: str, motivo: str = "", por_local: bool = True) -> dict:
+    aviso = "✖ {local} canceló su reporte de «{tipo}»" + (f"\n📝 {motivo.strip()}" if motivo.strip() else "") if por_local else None
+    return _cambiar_incidencia(
+        id_incidencia, quien, "Cancelada" + (f": {motivo.strip()}" if motivo.strip() else ""), aviso,
+        estado="Cancelada", ts_cierre=_ahora_iso(),
+    )
+
+
+def incidencia_avisada(id_incidencia: str) -> None:
+    """El bot ya mando el recordatorio: se anota para no repetirlo antes de tiempo."""
+    actualizar_incidencia(id_incidencia, ultimo_aviso=_ahora_iso())
+
+
+@st.cache_data(ttl=TTL_DATOS, show_spinner=False)
+def get_soporte_contacto() -> str:
+    """Telefono, WhatsApp, horario... de soporte de BCP y del proveedor de internet: lo escribe administracion
+    en el Dashboard y lo ve el cajero al reportar."""
+    valores = leer_estado_bot().get("soporte_contacto", [])
+    return valores[-1] if valores else ""
+
+
+def guardar_soporte_contacto(texto: str) -> None:
+    guardar_estado_bot("soporte_contacto", texto.strip(), unico=True)
+    get_soporte_contacto.clear()

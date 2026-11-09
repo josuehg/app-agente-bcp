@@ -39,6 +39,10 @@ from cuadre import (
     solicitudes_activas,
     texto_espera,
     totales_ticket,
+    MINUTOS_PARA_TOMAR,
+    etiqueta_gravedad,
+    etiqueta_tipo_incidencia,
+    incidencias_abiertas,
 )
 
 _MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
@@ -73,6 +77,8 @@ AYUDA = (
     "   🔎 Diferencias de más de S/ {umbral:g} que todavía NO están autorizadas (últimos 7 días)\n"
     "/solicitudes\n"
     "   📨 Pedidos de efectivo o saldo que están esperando\n"
+    "/incidencias\n"
+    "   🛠️ Fallas abiertas de internet, cargador o equipo, y cómo van con BCP\n"
     "\n"
     "⭐ <b>Encuestas</b>\n"
     "/encuestas\n"
@@ -95,7 +101,8 @@ AYUDA = (
     "   <code>/ranking semana</code>\n"
     "   <code>/ranking anterior colon</code>\n"
     "\n"
-    "🔔 Además te aviso solo: diferencias grandes, pedidos nuevos, turnos sin cerrar, un resumen cada noche "
+    "🔔 Además te aviso solo: diferencias grandes, pedidos nuevos, fallas reportadas (y te recuerdo si nadie las atiende), "
+    "turnos sin cerrar, un resumen cada noche "
     "la liquidación de todos los trabajadores el último día de cada mes y la definitiva el día 3.\n"
     "🆔 /id — tu número de chat"
 )
@@ -405,6 +412,55 @@ def reporte_solicitudes(solicitudes: pd.DataFrame, ahora) -> str:
 
 
 # ---------------------------------------------------------------------
+# /incidencias: fallas del agente (internet, cargador, equipo...) que siguen abiertas
+# ---------------------------------------------------------------------
+def reporte_incidencias(incidencias: pd.DataFrame, ahora, local_filtro: str = "") -> str:
+    abiertas = incidencias_abiertas(incidencias)
+    if abiertas is not None and not abiertas.empty and local_filtro.strip():
+        elegidos = buscar_locales(local_filtro, abiertas["local"])
+        abiertas = abiertas[abiertas["local"].isin(elegidos)]
+    if abiertas is None or abiertas.empty:
+        return "🛠️ No hay incidencias abiertas. 🎉"
+    bloques = []
+    for _, i in abiertas.iterrows():
+        lineas = [
+            f"{etiqueta_gravedad(i['gravedad']).split(' ')[0]} <b>{esc(i['local'])}</b>",
+            etiqueta_tipo_incidencia(i["tipo"]),
+            f"⚠️ {esc(i['gravedad'])}",
+            f"👤 Reportó: {esc(i['reportado_por'])}",
+            f"🕒 Hace {texto_espera(minutos_entre(i['timestamp'], ahora))}",
+            "✅ Resuelta (espera la confirmación del local)" if i["estado"] == "Resuelta" else f"🔄 Estado: {esc(i['estado'])}",
+        ]
+        if str(i["gestionado_por"]).strip():
+            lineas.append(f"🔧 Lo lleva: {esc(i['gestionado_por'])}")
+        if str(i["ticket_bcp"]).strip():
+            lineas.append(f"🎫 Ticket: {esc(i['ticket_bcp'])}")
+        if str(i["descripcion"]).strip():
+            lineas.append(f"📝 {esc(i['descripcion'])}")
+        bloques.append("\n".join(lineas))
+    return f"🛠️ <b>{len(abiertas)} incidencia(s) abierta(s)</b>\n\n" + "\n\n".join(bloques)
+
+
+def texto_recordatorio_incidencia(i: dict) -> str:
+    """Recordatorio del bot (HTML) para un caso de incidencias_por_avisar."""
+    grav = etiqueta_gravedad(i["gravedad"]).split(" ")[0]
+    if i["motivo"] == "sin_tomar":
+        titulo = "⏰ <b>Nadie ha tomado este caso</b>"
+        espera = f"⏱ Se esperaba tomarlo en {texto_espera(MINUTOS_PARA_TOMAR.get(i['gravedad'], 120))}"
+    else:
+        titulo = "⏰ <b>Sigue sin resolverse</b>"
+        espera = ""
+    lineas = [titulo, f"{grav} <b>{esc(i['local'])}</b>", etiqueta_tipo_incidencia(i["tipo"]), f"⚠️ {esc(i['gravedad'])}",
+              f"🕒 Hace {texto_espera(i['minutos'])}"]
+    if espera:
+        lineas.append(espera)
+    if i.get("ticket"):
+        lineas.append(f"🎫 Ticket: {esc(i['ticket'])}")
+    lineas.append("👉 Dashboard → 🛠️ Soporte")
+    return "\n".join(lineas)
+
+
+# ---------------------------------------------------------------------
 # /diferencias: cortes y saltos (entre cierres) con diferencia grande
 # ---------------------------------------------------------------------
 def reporte_diferencias(registros: pd.DataFrame, hoy: date, dias: int = 7, umbral: float = UMBRAL_ALERTA_DIFERENCIA,
@@ -617,7 +673,7 @@ _DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domin
 
 
 def resumen_diario(registros, config, encuestas, ajustes, solicitudes, hoy: date, ahora,
-                   umbral: float = UMBRAL_ALERTA_DIFERENCIA) -> str:
+                   umbral: float = UMBRAL_ALERTA_DIFERENCIA, incidencias=None) -> str:
     partes = [f"🌙 <b>Resumen del día</b> — {_DIAS[hoy.weekday()]} {_dm(hoy)}"]
     partes.append(reporte_operaciones(registros, config, hoy))
     partes.append(reporte_fondo(registros, config, hoy))
@@ -632,6 +688,8 @@ def resumen_diario(registros, config, encuestas, ajustes, solicitudes, hoy: date
     else:
         partes.append("✅ Todos los turnos están cerrados.")
     partes.append(reporte_solicitudes(solicitudes, ahora))
+    if incidencias is not None:
+        partes.append(reporte_incidencias(incidencias, ahora))
     hoy_enc = encuestas[encuestas["fecha"] == hoy] if encuestas is not None and not encuestas.empty else None
     if hoy_enc is not None and len(hoy_enc):
         por_local = hoy_enc.groupby("local").size()

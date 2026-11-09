@@ -656,3 +656,140 @@ def test_alerta_usa_umbral_configurable():
     )
     assert len(alertas_de_registro(df, "c1", umbral=6)) == 1
     assert alertas_de_registro(df, "c1", umbral=10.5) == []
+
+
+# ---------------------------------------------------------------------
+# Soporte e incidencias del agente
+# ---------------------------------------------------------------------
+def _incidencias(*filas):
+    base = {
+        "id": "", "timestamp": pd.Timestamp("2026-10-18 09:00"), "local": "Colon", "tipo": "Internet",
+        "gravedad": "No puedo operar", "reportado_por": "Ana", "descripcion": "", "estado": "Reportada",
+        "gestionado_por": "", "ticket_bcp": "", "ts_gestion": pd.NaT, "solucion": "", "ts_resuelto": pd.NaT,
+        "ts_cierre": pd.NaT, "bitacora": "", "ultimo_aviso": pd.NaT,
+    }
+    return pd.DataFrame([{**base, **f} for f in filas])
+
+
+def test_incidencias_abiertas_graves_primero_y_resueltas_al_final():
+    from cuadre import incidencias_abiertas
+
+    df = _incidencias(
+        {"id": "a", "gravedad": "Preventivo", "timestamp": pd.Timestamp("2026-10-18 08:00")},
+        {"id": "b", "gravedad": "No puedo operar", "timestamp": pd.Timestamp("2026-10-18 09:00")},
+        {"id": "c", "gravedad": "No puedo operar", "timestamp": pd.Timestamp("2026-10-18 07:00"), "estado": "Resuelta"},
+        {"id": "d", "gravedad": "Opero con limitaciones", "estado": "En gestión"},
+        {"id": "e", "estado": "Confirmada"},
+        {"id": "f", "estado": "Cancelada"},
+        {"id": "g", "local": "Zol A"},
+    )
+    assert list(incidencias_abiertas(df)["id"]) == ["b", "g", "d", "a", "c"]
+    assert list(incidencias_abiertas(df, local="Zol A")["id"]) == ["g"]
+    assert incidencias_abiertas(pd.DataFrame()).empty
+
+
+def test_bitacora_una_linea_por_evento_y_en_una_sola_linea():
+    from cuadre import agregar_bitacora, lineas_bitacora
+
+    t = agregar_bitacora("", pd.Timestamp("2026-10-18 09:05"), "Ana", "Reportó la incidencia")
+    t = agregar_bitacora(t, pd.Timestamp("2026-10-18 09:20"), "Josué", "BCP dice\nque envían técnico")
+    assert lineas_bitacora(t) == ["18/10 09:05 · Ana · Reportó la incidencia", "18/10 09:20 · Josué · BCP dice que envían técnico"]
+    assert agregar_bitacora(float("nan"), pd.Timestamp("2026-10-18 09:05"), "", "x") == "18/10 09:05 · Sistema · x"
+
+
+def test_recordatorio_sin_tomar_segun_la_gravedad_y_se_repite():
+    from cuadre import incidencias_por_avisar
+
+    df = _incidencias({"id": "a"})  # No puedo operar: 15 min para tomarla, recordatorio cada 30
+    assert incidencias_por_avisar(df, pd.Timestamp("2026-10-18 09:14"), None) == []       # aun hay tiempo
+    r = incidencias_por_avisar(df, pd.Timestamp("2026-10-18 09:15"), None)
+    assert [x["motivo"] for x in r] == ["sin_tomar"] and r[0]["minutos"] == 15
+    # ya se recordo a las 9:16: el siguiente toca 30 min despues
+    df2 = _incidencias({"id": "a", "ultimo_aviso": pd.Timestamp("2026-10-18 09:16")})
+    assert incidencias_por_avisar(df2, pd.Timestamp("2026-10-18 09:45"), None) == []
+    assert len(incidencias_por_avisar(df2, pd.Timestamp("2026-10-18 09:46"), None)) == 1
+    # tiempos de las otras gravedades
+    lim = _incidencias({"id": "b", "gravedad": "Opero con limitaciones"})
+    assert incidencias_por_avisar(lim, pd.Timestamp("2026-10-18 10:59"), None) == []
+    assert len(incidencias_por_avisar(lim, pd.Timestamp("2026-10-18 11:00"), None)) == 1
+    prev = _incidencias({"id": "c", "gravedad": "Preventivo"})
+    assert incidencias_por_avisar(prev, pd.Timestamp("2026-10-19 08:59"), None) == []
+    assert len(incidencias_por_avisar(prev, pd.Timestamp("2026-10-19 09:00"), None)) == 1
+
+
+def test_recordatorio_en_gestion_cuenta_desde_que_se_tomo_o_desde_el_ultimo_aviso():
+    from cuadre import incidencias_por_avisar
+
+    df = _incidencias({"id": "a", "estado": "En gestión", "ts_gestion": pd.Timestamp("2026-10-18 09:10"), "ticket_bcp": "T-55"})
+    assert incidencias_por_avisar(df, pd.Timestamp("2026-10-18 09:39"), None) == []
+    r = incidencias_por_avisar(df, pd.Timestamp("2026-10-18 09:40"), None)
+    assert r[0]["motivo"] == "sin_resolver" and r[0]["ticket"] == "T-55"
+    df2 = _incidencias({"id": "a", "estado": "En gestión", "ts_gestion": pd.Timestamp("2026-10-18 09:10"),
+                        "ultimo_aviso": pd.Timestamp("2026-10-18 09:41")})
+    assert incidencias_por_avisar(df2, pd.Timestamp("2026-10-18 10:10"), None) == []
+    assert len(incidencias_por_avisar(df2, pd.Timestamp("2026-10-18 10:11"), None)) == 1
+    # resueltas, confirmadas y canceladas no se recuerdan
+    cerradas = _incidencias({"id": "x", "estado": "Resuelta"}, {"id": "y", "estado": "Confirmada"}, {"id": "z", "estado": "Cancelada"})
+    assert incidencias_por_avisar(cerradas, pd.Timestamp("2026-10-20 09:00"), None) == []
+
+
+def test_recordatorios_en_silencio_de_noche_y_vuelven_al_amanecer():
+    from cuadre import SILENCIO_INCIDENCIAS, incidencias_por_avisar
+
+    df = _incidencias({"id": "a", "timestamp": pd.Timestamp("2026-10-18 21:00")})
+    assert incidencias_por_avisar(df, pd.Timestamp("2026-10-18 21:30"), SILENCIO_INCIDENCIAS)   # 21:30: todavia suena
+    assert incidencias_por_avisar(df, pd.Timestamp("2026-10-18 22:30"), SILENCIO_INCIDENCIAS) == []
+    assert incidencias_por_avisar(df, pd.Timestamp("2026-10-19 03:00"), SILENCIO_INCIDENCIAS) == []
+    assert len(incidencias_por_avisar(df, pd.Timestamp("2026-10-19 07:00"), SILENCIO_INCIDENCIAS)) == 1
+    assert len(incidencias_por_avisar(df, pd.Timestamp("2026-10-19 03:00"), None)) == 1          # sin silencio, siempre
+
+
+def test_incidencia_repetida_solo_frena_el_doble_clic():
+    from cuadre import incidencia_repetida
+
+    ahora = pd.Timestamp("2026-10-18 10:01:00")
+    previas = [{"local": "Colon", "tipo": "Internet", "gravedad": "No puedo operar", "reportado_por": "Ana",
+                "descripcion": "sin internet", "estado": "Reportada", "timestamp": "2026-10-18T10:00:30"}]
+    base = {"local": "Colon", "tipo": "Internet", "gravedad": "No puedo operar", "reportado_por": "ana", "descripcion": "Sin  internet"}
+    assert incidencia_repetida(previas, base, ahora) is not None
+    assert incidencia_repetida(previas, {**base, "descripcion": "se cae a ratos"}, ahora) is None
+    assert incidencia_repetida(previas, {**base, "tipo": "Equipo del agente"}, ahora) is None
+    assert incidencia_repetida(previas, base, pd.Timestamp("2026-10-18 10:05:00")) is None
+    assert incidencia_repetida([{**previas[0], "estado": "Cancelada"}], base, ahora) is None
+    assert incidencia_repetida(None, base, ahora) is None
+
+
+def test_reincidencias_y_previas_son_la_evidencia_para_reclamar():
+    from cuadre import incidencias_previas, reincidencias
+
+    df = _incidencias(
+        {"id": "1", "timestamp": pd.Timestamp("2026-10-01 09:00")},
+        {"id": "2", "timestamp": pd.Timestamp("2026-10-10 09:00")},
+        {"id": "3", "timestamp": pd.Timestamp("2026-10-15 09:00"), "estado": "Cancelada"},
+        {"id": "4", "timestamp": pd.Timestamp("2026-10-12 09:00"), "tipo": "Equipo del agente"},
+        {"id": "5", "timestamp": pd.Timestamp("2026-08-01 09:00")},  # muy antigua
+    )
+    r = reincidencias(df, pd.Timestamp("2026-09-01"))
+    assert len(r) == 1 and r.loc[0, "local"] == "Colon" and r.loc[0, "tipo"] == "Internet" and r.loc[0, "veces"] == 2
+    assert reincidencias(pd.DataFrame(), pd.Timestamp("2026-09-01")).empty
+    filas = df.assign(timestamp=df["timestamp"].dt.strftime("%Y-%m-%dT%H:%M:%S")).to_dict("records")
+    assert incidencias_previas(filas, "Colon", "Internet", pd.Timestamp("2026-10-18 09:00")) == 2   # sin la cancelada ni la antigua
+    assert incidencias_previas(filas, "Zol A", "Internet", pd.Timestamp("2026-10-18 09:00")) == 0
+
+
+def test_texto_alerta_incidencia_un_dato_por_linea():
+    from cuadre import texto_alerta_incidencia
+
+    d = {"local": "Colon", "tipo": "Internet", "gravedad": "No puedo operar", "reportado_por": "Ana", "descripcion": "sin internet desde las 9"}
+    t = texto_alerta_incidencia(d, previas=2, enlace="https://x.app/Dashboard")
+    assert t.split("\n") == [
+        "🔴 Colon: no puede operar",
+        "🌐 Internet",
+        "👤 Ana",
+        "📝 sin internet desde las 9",
+        "📌 Es la 3.ª vez en 30 días que Colon reporta «Internet».",
+        "⏱ Hay que tomarlo en 15 min.",
+        "Atiéndelo en Dashboard → 🛠️ Soporte.",
+        "https://x.app/Dashboard",
+    ]
+    assert "📌" not in texto_alerta_incidencia({**d, "descripcion": ""}, 0) and "📝" not in texto_alerta_incidencia({**d, "descripcion": ""}, 0)

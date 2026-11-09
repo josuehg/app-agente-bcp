@@ -77,6 +77,10 @@ try:
     st.page_link("pages/8_Solicitudes.py", label="¿Te falta efectivo o saldo? Solicítalo aquí", icon="💵")
 except Exception:
     pass  # solo es un atajo: si la pagina no esta registrada, el formulario sigue igual
+try:
+    st.page_link("pages/9_Soporte.py", label="¿Falla el internet, el cargador o el equipo? Repórtalo aquí", icon="🛠️")
+except Exception:
+    pass
 if col_salir.button("Cambiar de PIN"):
     st.session_state["local_autenticado"] = None
     st.rerun()

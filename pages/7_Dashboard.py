@@ -51,6 +51,10 @@ try:
     solicitudes_df = sh.get_solicitudes_df()
 except Exception:
     solicitudes_df = None  # Google ocupado: el resto del Dashboard sigue funcionando
+try:
+    incidencias_df = sh.get_incidencias_df()
+except Exception:
+    incidencias_df = None
 
 if df.empty:
     st.info("Todavia no hay registros. Apenas se guarde el primero, aparecera aqui.")
@@ -206,11 +210,11 @@ def _comparar_par(row_izq, row_der, label_izq="Apertura", label_der="Cierre"):
 # "Cuadre por turno" calcula `cortes` y "Acumulado por persona" lo usa).
 # ---------------------------------------------------------------------
 (
-    tab_resumen, tab_solicitudes, tab_cuadre, tab_liquidacion, tab_sucursales, tab_operaciones, tab_metas,
+    tab_resumen, tab_solicitudes, tab_soporte, tab_cuadre, tab_liquidacion, tab_sucursales, tab_operaciones, tab_metas,
     tab_comisiones, tab_incentivos, tab_registros, tab_personal, tab_respaldo,
 ) = st.tabs(
     [
-        "🏠 Resumen", "📨 Solicitudes", "🔍 Cuadre", "🧾 Liquidación", "🏪 Sucursales", "📈 Operaciones", "🎯 Metas",
+        "🏠 Resumen", "📨 Solicitudes", "🛠️ Soporte", "🔍 Cuadre", "🧾 Liquidación", "🏪 Sucursales", "📈 Operaciones", "🎯 Metas",
         "💰 Comisiones", "⭐ Incentivos", "🗂️ Registros", "👥 Personal", "💾 Respaldo",
     ]
 )
@@ -442,6 +446,181 @@ with tab_solicitudes:
                 st.dataframe(sh.arrow_safe(_tabla_sol), width="stretch", hide_index=True)
 
 
+# ---------------------------------------------------------------------
+# 🛠️ Soporte e incidencias de los agentes (internet, cargador, equipo, accesos...). Los locales las reportan
+# en la pagina Soporte; aqui se toman (se gestionan con BCP o el proveedor), se resuelven y se ve la evidencia
+# de lo que se repite. Reportada -> En gestión -> Resuelta -> Confirmada (la confirma el local).
+# ---------------------------------------------------------------------
+with tab_soporte:
+    st.subheader("🛠️ Soporte e incidencias de los agentes")
+    if "dash_sop_msg" in st.session_state:
+        st.success(st.session_state.pop("dash_sop_msg"))
+    if incidencias_df is None:
+        st.warning("Google está ocupado y no se pudo leer las incidencias. Recarga en un momento.")
+    else:
+        _ahora_sop = sh.ahora_local().replace(tzinfo=None)
+        _abiertas_sop = sh.incidencias_abiertas(incidencias_df)
+        _mes_sop = pd.Timestamp(sh.hoy_local().replace(day=1))
+        _del_mes_sop = incidencias_df[incidencias_df["timestamp"] >= _mes_sop] if not incidencias_df.empty else incidencias_df
+        _resueltas_sop = (
+            _del_mes_sop[_del_mes_sop["estado"].isin(["Resuelta", "Confirmada"])] if not _del_mes_sop.empty else _del_mes_sop
+        )
+        _mins_sop = [sh.minutos_entre(a, b) for a, b in zip(_resueltas_sop["timestamp"], _resueltas_sop["ts_resuelto"])] if not _resueltas_sop.empty else []
+        _mins_sop = [m for m in _mins_sop if m is not None]
+        _parados = 0 if _abiertas_sop.empty else int((_abiertas_sop["gravedad"] == "No puedo operar").sum())
+        s1, s2, s3, s4 = st.columns(4)
+        s1.metric("Abiertas ahora", len(_abiertas_sop))
+        s2.metric("🔴 No pueden operar", _parados)
+        s3.metric("Resueltas este mes", len(_resueltas_sop))
+        s4.metric("Tiempo promedio de solución", sh.texto_espera(sum(_mins_sop) / len(_mins_sop)) if _mins_sop else "—")
+
+        if _abiertas_sop.empty:
+            st.success("No hay incidencias abiertas. 🎉")
+
+        for _, i in _abiertas_sop.iterrows():
+            _plazo = sh.MINUTOS_PARA_TOMAR.get(i["gravedad"], 120)
+            _espera = sh.minutos_entre(i["timestamp"], _ahora_sop)
+            _vencido = i["estado"] == "Reportada" and _espera is not None and _espera > _plazo
+            _quien_adm = str(i["gestionado_por"]).strip() or "Administración"
+            with st.container(border=True):
+                st.markdown(f"### {sh.ICONO_GRAVEDAD.get(i['gravedad'], '⚪')} {i['local']} · {sh.etiqueta_tipo_incidencia(i['tipo'])}")
+                st.caption(
+                    f"{i['gravedad']} · Reportó {i['reportado_por']} · {i['timestamp']:%d/%m %H:%M} · "
+                    f"hace {sh.texto_espera(_espera)} · Estado: **{i['estado']}**"
+                    + (f" · ⏰ pasó el plazo de {sh.texto_espera(_plazo)} para tomarla" if _vencido else "")
+                )
+                if str(i["descripcion"]).strip():
+                    st.write(f"📝 {i['descripcion']}")
+                if str(i["ticket_bcp"]).strip() or str(i["gestionado_por"]).strip():
+                    st.caption(
+                        (f"🔧 Lo lleva: {i['gestionado_por']}  " if str(i["gestionado_por"]).strip() else "")
+                        + (f"🎫 Ticket: {i['ticket_bcp']}" if str(i["ticket_bcp"]).strip() else "")
+                    )
+                with st.expander("Historial del caso (el local también lo ve)"):
+                    st.text("\n".join(sh.lineas_bitacora(i["bitacora"])) or "Sin movimientos.")
+                try:
+                    if i["estado"] == "Reportada":
+                        with st.form(f"sop_tomar_{i['id']}"):
+                            st.markdown("**Tomar el caso**")
+                            _quien_t = st.text_input("¿Quién lo gestiona?", key=f"sop_quien_{i['id']}")
+                            _ticket_t = st.text_input("N° de ticket de BCP o del proveedor (si ya lo tienes)", key=f"sop_ticket_{i['id']}")
+                            _nota_t = st.text_input("Nota (opcional)", key=f"sop_nota_{i['id']}")
+                            _motivo_c = st.text_input("Motivo (solo si cancelas el reporte)", key=f"sop_mot_{i['id']}")
+                            c1, c2 = st.columns(2)
+                            _tomar = c1.form_submit_button("Tomar el caso", type="primary", width="stretch")
+                            _cancelar = c2.form_submit_button("Cancelar reporte", width="stretch")
+                        if _tomar:
+                            if not _quien_t.strip():
+                                st.error("Escribe quién lo gestiona.")
+                            else:
+                                sh.incidencia_tomar(i["id"], _quien_t, _ticket_t, _nota_t)
+                                st.session_state["dash_sop_msg"] = f"{i['local']}: caso tomado."
+                                st.rerun()
+                        if _cancelar:
+                            sh.incidencia_cancelar(i["id"], "Administración", _motivo_c, por_local=False)
+                            st.session_state["dash_sop_msg"] = f"{i['local']}: reporte cancelado."
+                            st.rerun()
+                    elif i["estado"] == "En gestión":
+                        with st.form(f"sop_gest_{i['id']}"):
+                            st.markdown("**Seguimiento**")
+                            _nov = st.text_input("Novedad o gestión realizada", key=f"sop_nov_{i['id']}", placeholder="Ej: BCP dice que envían técnico mañana")
+                            _tk = st.text_input("N° de ticket", value=str(i["ticket_bcp"]), key=f"sop_tk_{i['id']}")
+                            _sol = st.text_input("Qué se hizo (solo para marcarla resuelta)", key=f"sop_sol_{i['id']}")
+                            c1, c2 = st.columns(2)
+                            _guardar_nov = c1.form_submit_button("Guardar novedad", width="stretch")
+                            _resolver = c2.form_submit_button("✅ Marcar resuelta", type="primary", width="stretch")
+                        _tk_nuevo = _tk.strip() if _tk.strip() != str(i["ticket_bcp"]).strip() else ""
+                        if _guardar_nov:
+                            if not _nov.strip() and not _tk_nuevo:
+                                st.error("Escribe la novedad o cambia el ticket.")
+                            else:
+                                sh.incidencia_novedad(i["id"], _quien_adm, _nov or "Actualizó el ticket", _tk_nuevo)
+                                st.session_state["dash_sop_msg"] = f"{i['local']}: novedad guardada."
+                                st.rerun()
+                        if _resolver:
+                            if not _sol.strip():
+                                st.error("Escribe qué se hizo para resolverla.")
+                            else:
+                                sh.incidencia_resolver(i["id"], _quien_adm, _sol)
+                                st.session_state["dash_sop_msg"] = f"{i['local']}: marcada como resuelta (espera la confirmación del local)."
+                                st.rerun()
+                    else:  # Resuelta
+                        st.info(f"✅ Resuelta: {i['solucion']}. Falta que el local confirme que ya funciona.")
+                        if st.button("Cerrar sin esperar al local", key=f"sop_cerrar_{i['id']}"):
+                            sh.incidencia_confirmar(i["id"], "Administración", por_local=False)
+                            st.session_state["dash_sop_msg"] = f"{i['local']}: caso cerrado."
+                            st.rerun()
+                except Exception as error:
+                    st.error(f"No se pudo guardar el cambio: {error}")
+
+        # --- lo que se repite: evidencia para reclamar al proveedor o a BCP
+        _reinc = sh.reincidencias(incidencias_df, _ahora_sop - timedelta(days=90))
+        if not _reinc.empty:
+            st.subheader("🔁 Fallas que se repiten (últimos 90 días)")
+            st.caption("Sirve de evidencia para reclamar al proveedor de internet o a BCP.")
+            st.dataframe(
+                sh.arrow_safe(
+                    pd.DataFrame(
+                        {
+                            "Local": _reinc["local"],
+                            "Falla": [sh.etiqueta_tipo_incidencia(t) for t in _reinc["tipo"]],
+                            "Veces": _reinc["veces"],
+                            "Última vez": _reinc["ultima"].dt.strftime("%d/%m %H:%M"),
+                        }
+                    )
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+
+        # --- historial
+        if not incidencias_df.empty:
+            st.subheader("🕘 Historial de incidencias")
+            _hist_sop = incidencias_df[~incidencias_df["estado"].isin(sh.ESTADOS_INCIDENCIA_ABIERTOS)].head(60)
+            if _hist_sop.empty:
+                st.caption("Todavía no hay incidencias cerradas.")
+            else:
+                st.dataframe(
+                    sh.arrow_safe(
+                        pd.DataFrame(
+                            {
+                                "Fecha": _hist_sop["timestamp"].dt.strftime("%d/%m %H:%M"),
+                                "Local": _hist_sop["local"],
+                                "Falla": _hist_sop["tipo"],
+                                "Gravedad": _hist_sop["gravedad"],
+                                "Estado": _hist_sop["estado"],
+                                "Reportó": _hist_sop["reportado_por"],
+                                "Lo llevó": _hist_sop["gestionado_por"],
+                                "Ticket": _hist_sop["ticket_bcp"],
+                                "Solución": _hist_sop["solucion"],
+                                "Tiempo de solución": [
+                                    sh.texto_espera(sh.minutos_entre(a, b)) for a, b in zip(_hist_sop["timestamp"], _hist_sop["ts_resuelto"])
+                                ],
+                            }
+                        )
+                    ),
+                    width="stretch",
+                    hide_index=True,
+                )
+
+    with st.expander("📞 Datos de soporte que ven los cajeros"):
+        st.caption("Teléfono y horario de soporte de BCP, WhatsApp, proveedor de internet de cada local... Aparece en la página Soporte.")
+        try:
+            _contacto_actual = sh.get_soporte_contacto()
+        except Exception:
+            _contacto_actual = ""
+        with st.form("sop_contacto"):
+            _contacto_nuevo = st.text_area("Datos de contacto", value=_contacto_actual, height=160)
+            _guardar_contacto = st.form_submit_button("Guardar")
+        if _guardar_contacto:
+            try:
+                sh.guardar_soporte_contacto(_contacto_nuevo)
+                st.session_state["dash_sop_msg"] = "Datos de soporte guardados."
+                st.rerun()
+            except Exception as error:
+                st.error(f"No se pudo guardar: {error}")
+
+
 with tab_resumen:
     # -------------------------------------------------------------
     # Alertas de fondo bajo (usa el ULTIMO cierre de cada local, sin
@@ -458,6 +637,14 @@ with tab_resumen:
         st.warning(
             f"📨 Hay **{_n_sol}** solicitud(es) de efectivo o saldo pendiente(s). "
             "Atiéndelas en la pestaña **📨 Solicitudes**."
+        )
+    _n_inc = 0 if incidencias_df is None else len(sh.incidencias_abiertas(incidencias_df))
+    if _n_inc:
+        _n_parados = int((sh.incidencias_abiertas(incidencias_df)["gravedad"] == "No puedo operar").sum())
+        st.warning(
+            f"🛠️ Hay **{_n_inc}** incidencia(s) abierta(s)"
+            + (f", **{_n_parados}** de un local que no puede operar 🔴" if _n_parados else "")
+            + ". Atiéndelas en la pestaña **🛠️ Soporte**."
         )
     st.subheader("🚨 Alertas de fondo")
 
