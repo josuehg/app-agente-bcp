@@ -108,6 +108,11 @@ def enviar_documento(token: str, chat_id, doc: Documento) -> bool:
     return False
 
 
+def enviar_documento_a_todos(token: str, doc: "Documento") -> int:
+    """Manda el archivo a cada chat autorizado. Devuelve a cuantos les llego."""
+    return sum(1 for chat in sh.telegram_chat_ids() if enviar_documento(token, chat, doc))
+
+
 def enviar(token: str, chat_id, texto: str) -> None:
     """Manda el texto (partido si es largo). Si Telegram rechaza el HTML, reintenta sin formato."""
     for parte in rp.partir_mensaje(texto):
@@ -378,6 +383,28 @@ def silencio_incidencias():
         return sh.SILENCIO_INCIDENCIAS
 
 
+def dia_pdf_diferencias() -> int | None:
+    """Dia del mes en que se manda solo el PDF de diferencias del mes en curso (PDF_DIFERENCIAS_DIA; 29 por defecto;
+    'off' lo apaga). En los meses que no tienen ese dia (febrero) sale el ultimo dia del mes."""
+    valor = (sh._secreto("pdf_diferencias_dia", "PDF_DIFERENCIAS_DIA") or "29").strip().lower()
+    if valor in ("off", "no", "0", "apagado"):
+        return None
+    try:
+        return min(max(int(valor), 1), 31)
+    except ValueError:
+        return 29
+
+
+def hora_pdf_diferencias() -> int:
+    """Minutos desde medianoche (PDF_DIFERENCIAS_HORA, 'HH:MM'; 10:00 por defecto)."""
+    valor = (sh._secreto("pdf_diferencias_hora", "PDF_DIFERENCIAS_HORA") or "10:00").strip()
+    try:
+        h, m = valor.split(":")
+        return int(h) * 60 + int(m)
+    except ValueError:
+        return 10 * 60
+
+
 def horas_turno_abierto() -> float:
     """Horas con la Apertura sin Cierre desde las que se avisa (ALERTA_TURNO_ABIERTO_HORAS; 8.5, igual
     que el Dashboard)."""
@@ -399,6 +426,7 @@ class Programador:
         self.proximo_intento_liquidacion = 0.0
         self.proximo_intento_final = 0.0
         self.proxima_revision_incidencias = 0.0
+        self.proximo_intento_pdf = 0.0
 
     def _cargar(self) -> None:
         try:
@@ -420,6 +448,7 @@ class Programador:
         self._liquidacion_final(ahora)
         self._turnos(ahora)
         self._incidencias(ahora)
+        self._pdf_diferencias(ahora)
 
     def _resumen(self, ahora) -> None:
         minutos = hora_resumen()
@@ -501,6 +530,32 @@ class Programador:
                 log(f"aviso de turno sin cerrar: {t['local']} {t['turno']} {t['fecha']}")
         except Exception as e:
             log(f"revisión de turnos: {type(e).__name__}: {e}")
+
+    def _pdf_diferencias(self, ahora) -> None:
+        """El PDF de diferencias del mes en curso, una vez al mes (el dia 29 a las 10:00), para revisar y autorizar
+        antes de la liquidacion del ultimo dia. Si el bot estaba apagado, sale en cuanto vuelve, dentro del mismo mes."""
+        dia = dia_pdf_diferencias()
+        if dia is None:
+            return
+        objetivo = min(dia, calendar.monthrange(ahora.year, ahora.month)[1])
+        if ahora.day < objetivo or (ahora.day == objetivo and ahora.hour * 60 + ahora.minute < hora_pdf_diferencias()):
+            return
+        mes = ahora.strftime("%Y-%m")
+        if mes in self.estado.get("ultimo_pdf_dif", []) or time.time() < self.proximo_intento_pdf:
+            return
+        try:
+            resultado = _pdf_diferencias("", ahora.date())
+            if isinstance(resultado, Documento):
+                if enviar_documento_a_todos(self.token, resultado) == 0:
+                    raise RuntimeError("Telegram no aceptó el archivo")
+            else:  # por ejemplo, todavia no hay registros: se manda el aviso en texto
+                enviar_a_todos(self.token, resultado)
+            sh.guardar_estado_bot("ultimo_pdf_dif", mes, unico=True)
+            self.estado["ultimo_pdf_dif"] = [mes]
+            log("PDF de diferencias del mes enviado")
+        except Exception as e:
+            log(f"PDF de diferencias: {type(e).__name__}: {e}")
+            self.proximo_intento_pdf = time.time() + 600
 
     def _incidencias(self, ahora) -> None:
         """Recuerda las incidencias que nadie tomo a tiempo o que siguen sin resolverse (ver

@@ -109,7 +109,7 @@ AYUDA = (
     "   <code>/ranking anterior colon</code>\n"
     "\n"
     "🔔 Además te aviso solo: diferencias grandes, pedidos nuevos, fallas reportadas (y te recuerdo si nadie las atiende), "
-    "turnos sin cerrar, un resumen cada noche "
+    "turnos sin cerrar, un resumen cada noche, el PDF de diferencias el día 29 de cada mes, "
     "la liquidación de todos los trabajadores el último día de cada mes y la definitiva el día 3.\n"
     "🆔 /id — tu número de chat"
 )

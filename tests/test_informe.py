@@ -284,3 +284,89 @@ def test_la_ayuda_y_el_menu_incluyen_pdfdif():
     assert "/pdfdif" in rp.AYUDA and "<code>/pdfdif anterior</code>" in rp.AYUDA
     assert "pdfdif" in [c for c, _ in bot.COMANDOS_MENU]
     assert all(len(c) <= 32 and c == c.lower() for c, _ in bot.COMANDOS_MENU)
+
+
+# ---------------------------------------------------------------------
+# El PDF de diferencias, solo, el dia 29 de cada mes
+# ---------------------------------------------------------------------
+def _programador(monkeypatch, enviar_ok=True):
+    """Un Programador con Telegram y la hoja 'Bot' falsos. Devuelve (programador, archivos enviados, estado guardado)."""
+    import bot_telegram as bot
+
+    bot = _bot_con_datos(monkeypatch)
+    monkeypatch.delenv("PDF_DIFERENCIAS_DIA", raising=False)
+    monkeypatch.delenv("PDF_DIFERENCIAS_HORA", raising=False)
+    monkeypatch.setattr(bot.sh, "telegram_chat_ids", lambda: ["111", "-100222"])
+    enviados, guardado = [], []
+    monkeypatch.setattr(bot, "enviar_documento", lambda token, chat, doc: enviados.append((chat, doc.nombre)) or enviar_ok)
+    monkeypatch.setattr(bot, "enviar", lambda token, chat, texto: enviados.append((chat, texto)))
+    monkeypatch.setattr(bot.sh, "guardar_estado_bot", lambda clave, valor, unico=True: guardado.append((clave, valor)))
+    prog = bot.Programador("TOKEN")
+    prog.estado = {}
+    return prog, enviados, guardado
+
+
+def test_el_pdf_sale_solo_el_29_a_las_10_y_una_vez_al_mes(monkeypatch):
+    prog, enviados, guardado = _programador(monkeypatch)
+    prog._pdf_diferencias(dt.datetime(2026, 10, 28, 12, 0))
+    prog._pdf_diferencias(dt.datetime(2026, 10, 29, 9, 59))
+    assert enviados == [] and guardado == []                      # antes del 29 a las 10:00, nada
+    prog._pdf_diferencias(dt.datetime(2026, 10, 29, 10, 0))
+    assert enviados == [("111", "diferencias_20261001_20261029.pdf"), ("-100222", "diferencias_20261001_20261029.pdf")]
+    assert guardado == [("ultimo_pdf_dif", "2026-10")]            # es el PDF del mes en curso, hasta el dia 29
+    prog._pdf_diferencias(dt.datetime(2026, 10, 29, 18, 0))
+    prog._pdf_diferencias(dt.datetime(2026, 10, 30, 10, 0))
+    assert len(enviados) == 2                                     # ya salio este mes: no se repite
+    prog._pdf_diferencias(dt.datetime(2026, 11, 29, 10, 0))
+    assert len(enviados) == 4 and guardado[-1] == ("ultimo_pdf_dif", "2026-11")  # y el mes siguiente, otra vez
+
+
+def test_el_pdf_en_febrero_sale_el_ultimo_dia_y_si_el_bot_estaba_apagado_sale_al_volver(monkeypatch):
+    prog, enviados, _ = _programador(monkeypatch)
+    prog._pdf_diferencias(dt.datetime(2027, 2, 27, 12, 0))
+    assert enviados == []
+    prog._pdf_diferencias(dt.datetime(2027, 2, 28, 10, 0))        # febrero no tiene 29: sale el 28
+    assert len(enviados) == 2
+    prog, enviados, _ = _programador(monkeypatch)
+    prog._pdf_diferencias(dt.datetime(2026, 10, 31, 15, 0))       # el bot estaba apagado el 29: sale cuando vuelve
+    assert len(enviados) == 2
+
+
+def test_el_dia_y_la_hora_del_pdf_se_pueden_cambiar_o_apagar(monkeypatch):
+    prog, enviados, _ = _programador(monkeypatch)
+    monkeypatch.setenv("PDF_DIFERENCIAS_DIA", "off")
+    prog._pdf_diferencias(dt.datetime(2026, 10, 29, 12, 0))
+    assert enviados == []
+    monkeypatch.setenv("PDF_DIFERENCIAS_DIA", "25")
+    monkeypatch.setenv("PDF_DIFERENCIAS_HORA", "08:30")
+    prog._pdf_diferencias(dt.datetime(2026, 10, 25, 8, 29))
+    assert enviados == []
+    prog._pdf_diferencias(dt.datetime(2026, 10, 25, 8, 30))
+    assert len(enviados) == 2
+    monkeypatch.setenv("PDF_DIFERENCIAS_DIA", "abc")             # valor raro: vuelve al 29
+    import bot_telegram as bot
+    assert bot.dia_pdf_diferencias() == 29
+
+
+def test_si_telegram_rechaza_el_pdf_no_se_da_por_enviado_y_se_reintenta(monkeypatch):
+    prog, enviados, guardado = _programador(monkeypatch, enviar_ok=False)
+    prog._pdf_diferencias(dt.datetime(2026, 10, 29, 10, 0))
+    assert guardado == [] and "ultimo_pdf_dif" not in prog.estado  # no quedo marcado: se vuelve a intentar
+    assert prog.proximo_intento_pdf > 0                           # pero no en cada vuelta: espera unos minutos
+    antes = len(enviados)
+    prog._pdf_diferencias(dt.datetime(2026, 10, 29, 10, 1))
+    assert len(enviados) == antes
+
+
+def test_el_pdf_automatico_forma_parte_de_las_tareas_del_bot_y_de_la_ayuda(monkeypatch):
+    import reportes as rp
+
+    prog, enviados, _ = _programador(monkeypatch)
+    monkeypatch.setattr(prog, "_resumen", lambda ahora: None)
+    monkeypatch.setattr(prog, "_liquidacion", lambda ahora: None)
+    monkeypatch.setattr(prog, "_liquidacion_final", lambda ahora: None)
+    monkeypatch.setattr(prog, "_turnos", lambda ahora: None)
+    monkeypatch.setattr(prog, "_incidencias", lambda ahora: None)
+    prog.tick(dt.datetime(2026, 10, 29, 10, 0))
+    assert len(enviados) == 2
+    assert "el PDF de diferencias el día 29 de cada mes" in rp.AYUDA
