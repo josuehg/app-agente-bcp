@@ -2,7 +2,7 @@
 bot_telegram.py
 ----------------
 Bot de Telegram con COMANDOS (/fondo, /corte, /encuestas, /operaciones, /solicitudes,
-/incidencias, /diferencias, /ayuda, /id). Corre como un proceso aparte, al lado de la app de Streamlit
+/incidencias, /diferencias, /pdfdif, /ayuda, /id). Corre como un proceso aparte, al lado de la app de Streamlit
 (lo arranca docker-entrypoint.sh) y escucha a Telegram con "long polling": no necesita una
 direccion publica ni configurar nada mas que el token.
 
@@ -26,11 +26,14 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
+from typing import NamedTuple
 
 # Este proceso no corre dentro de Streamlit: se silencian sus avisos de "no hay runtime".
 for _nombre in ("streamlit", "streamlit.runtime.caching.cache_data_api", "streamlit.runtime.scriptrunner_utils.script_run_context"):
     logging.getLogger(_nombre).setLevel(logging.ERROR)
 
+import informe_diferencias as inf  # noqa: E402
 import reportes as rp  # noqa: E402
 import sheets_utils as sh  # noqa: E402
 
@@ -46,6 +49,7 @@ COMANDOS_MENU = [
     ("solicitudes", "Pedidos de efectivo o saldo pendientes"),
     ("incidencias", "Fallas abiertas: internet, cargador, equipo"),
     ("diferencias", "Diferencias grandes sin autorizar"),
+    ("pdfdif", "PDF con las diferencias de todas las sucursales"),
     ("ayuda", "Ver todos los comandos"),
     ("id", "Ver tu chat id"),
 ]
@@ -71,6 +75,37 @@ def llamar(token: str, metodo: str, datos: dict | None = None, timeout: int = 15
         return None, f"HTTP {e.code}"
     except Exception as e:
         return None, f"{type(e).__name__}"
+
+
+class Documento(NamedTuple):
+    """Un archivo que el bot manda como respuesta (en vez de un texto)."""
+    contenido: bytes
+    nombre: str
+    texto: str  # el mensaje que acompana al archivo (HTML)
+
+
+def enviar_documento(token: str, chat_id, doc: Documento) -> bool:
+    """Manda el archivo con sendDocument (multipart a mano, sin librerias extra). True si Telegram lo acepto."""
+    borde = f"----bcp{uuid.uuid4().hex}"
+    cuerpo = b""
+    for campo, valor in (("chat_id", str(chat_id)), ("caption", doc.texto[:1000]), ("parse_mode", "HTML")):
+        cuerpo += f'--{borde}\r\nContent-Disposition: form-data; name="{campo}"\r\n\r\n'.encode() + valor.encode("utf-8") + b"\r\n"
+    cuerpo += (
+        f'--{borde}\r\nContent-Disposition: form-data; name="document"; filename="{doc.nombre}"\r\n'
+        "Content-Type: application/pdf\r\n\r\n"
+    ).encode() + doc.contenido + f"\r\n--{borde}--\r\n".encode()
+    pedido = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/sendDocument", data=cuerpo,
+        headers={"Content-Type": f"multipart/form-data; boundary={borde}"},
+    )
+    try:
+        with urllib.request.urlopen(pedido, timeout=60) as respuesta:
+            return 200 <= respuesta.status < 300
+    except urllib.error.HTTPError as e:
+        log(f"no se pudo enviar el archivo a {chat_id}: HTTP {e.code}")
+    except Exception as e:
+        log(f"no se pudo enviar el archivo a {chat_id}: {type(e).__name__}")
+    return False
 
 
 def enviar(token: str, chat_id, texto: str) -> None:
@@ -169,6 +204,8 @@ def generar_respuesta(comando: str, argumento: str) -> str:
         return rp.reporte_solicitudes(_fresco(sh.get_solicitudes_df), sh.ahora_local().replace(tzinfo=None))
     if comando == "incidencias":
         return rp.reporte_incidencias(_fresco(sh.get_incidencias_df), sh.ahora_local().replace(tzinfo=None), argumento)
+    if comando == "pdfdif":
+        return _pdf_diferencias(argumento, hoy)
     if comando == "diferencias":
         dias, filtro, todas = 7, [], False
         for p in argumento.split():
@@ -185,12 +222,36 @@ def generar_respuesta(comando: str, argumento: str) -> str:
     return "No conozco ese comando. Escribe /ayuda para ver los que hay."
 
 
+def _pdf_diferencias(argumento: str, hoy) -> "Documento | str":
+    """/pdfdif [mes|anterior|semana] [todas] [local]: el PDF de las diferencias rojas (el mismo del Dashboard)."""
+    clave, todas, filtro = "mes", False, []
+    for p in argumento.split():
+        if p.lower() in ("mes", "anterior", "semana"):
+            clave = p.lower()
+        elif p.lower() in ("todas", "todo", "todos"):
+            todas = True  # incluye tambien las ya autorizadas
+        else:
+            filtro.append(p)
+    registros, ajustes, conformidades = _fresco(sh.get_registros_df, sh.get_ajustes_df, sh.get_conformidades_df)
+    if registros is None or registros.empty:
+        return "📄 Todavía no hay registros."
+    texto_local = " ".join(filtro)
+    elegidos = rp.buscar_locales(texto_local, registros["local"].unique())
+    if not elegidos:
+        return f"No encontré ningún local que se parezca a «{rp.esc(texto_local)}»."
+    desde, hasta, titulo = inf.periodo_informe(clave, hoy)
+    rojas = inf.diferencias_rojas(registros[registros["local"].isin(elegidos)], ajustes, conformidades, desde, hasta)
+    pdf = inf.generar_pdf(rojas, elegidos, desde, hasta, titulo, sh.ahora_local().replace(tzinfo=None), todas)
+    nombre = f"diferencias_{desde:%Y%m%d}_{hasta:%Y%m%d}" + (f"_{rp._clave(elegidos[0])}" if texto_local and len(elegidos) == 1 else "") + ".pdf"
+    return Documento(pdf, nombre, inf.texto_resumen(rojas, titulo, todas))
+
+
 NOMBRE_BOT = ""  # usuario del bot (sin @); se lee de Telegram al arrancar. Sirve para ignorar "/cmd@otro_bot" en grupos.
 
 
-def procesar_mensaje(chat_id, texto: str, autorizados: list[str], es_privado: bool = True, nombre_bot: str = "") -> str | None:
-    """Que responder a un mensaje (None = no responder). Funcion pura respecto de Telegram:
-    la usan el bot y las pruebas.
+def procesar_mensaje(chat_id, texto: str, autorizados: list[str], es_privado: bool = True, nombre_bot: str = "") -> "str | Documento | None":
+    """Que responder a un mensaje (None = no responder; un Documento = mandar un archivo). Funcion pura respecto
+    de Telegram: la usan el bot y las pruebas.
 
     En un GRUPO (es_privado=False) el bot solo contesta a comandos: la conversacion normal de las personas
     del grupo se ignora, y tambien los comandos dirigidos a otro bot ("/cmd@otro_bot")."""
@@ -224,7 +285,10 @@ def atender(token: str, update: dict) -> None:
     chat_id = msg["chat"]["id"]
     es_privado = msg["chat"].get("type", "private") == "private"
     respuesta = procesar_mensaje(chat_id, msg.get("text", ""), sh.telegram_chat_ids(), es_privado, NOMBRE_BOT)
-    if respuesta:
+    if isinstance(respuesta, Documento):
+        if not enviar_documento(token, chat_id, respuesta):
+            enviar(token, chat_id, "⚠️ Armé el PDF pero Telegram no me dejó enviarlo. Intenta de nuevo en un minuto.")
+    elif respuesta:
         enviar(token, chat_id, respuesta)
 
 

@@ -158,3 +158,129 @@ def test_el_pdf_con_muchas_filas_ocupa_varias_paginas():
     r = inf.diferencias_rojas(reg, None, None, dt.date(2026, 10, 1), dt.date(2026, 10, 31))
     pdf = inf.generar_pdf(r, ["Colon"], dt.date(2026, 10, 1), dt.date(2026, 10, 31), "Mes", dt.datetime(2026, 10, 31, 22, 0))
     assert pdf.count(b"/Type /Page\n") >= 3 or pdf.count(b"/Type /Page") >= 4  # varias paginas, con el encabezado repetido
+
+
+# ---------------------------------------------------------------------
+# /pdfdif: el mismo PDF, por Telegram
+# ---------------------------------------------------------------------
+def test_periodo_semana_son_los_ultimos_7_dias():
+    assert inf.periodo_informe("semana", dt.date(2026, 11, 23)) == (dt.date(2026, 11, 17), dt.date(2026, 11, 23), "Últimos 7 días")
+
+
+def test_texto_que_acompana_al_pdf_un_dato_por_linea():
+    r = inf.diferencias_rojas(_registros(), _ajustes(AJ_CORTE), None, dt.date(2026, 10, 1), dt.date(2026, 10, 31))
+    assert inf.texto_resumen(r, "Mes actual · octubre 2026").split("\n") == [
+        "📄 <b>Diferencias por sucursal</b>", "📅 Mes actual · octubre 2026", "🔴 Pendientes: 2", "📉 Faltantes: S/ 80.00",
+        "📈 Sobrantes: S/ 3.00", "📊 Neto: S/ -77.00", "🔷 Autorizadas: 1 (no se listan; usa /pdfdif todas)",
+    ]
+    assert inf.texto_resumen(r, "x", True).endswith("🔷 Autorizadas: 1 (van en el detalle)")
+    vacio = inf.texto_resumen(pd.DataFrame(columns=inf.COLUMNAS_INFORME), "Mes anterior")
+    assert vacio.split("\n") == ["📄 <b>Diferencias por sucursal</b>", "📅 Mes anterior", "✅ No hay diferencias pendientes"]
+
+
+def _bot_con_datos(monkeypatch, registros=None, ajustes=None):
+    import bot_telegram as bot
+
+    reg = _registros() if registros is None else registros
+    monkeypatch.setattr(bot, "_fresco", lambda *lectores: [reg, ajustes if ajustes is not None else _ajustes(), None])
+    monkeypatch.setattr(bot.sh, "hoy_local", lambda: HOY)
+    monkeypatch.setattr(bot.sh, "ahora_local", lambda: dt.datetime(2026, 10, 18, 22, 0))
+    return bot
+
+
+def test_pdfdif_manda_el_pdf_del_mes_con_su_resumen(monkeypatch):
+    bot = _bot_con_datos(monkeypatch)
+    doc = bot.procesar_mensaje(111, "/pdfdif", ["111"])
+    assert isinstance(doc, bot.Documento)
+    assert doc.contenido.startswith(b"%PDF") and doc.nombre == "diferencias_20261001_20261018.pdf"
+    assert "Mes actual · octubre 2026" in doc.texto and "🔴 Pendientes: 3" in doc.texto
+
+
+def test_pdfdif_acepta_periodo_todas_y_local_en_cualquier_orden(monkeypatch):
+    bot = _bot_con_datos(monkeypatch, ajustes=_ajustes(AJ_CORTE))
+    ant = bot.procesar_mensaje(111, "/pdfdif anterior", ["111"])
+    assert ant.nombre == "diferencias_20250901_20250930.pdf".replace("2025", "2026") and "No hay diferencias pendientes" in ant.texto
+    sem = bot.procesar_mensaje(111, "/pdfdif semana", ["111"])
+    assert sem.nombre == "diferencias_20261012_20261018.pdf" and "Últimos 7 días" in sem.texto
+    solo = bot.procesar_mensaje(111, "/pdfdif Colón todas", ["111"])  # sin acentos ni mayusculas da igual
+    assert solo.nombre.endswith("_colon.pdf") and "Autorizadas: 1 (van en el detalle)" in solo.texto
+    assert bot.procesar_mensaje(111, "/pdfdif todas colon", ["111"]).texto == solo.texto
+    assert "No encontré ningún local" in bot.procesar_mensaje(111, "/pdfdif xyz", ["111"])
+    # un local sin diferencias: el PDF sale igual, con el aviso de que no hay pendientes
+    zol = bot.procesar_mensaje(111, "/pdfdif zol", ["111"])
+    assert isinstance(zol, bot.Documento) and "No hay diferencias pendientes" in zol.texto
+
+
+def test_pdfdif_sin_registros_sin_permiso_y_con_google_caido(monkeypatch):
+    bot = _bot_con_datos(monkeypatch, registros=pd.DataFrame())
+    assert "Todavía no hay registros" in bot.procesar_mensaje(111, "/pdfdif", ["111"])
+    # quien no esta autorizado solo recibe su chat id, nunca el PDF
+    resp = bot.procesar_mensaje(999, "/pdfdif", ["111"])
+    assert isinstance(resp, str) and "999" in resp
+
+    def caido(*lectores):
+        raise RuntimeError("Google ocupado")
+
+    monkeypatch.setattr(bot, "_fresco", caido)
+    assert "No pude leer los datos" in bot.procesar_mensaje(111, "/pdfdif", ["111"])
+
+
+def test_enviar_documento_arma_el_formulario_con_el_archivo(monkeypatch):
+    import urllib.error
+    import urllib.request
+
+    import bot_telegram as bot
+
+    visto = {}
+
+    class _Resp:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def falso(pedido, timeout=0):
+        visto["url"], visto["cuerpo"], visto["tipo"] = pedido.full_url, pedido.data, pedido.get_header("Content-type")
+        return _Resp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", falso)
+    doc = bot.Documento(b"%PDF-1.3 contenido", "diferencias_x.pdf", "📄 <b>Resumen</b>\nñandú")
+    assert bot.enviar_documento("TOKEN", 111, doc) is True
+    assert visto["url"].endswith("/botTOKEN/sendDocument")
+    borde = visto["tipo"].split("boundary=")[1]
+    cuerpo = visto["cuerpo"]
+    assert cuerpo.count(f"--{borde}".encode()) == 5 and cuerpo.endswith(f"--{borde}--\r\n".encode())
+    assert b'name="chat_id"\r\n\r\n111\r\n' in cuerpo and b'name="parse_mode"\r\n\r\nHTML' in cuerpo
+    assert "ñandú".encode() in cuerpo and b'name="document"; filename="diferencias_x.pdf"' in cuerpo
+    assert b"Content-Type: application/pdf\r\n\r\n%PDF-1.3 contenido\r\n" in cuerpo
+
+    def roto(pedido, timeout=0):
+        raise urllib.error.URLError("sin internet")
+
+    monkeypatch.setattr(urllib.request, "urlopen", roto)
+    assert bot.enviar_documento("TOKEN", 111, doc) is False  # no lanza error ni muestra el token
+
+
+def test_atender_manda_el_archivo_y_avisa_si_telegram_lo_rechaza(monkeypatch):
+    import time
+
+    bot = _bot_con_datos(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "111")
+    textos, archivos = [], []
+    monkeypatch.setattr(bot, "enviar", lambda token, chat, texto: textos.append((chat, texto)))
+    resultado = {"ok": True}
+    monkeypatch.setattr(bot, "enviar_documento", lambda token, chat, doc: archivos.append((chat, doc.nombre)) or resultado["ok"])
+    upd = {"update_id": 1, "message": {"date": time.time(), "chat": {"id": 111, "type": "private"}, "text": "/pdfdif"}}
+    bot.atender("t", upd)
+    assert archivos == [(111, "diferencias_20261001_20261018.pdf")] and textos == []
+    resultado["ok"] = False
+    bot.atender("t", upd)
+    assert len(archivos) == 2 and len(textos) == 1 and "no me dejó enviarlo" in textos[0][1]
+
+
+def test_la_ayuda_y_el_menu_incluyen_pdfdif():
+    import bot_telegram as bot
+    import reportes as rp
+
+    assert "/pdfdif" in rp.AYUDA and "<code>/pdfdif anterior</code>" in rp.AYUDA
+    assert "pdfdif" in [c for c, _ in bot.COMANDOS_MENU]
+    assert all(len(c) <= 32 and c == c.lower() for c, _ in bot.COMANDOS_MENU)

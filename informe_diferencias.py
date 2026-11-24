@@ -42,7 +42,10 @@ ESTADO_PENDIENTE, ESTADO_PARCIAL, ESTADO_AUTORIZADA = "Pendiente", "Parcial", "A
 # Periodos
 # ---------------------------------------------------------------------
 def periodo_informe(clave: str, hoy: dt.date, rango: tuple | None = None) -> tuple[dt.date, dt.date, str]:
-    """(desde, hasta, titulo). clave: 'mes' (en curso), 'anterior' (mes pasado completo) o 'rango' (el que se pase)."""
+    """(desde, hasta, titulo). clave: 'mes' (en curso), 'anterior' (mes pasado completo), 'semana' (ultimos 7 dias)
+    o 'rango' (el que se pase)."""
+    if clave == "semana":
+        return hoy - dt.timedelta(days=6), hoy, "Últimos 7 días"
     if clave == "anterior":
         fin = hoy.replace(day=1) - dt.timedelta(days=1)
         return fin.replace(day=1), fin, f"Mes anterior · {_MESES[fin.month - 1]} {fin.year}"
@@ -142,6 +145,26 @@ def diferencias_rojas(registros: pd.DataFrame, ajustes, conformidades, desde: dt
     salida["conformidad"] = con_conformidad(salida[["tipo", "id_cierre"]], conformidades)["conformidad"].to_numpy()
     salida = salida.sort_values(["local", "fecha", "hora", "tipo"], kind="stable").reset_index(drop=True)
     return salida[COLUMNAS_INFORME]
+
+
+def texto_resumen(rojas: pd.DataFrame, titulo_periodo: str, incluir_autorizadas: bool = False) -> str:
+    """El texto corto (HTML de Telegram, un dato por linea) que acompana al PDF cuando lo manda el bot."""
+    pend = rojas[rojas["estado"] != ESTADO_AUTORIZADA] if not rojas.empty else rojas
+    t = _totales(pend)
+    n_aut = int((rojas["estado"] == ESTADO_AUTORIZADA).sum()) if not rojas.empty else 0
+    lineas = ["📄 <b>Diferencias por sucursal</b>", f"📅 {titulo_periodo}"]
+    if t["n"]:
+        lineas += [
+            f"🔴 Pendientes: {t['n']}",
+            f"📉 Faltantes: S/ {_soles(t['faltantes'])}",
+            f"📈 Sobrantes: S/ {_soles(t['sobrantes'])}",
+            f"📊 Neto: S/ {_soles(t['neto'], True)}",
+        ]
+    else:
+        lineas.append("✅ No hay diferencias pendientes")
+    if n_aut:
+        lineas.append(f"🔷 Autorizadas: {n_aut}" + (" (van en el detalle)" if incluir_autorizadas else " (no se listan; usa /pdfdif todas)"))
+    return "\n".join(lineas)
 
 
 def _totales(filas: pd.DataFrame) -> dict:
