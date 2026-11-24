@@ -8,6 +8,8 @@ gspread>=6.1,<7
 google-auth>=2.30,<3
 google-api-python-client>=2.130,<3
 pandas>=2.2,<3
+# PDF de reportes (informe_diferencias.py): Python puro, sin librerias del sistema.
+fpdf2>=2.8,<3
 plotly>=5.22,<7
 python-dateutil>=2.9,<3
 # pyarrow 25 tiene un segfault conocido (apache/arrow#50471) y ademas la

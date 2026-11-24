@@ -18,6 +18,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+import informe_diferencias as inf
 import sheets_utils as sh
 
 st.set_page_config(page_title="Dashboard - Agente BCP", page_icon="📊", layout="wide")
@@ -2762,8 +2763,67 @@ with tab_cuadre:
                     "una de otro mes, toca «⏮️ Ver el mes anterior completo» en la barra lateral o cambia el rango."
                 )
 
+    # -------------------------------------------------------------
+    # Reporte PDF de las diferencias rojas de TODAS las sucursales (mes actual, mes anterior o el rango de la barra
+    # lateral). Se arma solo al apretar el boton (cuesta recalcular los cortes) y queda listo para descargar.
+    # -------------------------------------------------------------
+    @st.fragment
+    def _reporte_pdf_diferencias():
+        with st.expander("📄 Reporte PDF de las diferencias (todas las sucursales)"):
+            st.caption(
+                "Incluye todas las sucursales, sin importar los filtros de la barra lateral (salvo la opción «Rango de la barra "
+                "lateral»): resumen por sucursal, por trabajador y el detalle de cada diferencia roja. Es de uso interno: trae "
+                "los motivos y quién autorizó."
+            )
+            _c1, _c2 = st.columns([3, 2])
+            _opciones_pdf = {"Mes actual": "mes", "Mes anterior": "anterior", "Rango de la barra lateral": "rango"}
+            _eleg_pdf = _c1.radio("Periodo", list(_opciones_pdf), horizontal=True, key="pdf_dif_periodo")
+            _incluir_pdf = _c2.checkbox(
+                "Incluir las ya autorizadas",
+                key="pdf_dif_aut",
+                help="Sin marcar, el detalle solo trae lo que sigue sin autorizar (el resumen igual cuenta cuántas hay autorizadas).",
+            )
+            _d_pdf, _h_pdf, _titulo_pdf = inf.periodo_informe(_opciones_pdf[_eleg_pdf], sh.hoy_local(), (desde, hasta))
+            st.caption(f"{_titulo_pdf} — del {_d_pdf:%d/%m/%Y} al {_h_pdf:%d/%m/%Y}")
+            _clave_pdf = (_opciones_pdf[_eleg_pdf], bool(_incluir_pdf), _d_pdf, _h_pdf)
+            if st.button("📄 Preparar el PDF", key="pdf_dif_btn"):
+                try:
+                    try:
+                        _conf_pdf = sh.get_conformidades_df()
+                    except Exception:
+                        _conf_pdf = None  # sin la hoja de conformidades igual sale el reporte
+                    _rojas_pdf = inf.diferencias_rojas(df, ajustes_df, _conf_pdf, _d_pdf, _h_pdf)
+                    _ahora_pdf = sh.ahora_local().replace(tzinfo=None)
+                    st.session_state["pdf_dif_listo"] = {
+                        "clave": _clave_pdf,
+                        "bytes": inf.generar_pdf(
+                            _rojas_pdf, sorted(df["local"].unique()), _d_pdf, _h_pdf, _titulo_pdf, _ahora_pdf, bool(_incluir_pdf)
+                        ),
+                        "hora": _ahora_pdf,
+                        "n": int((_rojas_pdf["estado"] != "Autorizada").sum()) if not _rojas_pdf.empty else 0,
+                    }
+                except Exception as error:
+                    st.session_state.pop("pdf_dif_listo", None)
+                    st.error(f"No se pudo armar el PDF: {error}")
+            _listo = st.session_state.get("pdf_dif_listo")
+            if _listo and _listo["clave"] == _clave_pdf:
+                st.success(
+                    f"Listo ({_listo['hora']:%H:%M}): {_listo['n']} diferencia(s) pendiente(s) en el periodo."
+                    if _listo["n"] else f"Listo ({_listo['hora']:%H:%M}): no hay diferencias pendientes en el periodo. ✅"
+                )
+                st.download_button(
+                    "⬇️ Descargar el PDF",
+                    data=_listo["bytes"],
+                    file_name=f"diferencias_{_d_pdf:%Y%m%d}_{_h_pdf:%Y%m%d}.pdf",
+                    mime="application/pdf",
+                    key="pdf_dif_descarga",
+                )
+            elif _listo:
+                st.caption("Cambiaste el periodo u opciones: toca «Preparar el PDF» otra vez.")
+
     with bloque_linea:
         _dibujar_linea_de_tiempo()
+        _reporte_pdf_diferencias()
 
     with st.expander("📋 Resumen por turno (tabla, corte por corte y gráfico)"):
         st.dataframe(
